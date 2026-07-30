@@ -1,0 +1,71 @@
+{
+  "name": "@tetherto/wdk-protocol-multisig-squads",
+  "version": "1.0.0-beta.1",
+  "description": "A simple package to manage Squads multisig wallets for the Solana blockchain.",
+  "keywords": [
+    "wdk",
+    "wallet",
+    "multisig",
+    "squads",
+    "solana"
+  ],
+  "author": "Tether",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/tetherto/wdk-protocol-multisig-squads.git"
+  },
+  "main": "index.js",
+  "type": "module",
+  "types": "./types",
+  "scripts": {
+    "build:types": "tsc",
+    "lint": "standard --env jest",
+    "lint:fix": "standard --fix --env jest",
+    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --testPathIgnorePatterns='tests/integration'",
+    "test:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --testPathIgnorePatterns='tests/integration' --coverage",
+    "test:integration": "cross-env NODE_OPTIONS=--experimental-vm-modules jest tests/integration",
+    "test:integration:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest tests/integration --coverage"
+  },
+  "dependencies": {
+    "@solana-program/system": "0.9.0",
+    "@solana/addresses": "3.0.3",
+    "@solana/codecs": "3.0.3",
+    "@solana/rpc": "3.0.3",
+    "@solana/signers": "3.0.3",
+    "@solana/transaction-messages": "3.0.3",
+    "@solana/transactions": "3.0.3",
+    "@sqds/multisig": "2.1.4",
+    "@tetherto/wdk-failover-provider": "1.0.0-beta.2",
+    "@tetherto/wdk-wallet": "1.0.0-beta.7",
+    "@tetherto/wdk-wallet-solana": "1.0.0-beta.9",
+    "bare-node-runtime": "^1.1.4"
+  },
+  "devDependencies": {
+    "@solana/kit": "4.0.0",
+    "cross-env": "7.0.3",
+    "jest": "^30.2.0",
+    "standard": "17.1.2",
+    "typescript": "5.8.3"
+  },
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "bare": "./bare.js",
+      "default": "./index.js"
+    },
+    "./package": {
+      "default": "./package.json"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "standard": {
+    "ignore": [
+      "bare.js",
+      "tests/**/*.js"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+export { default } from "./src/wallet-manager-multisig-solana-squads.js";
+export { default as WalletAccountMultisigSolanaSquads } from "./src/wallet-account-multisig-solana-squads.js";
+export type MultisigProposal = import("@tetherto/wdk-wallet").MultisigProposal;
+export type MultisigResult = import("@tetherto/wdk-wallet").MultisigResult;
+export type MultisigTransactionResult = import("@tetherto/wdk-wallet").MultisigTransactionResult;
+export type MultisigExecuteResult = import("@tetherto/wdk-wallet").MultisigExecuteResult;
+export type MultisigSendOptions = import("@tetherto/wdk-wallet").MultisigSendOptions;
+export type MultisigOptions = import("@tetherto/wdk-wallet").MultisigOptions;
+export type MultisigInfo = import("@tetherto/wdk-wallet").MultisigInfo;
+export type MessageInfo = import("@tetherto/wdk-wallet").MessageInfo;
+export type MessageProposal = import("@tetherto/wdk-wallet").MessageProposal;
+export type SimpleSolanaTransaction = import("@tetherto/wdk-wallet-solana").SimpleSolanaTransaction;
+export type SolanaTransactionReceipt = import("@tetherto/wdk-wallet-solana").SolanaTransactionReceipt;
+export type SolanaMultisigSquadsCommonConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsCommonConfig;
+export type SolanaMultisigSquadsSigningConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsSigningConfig;
+export type SolanaMultisigSquadsConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsConfig;
+export type SolanaMultisigSquadsReadOnlyConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsReadOnlyConfig;
+export { default as WalletAccountReadOnlyMultisigSolanaSquads, DEFAULT_COMMITMENT } from "./src/wallet-account-read-only-multisig-solana-squads.js";

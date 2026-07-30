@@ -1,0 +1,170 @@
+/** @typedef {import('@tetherto/wdk-wallet').IWalletAccountMultisig} IWalletAccountMultisig */
+/** @typedef {import('@tetherto/wdk-wallet').MultisigResult} MultisigResult */
+/** @typedef {import('@tetherto/wdk-wallet').MultisigTransactionResult} MultisigTransactionResult */
+/** @typedef {import('@tetherto/wdk-wallet').MultisigExecuteResult} MultisigExecuteResult */
+/** @typedef {import('@tetherto/wdk-wallet').MultisigSendOptions} MultisigSendOptions */
+/** @typedef {import('@tetherto/wdk-wallet').MultisigOptions} MultisigOptions */
+/** @typedef {import('@tetherto/wdk-wallet').MessageProposal} MessageProposal */
+/** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
+/** @typedef {import('@tetherto/wdk-wallet-solana').SimpleSolanaTransaction} SimpleSolanaTransaction */
+/** @typedef {import('./wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsConfig} SolanaMultisigSquadsConfig */
+/**
+ * Solana Squads multisig wallet account with signing capabilities.
+ * Provides full transaction and message signing operations.
+ *
+ * @implements {IWalletAccountMultisig}
+ */
+export default class WalletAccountMultisigSolanaSquads extends WalletAccountReadOnlyMultisigSolanaSquads implements IWalletAccountMultisig {
+    /**
+     * Creates a new Solana Squads multisig wallet account.
+     *
+     * @param {string | Uint8Array} seed - The wallet's [BIP-39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki) seed phrase.
+     * @param {string} path - The SLIP-0010 derivation path (e.g. "0'/0'").
+     * @param {SolanaMultisigSquadsConfig} config - The configuration object.
+     */
+    constructor(seed: string | Uint8Array, path: string, config: SolanaMultisigSquadsConfig);
+    /**
+     * The underlying Solana signer account.
+     *
+     * @protected
+     * @type {WalletAccountSolana}
+     */
+    protected _signerAccount: WalletAccountSolana;
+    /**
+     * Signs a message with the signer account.
+     *
+     * @param {string | Uint8Array} message - The message to sign.
+     * @returns {Promise<string>} The signature.
+     */
+    sign(message: string | Uint8Array): Promise<string>;
+    /**
+     * Proposes a message to be signed by the multisig members.
+     *
+     * @param {string | Uint8Array} message - The message to propose.
+     * @returns {Promise<MessageProposal>} The message proposal.
+     */
+    proposeMessage(message: string | Uint8Array): Promise<MessageProposal>;
+    /**
+     * Approves a pending message proposal.
+     *
+     * @param {string} messageHash - The hash of the proposed message.
+     * @returns {Promise<MessageProposal>} The updated message proposal.
+     */
+    approveMessage(messageHash: string): Promise<MessageProposal>;
+    /**
+     * Validates that the signer is a member of the multisig.
+     *
+     * @returns {Promise<void>}
+     * @throws {Error} If the signer is not a member.
+     */
+    validateSignerIsOwner(): Promise<void>;
+    /**
+     * Deploys (creates) the multisig account on-chain.
+     *
+     * @returns {Promise<MultisigResult>} The deploy result.
+     */
+    deploy(): Promise<MultisigResult>;
+    /**
+     * Proposes a transaction to the multisig (and optionally executes it once approved).
+     *
+     * @param {SimpleSolanaTransaction} tx - The transaction to propose.
+     * @param {MultisigSendOptions} [options] - The send options.
+     * @returns {Promise<MultisigTransactionResult>} The proposal result.
+     */
+    sendTransaction(tx: SimpleSolanaTransaction, options?: MultisigSendOptions): Promise<MultisigTransactionResult>;
+    /**
+     * Proposes a native SOL / SPL token transfer to the multisig.
+     *
+     * @param {TransferOptions} transferOptions - The transfer options.
+     * @param {MultisigSendOptions} [options] - The send options.
+     * @returns {Promise<MultisigTransactionResult>} The transfer proposal result.
+     */
+    transfer(transferOptions: TransferOptions, options?: MultisigSendOptions): Promise<MultisigTransactionResult>;
+    /**
+     * Approves a pending transaction proposal.
+     *
+     * @param {number | bigint} proposalId - The proposal (transaction index) id.
+     * @returns {Promise<MultisigTransactionResult>} The approval result.
+     */
+    approveTx(proposalId: number | bigint): Promise<MultisigTransactionResult>;
+    /**
+     * Rejects a pending transaction proposal.
+     *
+     * @param {number | bigint} proposalId - The proposal (transaction index) id.
+     * @returns {Promise<MultisigTransactionResult>} The rejection result.
+     */
+    rejectTx(proposalId: number | bigint): Promise<MultisigTransactionResult>;
+    /**
+     * Executes an approved transaction proposal.
+     *
+     * @param {number | bigint} proposalId - The proposal (transaction index) id.
+     * @returns {Promise<MultisigExecuteResult>} The execution result.
+     */
+    executeTx(proposalId: number | bigint): Promise<MultisigExecuteResult>;
+    /**
+     * Proposes adding a new member to the multisig.
+     *
+     * @param {string} ownerAddress - The address of the member to add.
+     * @param {MultisigOptions} [options] - The operation options.
+     * @returns {Promise<MultisigTransactionResult>} The operation result.
+     */
+    addOwner(ownerAddress: string, options?: MultisigOptions): Promise<MultisigTransactionResult>;
+    /**
+     * Proposes removing a member from the multisig.
+     *
+     * @param {string} ownerAddress - The address of the member to remove.
+     * @param {MultisigOptions} [options] - The operation options.
+     * @returns {Promise<MultisigTransactionResult>} The operation result.
+     */
+    removeOwner(ownerAddress: string, options?: MultisigOptions): Promise<MultisigTransactionResult>;
+    /**
+     * Proposes swapping one member for another.
+     *
+     * @param {string} oldOwnerAddress - The address of the member to replace.
+     * @param {string} newOwnerAddress - The address of the new member.
+     * @param {MultisigOptions} [options] - The operation options.
+     * @returns {Promise<MultisigTransactionResult>} The operation result.
+     */
+    swapOwner(oldOwnerAddress: string, newOwnerAddress: string, options?: MultisigOptions): Promise<MultisigTransactionResult>;
+    /**
+     * Proposes changing the approval threshold of the multisig.
+     *
+     * @param {number} newThreshold - The new threshold.
+     * @param {MultisigOptions} [options] - The operation options.
+     * @returns {Promise<MultisigTransactionResult>} The operation result.
+     */
+    changeThreshold(newThreshold: number, options?: MultisigOptions): Promise<MultisigTransactionResult>;
+    /**
+     * Proposes replacing the full member set and threshold in a single operation.
+     *
+     * @param {string[]} newOwners - The new member addresses.
+     * @param {number} newThreshold - The new threshold.
+     * @param {MultisigOptions} [options] - The operation options.
+     * @returns {Promise<MultisigTransactionResult>} The operation result.
+     */
+    updateOwners(newOwners: string[], newThreshold: number, options?: MultisigOptions): Promise<MultisigTransactionResult>;
+    /**
+     * Returns a read-only view of this account.
+     *
+     * @returns {WalletAccountReadOnlyMultisigSolanaSquads} The read-only account.
+     */
+    toReadOnlyAccount(): WalletAccountReadOnlyMultisigSolanaSquads;
+    /**
+     * Clears the signer's private key material from memory.
+     *
+     * @returns {void}
+     */
+    dispose(): void;
+}
+export type IWalletAccountMultisig = any;
+export type MultisigResult = import("@tetherto/wdk-wallet").MultisigResult;
+export type MultisigTransactionResult = import("@tetherto/wdk-wallet").MultisigTransactionResult;
+export type MultisigExecuteResult = import("@tetherto/wdk-wallet").MultisigExecuteResult;
+export type MultisigSendOptions = import("@tetherto/wdk-wallet").MultisigSendOptions;
+export type MultisigOptions = import("@tetherto/wdk-wallet").MultisigOptions;
+export type MessageProposal = import("@tetherto/wdk-wallet").MessageProposal;
+export type TransferOptions = import("@tetherto/wdk-wallet").TransferOptions;
+export type SimpleSolanaTransaction = import("@tetherto/wdk-wallet-solana").SimpleSolanaTransaction;
+export type SolanaMultisigSquadsConfig = import("./wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsConfig;
+import WalletAccountReadOnlyMultisigSolanaSquads from './wallet-account-read-only-multisig-solana-squads.js';
+import { WalletAccountSolana } from '@tetherto/wdk-wallet-solana';
