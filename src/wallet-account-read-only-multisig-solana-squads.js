@@ -63,25 +63,35 @@ export const DEFAULT_COMMITMENT = 'confirmed'
 export const SQUADS_PROGRAM_ADDRESS = 'SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf'
 
 const MULTISIG_DISCRIMINATOR = Uint8Array.from([224, 116, 121, 186, 68, 161, 79, 236])
+const PROPOSAL_DISCRIMINATOR = Uint8Array.from([26, 94, 189, 187, 116, 136, 53, 33])
 
 const MULTISIG_THRESHOLD_OFFSET = 72
 const MULTISIG_TRANSACTION_INDEX_OFFSET = 78
 const MULTISIG_RENT_COLLECTOR_OFFSET = 94
 
+const PROPOSAL_STATUS_OFFSET = 48
+const PROPOSAL_STATUS_EXECUTING = 4
+
 const OPTION_TAG_SIZE = 1
+const ENUM_TAG_SIZE = 1
 const ADDRESS_SIZE = 32
 const BUMP_SIZE = 1
 const MEMBER_COUNT_SIZE = 4
 const MEMBER_SIZE = ADDRESS_SIZE + 1
 const TRANSACTION_INDEX_SIZE = 8
+const TIMESTAMP_SIZE = 8
 const SIGNATURE_SIZE = 64
 
 const SEED_PREFIX = 'multisig'
 const SEED_MULTISIG = 'multisig'
 const SEED_VAULT = 'vault'
+const SEED_TRANSACTION = 'transaction'
+const SEED_PROPOSAL = 'proposal'
 
 const DEFAULT_VAULT_INDEX = 0
 const MAX_VAULT_INDEX = 255
+const MAX_PROPOSAL_INDEX = 18446744073709551615n
+const MAX_MULTIPLE_ACCOUNTS = 100
 
 /**
  * Read-only Solana Squads multisig wallet account.
@@ -161,17 +171,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       : createSolanaRpc(provider)
   }
 
-  /** @private */
-  _createFailoverRpc (urls, retries) {
-    const failoverProvider = new FailoverProvider({ retries })
-
-    for (const url of urls) {
-      failoverProvider.addProvider(createSolanaRpc(url))
-    }
-
-    return failoverProvider.initialize()
-  }
-
   /**
    * Returns the signer's address.
    *
@@ -249,16 +248,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       return false
     }
 
-    return this._hasMultisigDiscriminator(getBase64Encoder().encode(value.data[0]))
-  }
-
-  /** @private */
-  _hasMultisigDiscriminator (data) {
-    if (data.length < MULTISIG_DISCRIMINATOR.length) {
-      return false
-    }
-
-    return MULTISIG_DISCRIMINATOR.every((byte, i) => byte === data[i])
+    return this._hasDiscriminator(getBase64Encoder().encode(value.data[0]), MULTISIG_DISCRIMINATOR)
   }
 
   /**
@@ -336,7 +326,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const data = getBase64Encoder().encode(value.data[0])
 
-    if (value.owner !== this._programId || !this._hasMultisigDiscriminator(data)) {
+    if (value.owner !== this._programId || !this._hasDiscriminator(data, MULTISIG_DISCRIMINATOR)) {
       throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
     }
 
@@ -397,7 +387,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const data = getBase64Encoder().encode(value.data[0])
 
-    if (value.owner !== this._programId || !this._hasMultisigDiscriminator(data)) {
+    if (value.owner !== this._programId || !this._hasDiscriminator(data, MULTISIG_DISCRIMINATOR)) {
       throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
     }
 
@@ -481,18 +471,16 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * Returns `0n` when the vault holds none of the token, including when no associated
    * token account exists for it yet.
    *
-   * @todo Only legacy SPL Token mints are supported. The associated token account is
-   *   derived with the SPL Token program as a seed, so a Token-2022 mint resolves to a
-   *   different address that does not exist, and this reports `0n` for a real balance.
-   *   Revisit by resolving the mint's owning program, or by looking accounts up with
-   *   `getTokenAccountsByOwner` filtered by mint, which is program-agnostic. See
-   *   `docs/getTokenBalance.md` §2 for a mainnet example of the wrong answer.
+   * Only legacy SPL Token mints are supported: the associated token account is derived
+   * with the SPL Token program as a seed, so a Token-2022 mint resolves to a different
+   * address and reports `0n` even when it holds a balance.
    *
    * @param {string} tokenAddress - The SPL token mint address.
    * @param {number | string} [vaultIndexOrAddress=0] - A vault index between 0 and 255,
    *   or a vault address to read as given.
    * @returns {Promise<bigint>} The token balance (in base unit).
    * @throws {Error} If the mint address is malformed, or if the RPC request fails.
+   * @todo Support Token-2022 (Token Extensions Program).
    */
   async getTokenBalance (tokenAddress, vaultIndexOrAddress = DEFAULT_VAULT_INDEX) {
     const mint = address(tokenAddress)
@@ -513,19 +501,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     }
 
     return BigInt(value.data.parsed.info.tokenAmount.amount)
-  }
-
-  /** @private */
-  _isSignature (hash) {
-    if (typeof hash !== 'string') {
-      return false
-    }
-
-    try {
-      return getBase58Encoder().encode(hash).length === SIGNATURE_SIZE
-    } catch {
-      return false
-    }
   }
 
   /**
@@ -575,13 +550,54 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the pending proposals for the given proposal ids.
+   * Returns the proposals at the given ids, in the same order.
    *
-   * @param {Array<number | bigint>} proposalIds - The proposal (transaction index) ids.
-   * @returns {Promise<MultisigProposal[]>} The proposals.
+   * A proposal's id is its transaction index. Entries are `null` where no proposal
+   * exists at that id, so the result stays positionally aligned with the input.
+   *
+   * Note that `confirmations >= threshold` does **not** mean a proposal can be
+   * executed: it must also be in the approved status, not invalidated by a later
+   * configuration change, and past any time lock. Use {@link isReadyToExecute}.
+   *
+   * @param {Array<number | bigint | string>} proposalIds - The proposal (transaction index) ids.
+   * @returns {Promise<Array<MultisigProposal | null>>} For each id, the proposal, or
+   *   null if no proposal exists at that id.
+   * @throws {Error} If an id is not a non-negative integer, or if the RPC request fails.
    */
   async getProposals (proposalIds) {
-    throw new NotImplementedError('getProposals(proposalIds)')
+    if (!proposalIds.length) {
+      return []
+    }
+
+    const { address: multisigPda, threshold, isCreated } = await this.getMultisigInfo()
+
+    if (!isCreated) {
+      throw new Error(
+        `The multisig account ${multisigPda} does not exist. Deploy it before reading its proposals.`
+      )
+    }
+
+    const indices = proposalIds.map((id) => this._toProposalIndex(id))
+    const proposalPdas = await Promise.all(
+      indices.map((index) => this._getProposalPda(multisigPda, index))
+    )
+
+    const proposals = []
+
+    for (let offset = 0; offset < proposalPdas.length; offset += MAX_MULTIPLE_ACCOUNTS) {
+      const { value } = await this._rpc
+        .getMultipleAccounts(proposalPdas.slice(offset, offset + MAX_MULTIPLE_ACCOUNTS), {
+          commitment: this._commitment,
+          encoding: 'base64'
+        })
+        .send()
+
+      value.forEach((account, i) => {
+        proposals.push(this._toProposal(account, indices[offset + i], threshold))
+      })
+    }
+
+    return proposals
   }
 
   /**
@@ -633,5 +649,105 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    */
   async quoteTransfer (transferOptions, config) {
     throw new NotImplementedError('quoteTransfer(transferOptions, config)')
+  }
+
+  /** @private */
+  _createFailoverRpc (urls, retries) {
+    const failoverProvider = new FailoverProvider({ retries })
+
+    for (const url of urls) {
+      failoverProvider.addProvider(createSolanaRpc(url))
+    }
+
+    return failoverProvider.initialize()
+  }
+
+  /** @private */
+  _hasDiscriminator (data, discriminator) {
+    if (data.length < discriminator.length) {
+      return false
+    }
+
+    return discriminator.every((byte, i) => byte === data[i])
+  }
+
+  /** @private */
+  _isSignature (hash) {
+    if (typeof hash !== 'string') {
+      return false
+    }
+
+    try {
+      return getBase58Encoder().encode(hash).length === SIGNATURE_SIZE
+    } catch {
+      return false
+    }
+  }
+
+  /** @private */
+  _toProposalIndex (proposalId) {
+    let index = null
+
+    try {
+      index = BigInt(proposalId)
+    } catch {}
+
+    if (index === null || index < 0n || index > MAX_PROPOSAL_INDEX) {
+      throw new Error(
+        `Invalid proposal id ${proposalId}. It must be an integer between 0 and ${MAX_PROPOSAL_INDEX}.`
+      )
+    }
+
+    return index
+  }
+
+  /** @private */
+  async _getProposalPda (multisigPda, index) {
+    const transactionIndex = new Uint8Array(TRANSACTION_INDEX_SIZE)
+
+    new DataView(transactionIndex.buffer).setBigUint64(0, index, true)
+
+    const [proposalPda] = await getProgramDerivedAddress({
+      programAddress: this._programId,
+      seeds: [
+        SEED_PREFIX,
+        getAddressEncoder().encode(address(multisigPda)),
+        SEED_TRANSACTION,
+        transactionIndex,
+        SEED_PROPOSAL
+      ]
+    })
+
+    return proposalPda
+  }
+
+  /** @private */
+  _toProposal (account, index, threshold) {
+    if (!account) {
+      return null
+    }
+
+    const data = getBase64Encoder().encode(account.data[0])
+
+    if (account.owner !== this._programId || !this._hasDiscriminator(data, PROPOSAL_DISCRIMINATOR)) {
+      return null
+    }
+
+    return {
+      proposalId: index.toString(),
+      confirmations: this._countApprovals(data),
+      threshold
+    }
+  }
+
+  /** @private */
+  _countApprovals (data) {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+
+    const statusSize = data[PROPOSAL_STATUS_OFFSET] === PROPOSAL_STATUS_EXECUTING
+      ? ENUM_TAG_SIZE
+      : ENUM_TAG_SIZE + TIMESTAMP_SIZE
+
+    return view.getUint32(PROPOSAL_STATUS_OFFSET + statusSize + BUMP_SIZE, true)
   }
 }

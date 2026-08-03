@@ -48,7 +48,7 @@ const MEMBER_B = '2JvLzXomThTBMSj2YQY3wE21kiaSpwGyJ17nm9xiLMsE'
 const MEMBER_C = 'GjwcWFQYzemBtpUoN5fMAP2FZviTtMRWCmrppGuTthJS'
 
 /**
- * Serializes a `Multisig` account's data, per the layout in docs/getOwners.md.
+ * Serializes a `Multisig` account's data.
  *
  * @param {Object} options - The account contents.
  * @param {Array<{ address: string, mask?: number }>} options.members - The members.
@@ -201,6 +201,118 @@ function mockTokenAccount (amount, config = { multisigPda: TEST_MULTISIG_PDA }) 
   account._rpc = { getAccountInfo }
 
   return { account, getAccountInfo }
+}
+
+// Proposal PDAs for TEST_MULTISIG_PDA at transaction indices 1..3, cross-checked
+// against `getProposalPda` from @sqds/multisig.
+const PROPOSAL_PDA_1 = 'AhijzMHF6KLNfJpPvAwVZFDhY55MqPR3DGv1EMGVuKzF'
+const PROPOSAL_PDA_2 = '5cA2xHRERqHDFnrsP6M6Mfx9rZ725o1qcQVjtFSq45mZ'
+const PROPOSAL_DISCRIMINATOR = [26, 94, 189, 187, 116, 136, 53, 33]
+
+const PROPOSAL_STATUS = {
+  Draft: 0,
+  Active: 1,
+  Rejected: 2,
+  Approved: 3,
+  Executing: 4,
+  Executed: 5,
+  Cancelled: 6
+}
+
+/**
+ * Serializes a `Proposal` account's data.
+ *
+ * @param {Object} options - The account contents.
+ * @param {number} [options.status=1] - The status discriminant.
+ * @param {string[]} [options.approved=[]] - Members that approved.
+ * @param {string[]} [options.rejected=[]] - Members that rejected.
+ * @param {string[]} [options.cancelled=[]] - Members that cancelled.
+ * @param {number[]} [options.discriminator] - An override for the discriminator.
+ * @param {number} [options.slack=0] - Trailing unused bytes, as Squads pre-allocates.
+ * @returns {string} The account data, base64-encoded.
+ */
+function encodeProposalAccount ({
+  status = PROPOSAL_STATUS.Active,
+  approved = [],
+  rejected = [],
+  cancelled = [],
+  discriminator = PROPOSAL_DISCRIMINATOR,
+  slack = 0
+}) {
+  // The status is a data enum: every variant carries an i64 timestamp except
+  // Executing, which carries nothing and so shifts everything after it by 8.
+  const statusSize = status === PROPOSAL_STATUS.Executing ? 1 : 9
+  const vecs = [approved, rejected, cancelled]
+  const size =
+    48 + statusSize + 1 +
+    vecs.reduce((total, v) => total + 4 + v.length * 32, 0) +
+    slack
+
+  const data = new Uint8Array(size)
+  const view = new DataView(data.buffer)
+
+  data.set(discriminator, 0)
+  data[48] = status
+
+  let offset = 48 + statusSize
+  data[offset] = 255 // bump
+  offset += 1
+
+  for (const members of vecs) {
+    view.setUint32(offset, members.length, true)
+    offset += 4
+    for (const member of members) {
+      data.set(getBase58Encoder().encode(member), offset)
+      offset += 32
+    }
+  }
+
+  return getBase64Decoder().decode(data)
+}
+
+/**
+ * Builds an RPC `value` for a `Proposal` account owned by the Squads program.
+ *
+ * @param {Object} options - Passed through to {@link encodeProposalAccount}.
+ * @returns {Object} The `value` field of a `getMultipleAccounts` entry.
+ */
+function proposalAccountValue (options) {
+  return {
+    owner: SQUADS_PROGRAM_ADDRESS,
+    data: [encodeProposalAccount(options), 'base64'],
+    executable: false,
+    lamports: 2039280n,
+    space: 454n
+  }
+}
+
+/**
+ * Builds a read-only account whose RPC serves a multisig and a set of proposals.
+ *
+ * @param {Array<Object|null>} proposals - The `getMultipleAccounts` entries to return,
+ *   in order across all chunks.
+ * @param {Object} [multisig] - The multisig account, or null to report it missing.
+ * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getMultipleAccounts: Function, getAccountInfo: Function }}
+ */
+function mockProposals (proposals, multisig = multisigAccountValue({
+  members: [{ address: MEMBER_A }, { address: MEMBER_B }],
+  threshold: 2
+})) {
+  const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+    provider: TEST_RPC_URL,
+    commitment: 'confirmed',
+    multisigPda: TEST_MULTISIG_PDA
+  })
+
+  const getAccountInfo = jest.fn(() => ({ send: async () => ({ value: multisig }) }))
+  const remaining = [...proposals]
+  const getMultipleAccounts = jest.fn((addresses) => ({
+    send: async () => ({ value: remaining.splice(0, addresses.length) })
+  }))
+
+  account._rpc = { getAccountInfo, getMultipleAccounts }
+
+  return { account, getMultipleAccounts, getAccountInfo }
 }
 
 /**
@@ -756,6 +868,182 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       const account = mockFailingAccount(new Error('503 Service Unavailable'))
 
       await expect(account.getNonce()).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
+  describe('getProposals', () => {
+    it('returns a proposal with its confirmations and the multisig threshold', async () => {
+      const { account } = mockProposals([
+        proposalAccountValue({ approved: [MEMBER_A, MEMBER_B] })
+      ])
+
+      expect(await account.getProposals([1])).toEqual([
+        { proposalId: '1', confirmations: 2, threshold: 2 }
+      ])
+    })
+
+    it('derives the proposal address from the transaction index', async () => {
+      const { account, getMultipleAccounts } = mockProposals([
+        proposalAccountValue({}),
+        proposalAccountValue({})
+      ])
+
+      await account.getProposals([1, 2])
+
+      expect(getMultipleAccounts).toHaveBeenCalledWith(
+        [PROPOSAL_PDA_1, PROPOSAL_PDA_2],
+        expect.anything()
+      )
+    })
+
+    it('returns null for an id with no proposal, keeping positions aligned', async () => {
+      const { account } = mockProposals([
+        proposalAccountValue({ approved: [MEMBER_A] }),
+        null,
+        proposalAccountValue({ approved: [MEMBER_A, MEMBER_B] })
+      ])
+
+      const proposals = await account.getProposals([1, 2, 3])
+
+      expect(proposals).toEqual([
+        { proposalId: '1', confirmations: 1, threshold: 2 },
+        null,
+        { proposalId: '3', confirmations: 2, threshold: 2 }
+      ])
+    })
+
+    it('counts approvals correctly for an Executing proposal', async () => {
+      // Executing is the only status carrying no timestamp, so everything after it
+      // shifts 8 bytes. It is transient on chain, so only a synthetic test hits it.
+      const { account } = mockProposals([
+        proposalAccountValue({
+          status: PROPOSAL_STATUS.Executing,
+          approved: [MEMBER_A, MEMBER_B]
+        })
+      ])
+
+      expect(await account.getProposals([1])).toEqual([
+        { proposalId: '1', confirmations: 2, threshold: 2 }
+      ])
+    })
+
+    it('counts approvals correctly for every other status', async () => {
+      for (const [name, status] of Object.entries(PROPOSAL_STATUS)) {
+        if (status === PROPOSAL_STATUS.Executing) continue
+
+        const { account } = mockProposals([
+          proposalAccountValue({ status, approved: [MEMBER_A] })
+        ])
+
+        expect(await account.getProposals([1])).toEqual([
+          { proposalId: '1', confirmations: 1, threshold: 2 }
+        ])
+        expect(name).toBeTruthy()
+      }
+    })
+
+    it('reports zero confirmations for a rejected-only proposal', async () => {
+      // Indistinguishable from an untouched proposal through MultisigProposal.
+      const { account } = mockProposals([
+        proposalAccountValue({ approved: [], rejected: [MEMBER_A] })
+      ])
+
+      expect(await account.getProposals([1])).toEqual([
+        { proposalId: '1', confirmations: 0, threshold: 2 }
+      ])
+    })
+
+    it('ignores pre-allocated slack after the vectors', async () => {
+      const { account } = mockProposals([
+        proposalAccountValue({ approved: [MEMBER_A], slack: 320 })
+      ])
+
+      expect(await account.getProposals([1])).toEqual([
+        { proposalId: '1', confirmations: 1, threshold: 2 }
+      ])
+    })
+
+    it('accepts ids as number, bigint and string', async () => {
+      const { account } = mockProposals([
+        proposalAccountValue({}),
+        proposalAccountValue({}),
+        proposalAccountValue({})
+      ])
+
+      const proposals = await account.getProposals([1, 2n, '3'])
+
+      expect(proposals.map((p) => p.proposalId)).toEqual(['1', '2', '3'])
+    })
+
+    it('returns null rather than decoding another Squads account type', async () => {
+      const { account } = mockProposals([
+        proposalAccountValue({ discriminator: MULTISIG_DISCRIMINATOR })
+      ])
+
+      expect(await account.getProposals([1])).toEqual([null])
+    })
+
+    it('returns null when the account is owned by another program', async () => {
+      const { account } = mockProposals([
+        { ...proposalAccountValue({}), owner: SYSTEM_PROGRAM_ADDRESS }
+      ])
+
+      expect(await account.getProposals([1])).toEqual([null])
+    })
+
+    it('chunks requests at 100 addresses', async () => {
+      const proposals = Array.from({ length: 150 }, () => proposalAccountValue({ approved: [MEMBER_A] }))
+      const { account, getMultipleAccounts } = mockProposals(proposals)
+
+      const result = await account.getProposals(Array.from({ length: 150 }, (_, i) => i + 1))
+
+      expect(result).toHaveLength(150)
+      expect(getMultipleAccounts).toHaveBeenCalledTimes(2)
+      expect(getMultipleAccounts.mock.calls[0][0]).toHaveLength(100)
+      expect(getMultipleAccounts.mock.calls[1][0]).toHaveLength(50)
+    })
+
+    it('reads many proposals without one request per id', async () => {
+      const proposals = Array.from({ length: 40 }, () => proposalAccountValue({}))
+      const { account, getMultipleAccounts, getAccountInfo } = mockProposals(proposals)
+
+      await account.getProposals(Array.from({ length: 40 }, (_, i) => i + 1))
+
+      expect(getMultipleAccounts).toHaveBeenCalledTimes(1)
+      expect(getAccountInfo).toHaveBeenCalledTimes(1)
+    })
+
+    it('returns an empty array without any RPC call', async () => {
+      const { account, getMultipleAccounts, getAccountInfo } = mockProposals([])
+
+      expect(await account.getProposals([])).toEqual([])
+      expect(getMultipleAccounts).not.toHaveBeenCalled()
+      expect(getAccountInfo).not.toHaveBeenCalled()
+    })
+
+    it('throws naming the offending id', async () => {
+      const { account } = mockProposals([proposalAccountValue({})])
+
+      for (const bad of [-1, 1.5, 'abc']) {
+        await expect(account.getProposals([bad])).rejects.toThrow(
+          new RegExp(`Invalid proposal id ${bad === 'abc' ? 'abc' : bad}`.replace('.', '\\.'))
+        )
+      }
+    })
+
+    it('throws when the multisig does not exist', async () => {
+      const { account } = mockProposals([], null)
+
+      await expect(account.getProposals([1])).rejects.toThrow(/does not exist/)
+    })
+
+    it('propagates RPC failures', async () => {
+      const { account } = mockProposals([proposalAccountValue({})])
+      account._rpc.getMultipleAccounts = () => ({
+        send: async () => { throw new Error('503 Service Unavailable') }
+      })
+
+      await expect(account.getProposals([1])).rejects.toThrow('503 Service Unavailable')
     })
   })
 

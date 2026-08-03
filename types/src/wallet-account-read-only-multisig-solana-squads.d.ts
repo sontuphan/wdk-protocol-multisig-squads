@@ -89,8 +89,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @type {SolanaRpc}
      */
     protected _rpc: SolanaRpc;
-    /** @private */
-    private _createFailoverRpc;
     /**
      * Returns the signer's address.
      *
@@ -112,8 +110,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @throws {Error} If no address is configured, or if the RPC request fails.
      */
     isDeployed(): Promise<boolean>;
-    /** @private */
-    private _hasMultisigDiscriminator;
     /**
      * Returns the addresses of the multisig's members, in on-chain order.
      *
@@ -200,22 +196,18 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * Returns `0n` when the vault holds none of the token, including when no associated
      * token account exists for it yet.
      *
-     * @todo Only legacy SPL Token mints are supported. The associated token account is
-     *   derived with the SPL Token program as a seed, so a Token-2022 mint resolves to a
-     *   different address that does not exist, and this reports `0n` for a real balance.
-     *   Revisit by resolving the mint's owning program, or by looking accounts up with
-     *   `getTokenAccountsByOwner` filtered by mint, which is program-agnostic. See
-     *   `docs/getTokenBalance.md` §2 for a mainnet example of the wrong answer.
+     * Only legacy SPL Token mints are supported: the associated token account is derived
+     * with the SPL Token program as a seed, so a Token-2022 mint resolves to a different
+     * address and reports `0n` even when it holds a balance.
      *
      * @param {string} tokenAddress - The SPL token mint address.
      * @param {number | string} [vaultIndexOrAddress=0] - A vault index between 0 and 255,
      *   or a vault address to read as given.
      * @returns {Promise<bigint>} The token balance (in base unit).
      * @throws {Error} If the mint address is malformed, or if the RPC request fails.
+     * @todo Support Token-2022 (Token Extensions Program).
      */
     getTokenBalance(tokenAddress: string, vaultIndexOrAddress?: number | string): Promise<bigint>;
-    /** @private */
-    private _isSignature;
     /**
      * Returns the receipt of a transaction, or `null` if the RPC has no record of it.
      *
@@ -247,12 +239,21 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     verify(message: string | Uint8Array, signature: string | Uint8Array): Promise<boolean>;
     /**
-     * Returns the pending proposals for the given proposal ids.
+     * Returns the proposals at the given ids, in the same order.
      *
-     * @param {Array<number | bigint>} proposalIds - The proposal (transaction index) ids.
-     * @returns {Promise<MultisigProposal[]>} The proposals.
+     * A proposal's id is its transaction index. Entries are `null` where no proposal
+     * exists at that id, so the result stays positionally aligned with the input.
+     *
+     * Note that `confirmations >= threshold` does **not** mean a proposal can be
+     * executed: it must also be in the approved status, not invalidated by a later
+     * configuration change, and past any time lock. Use {@link isReadyToExecute}.
+     *
+     * @param {Array<number | bigint | string>} proposalIds - The proposal (transaction index) ids.
+     * @returns {Promise<Array<MultisigProposal | null>>} For each id, the proposal, or
+     *   null if no proposal exists at that id.
+     * @throws {Error} If an id is not a non-negative integer, or if the RPC request fails.
      */
-    getProposals(proposalIds: Array<number | bigint>): Promise<MultisigProposal[]>;
+    getProposals(proposalIds: Array<number | bigint | string>): Promise<Array<MultisigProposal | null>>;
     /**
      * Returns whether a proposal has reached the threshold and is ready to execute.
      *
@@ -295,6 +296,20 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     quoteTransfer(transferOptions: import("@tetherto/wdk-wallet").TransferOptions, config?: SolanaMultisigSquadsConfig): Promise<{
         fee: bigint;
     }>;
+    /** @private */
+    private _createFailoverRpc;
+    /** @private */
+    private _hasDiscriminator;
+    /** @private */
+    private _isSignature;
+    /** @private */
+    private _toProposalIndex;
+    /** @private */
+    private _getProposalPda;
+    /** @private */
+    private _toProposal;
+    /** @private */
+    private _countApprovals;
 }
 export type SolanaRpc = ReturnType<typeof import("@solana/rpc").createSolanaRpc>;
 export type Commitment = import("@solana/rpc-types").Commitment;
