@@ -154,6 +154,28 @@ const SEED_PREFIX = 'multisig'
 const SEED_MULTISIG = 'multisig'
 
 /**
+ * The seed identifying a vault program-derived address.
+ *
+ * @type {string}
+ */
+const SEED_VAULT = 'vault'
+
+/**
+ * The index of the multisig's main vault.
+ *
+ * @type {number}
+ */
+const DEFAULT_VAULT_INDEX = 0
+
+/**
+ * The highest addressable vault index. The index is serialized as a `u8`, so a
+ * multisig has at most 256 vaults.
+ *
+ * @type {number}
+ */
+const MAX_VAULT_INDEX = 255
+
+/**
  * Read-only Solana Squads multisig wallet account.
  * Provides query-only operations for Squads multisig wallets.
  *
@@ -490,12 +512,70 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the native SOL balance of the multisig vault.
+   * Returns the address of one of the multisig's vaults.
    *
-   * @returns {Promise<bigint>} The balance in lamports.
+   * Vaults are where a Squads multisig holds its funds, so this is **not** the
+   * address returned by {@link getAddress}: that one identifies the multisig and
+   * holds only its rent. Index `0` is the main treasury; higher indices are the
+   * sub-accounts the Squads app exposes.
+   *
+   * @param {number | string} [vaultIndexOrAddress=0] - A vault index between 0 and 255,
+   *   or a vault address to use as given.
+   * @returns {Promise<string>} The vault address.
+   * @throws {Error} If the index is out of range, or the address is not valid base58.
    */
-  async getBalance () {
-    throw new NotImplementedError('getBalance()')
+  async getVaultAddress (vaultIndexOrAddress = DEFAULT_VAULT_INDEX) {
+    if (typeof vaultIndexOrAddress === 'string') {
+      return address(vaultIndexOrAddress)
+    }
+
+    if (
+      !Number.isInteger(vaultIndexOrAddress) ||
+      vaultIndexOrAddress < DEFAULT_VAULT_INDEX ||
+      vaultIndexOrAddress > MAX_VAULT_INDEX
+    ) {
+      throw new Error(
+        `Invalid vault index ${vaultIndexOrAddress}. It must be an integer between ${DEFAULT_VAULT_INDEX} and ${MAX_VAULT_INDEX}.`
+      )
+    }
+
+    const multisigPda = await this.getAddress()
+
+    const [vaultPda] = await getProgramDerivedAddress({
+      programAddress: this._programId,
+      seeds: [
+        SEED_PREFIX,
+        getAddressEncoder().encode(address(multisigPda)),
+        SEED_VAULT,
+        Uint8Array.of(vaultIndexOrAddress)
+      ]
+    })
+
+    return vaultPda
+  }
+
+  /**
+   * Returns the native SOL balance of one of the multisig's vaults.
+   *
+   * Returns `0n` when the vault holds nothing, which is also the case when it has
+   * never been funded and therefore has no account on chain yet.
+   *
+   * Not all of this balance is transferable in a single instruction: a transfer must
+   * leave the vault either empty or above the rent-exempt minimum.
+   *
+   * @param {number | string} [vaultIndexOrAddress=0] - A vault index between 0 and 255,
+   *   or a vault address to read as given.
+   * @returns {Promise<bigint>} The balance in lamports.
+   * @throws {Error} If the vault cannot be resolved, or if the RPC request fails.
+   */
+  async getBalance (vaultIndexOrAddress = DEFAULT_VAULT_INDEX) {
+    const vaultPda = await this.getVaultAddress(vaultIndexOrAddress)
+
+    const { value } = await this._rpc
+      .getBalance(address(vaultPda), { commitment: this._commitment })
+      .send()
+
+    return value
   }
 
   /**

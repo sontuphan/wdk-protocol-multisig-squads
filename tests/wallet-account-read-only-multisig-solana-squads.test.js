@@ -137,6 +137,32 @@ function mockAccount (value, config = { multisigPda: TEST_MULTISIG_PDA }) {
   return { account, getAccountInfo }
 }
 
+// Vault PDAs for TEST_MULTISIG_PDA, derived independently of the code under test
+// and cross-checked against `getVaultPda` from @sqds/multisig.
+const TEST_VAULT_0 = '6soQChwEoXXbAo17wNPdfLFaxzrAjiAxPif9nbJkDXCm'
+const TEST_VAULT_3 = '9tyW4GZWSMPZj8KSsVKsVjJvnVaE4mJjsg77TznzQfcs'
+
+/**
+ * Builds a read-only account whose RPC returns a fixed `getBalance` result.
+ *
+ * @param {bigint} lamports - The balance to report.
+ * @param {Object} [config] - Extra config for the account.
+ * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getBalance: Function }}
+ */
+function mockBalanceAccount (lamports, config = { multisigPda: TEST_MULTISIG_PDA }) {
+  const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+    provider: TEST_RPC_URL,
+    commitment: 'confirmed',
+    ...config
+  })
+
+  const getBalance = jest.fn(() => ({ send: async () => ({ value: lamports }) }))
+
+  account._rpc = { getBalance }
+
+  return { account, getBalance }
+}
+
 /**
  * Builds an account whose RPC rejects.
  *
@@ -690,6 +716,129 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       const account = mockFailingAccount(new Error('503 Service Unavailable'))
 
       await expect(account.getNonce()).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
+  describe('getVaultAddress', () => {
+    it('derives vault 0 by default', async () => {
+      const { account } = mockBalanceAccount(0n)
+
+      expect(await account.getVaultAddress()).toBe(TEST_VAULT_0)
+    })
+
+    it('is not the multisig address', async () => {
+      // The multisig account holds only its rent; funds live in the vault.
+      const { account } = mockBalanceAccount(0n)
+
+      expect(await account.getVaultAddress()).not.toBe(TEST_MULTISIG_PDA)
+    })
+
+    it('derives a vault by index', async () => {
+      const { account } = mockBalanceAccount(0n)
+
+      expect(await account.getVaultAddress(3)).toBe(TEST_VAULT_3)
+      expect(await account.getVaultAddress(3)).not.toBe(TEST_VAULT_0)
+    })
+
+    it('accepts an address and returns it as given', async () => {
+      const { account } = mockBalanceAccount(0n)
+
+      expect(await account.getVaultAddress(TEST_VAULT_3)).toBe(TEST_VAULT_3)
+    })
+
+    it('accepts the full u8 index range', async () => {
+      const { account } = mockBalanceAccount(0n)
+
+      await expect(account.getVaultAddress(255)).resolves.toEqual(expect.any(String))
+    })
+
+    it('rejects an index above the u8 range', async () => {
+      const { account } = mockBalanceAccount(0n)
+
+      await expect(account.getVaultAddress(256)).rejects.toThrow(/Invalid vault index/)
+    })
+
+    it('rejects a negative or fractional index', async () => {
+      const { account } = mockBalanceAccount(0n)
+
+      await expect(account.getVaultAddress(-1)).rejects.toThrow(/Invalid vault index/)
+      await expect(account.getVaultAddress(1.5)).rejects.toThrow(/Invalid vault index/)
+    })
+
+    it('rejects a malformed address', async () => {
+      const { account } = mockBalanceAccount(0n)
+
+      await expect(account.getVaultAddress('not-an-address')).rejects.toThrow()
+    })
+  })
+
+  describe('getBalance', () => {
+    it('reads the vault address, not the multisig address', async () => {
+      // The only assertion here that catches reading the wrong account: every
+      // other test in this block passes with the multisig address substituted.
+      const { account, getBalance } = mockBalanceAccount(51000001n)
+
+      await account.getBalance()
+
+      expect(getBalance).toHaveBeenCalledWith(TEST_VAULT_0, { commitment: 'confirmed' })
+      expect(getBalance).not.toHaveBeenCalledWith(TEST_MULTISIG_PDA, expect.anything())
+    })
+
+    it('returns the balance as a bigint', async () => {
+      const { account } = mockBalanceAccount(51000001n)
+
+      const balance = await account.getBalance()
+
+      expect(balance).toBe(51000001n)
+      expect(typeof balance).toBe('bigint')
+    })
+
+    it('returns 0n for an unfunded vault that has no account', async () => {
+      // Most vaults do not exist on chain; the RPC reports 0 rather than erroring,
+      // and that is the correct balance rather than a placeholder.
+      const { account } = mockBalanceAccount(0n)
+
+      expect(await account.getBalance()).toBe(0n)
+    })
+
+    it('preserves values beyond Number.MAX_SAFE_INTEGER', async () => {
+      const { account } = mockBalanceAccount(18446744073709551615n)
+
+      expect(await account.getBalance()).toBe(18446744073709551615n)
+    })
+
+    it('reads a vault selected by index', async () => {
+      const { account, getBalance } = mockBalanceAccount(7n)
+
+      expect(await account.getBalance(3)).toBe(7n)
+      expect(getBalance).toHaveBeenCalledWith(TEST_VAULT_3, { commitment: 'confirmed' })
+    })
+
+    it('reads a vault selected by address', async () => {
+      const { account, getBalance } = mockBalanceAccount(7n)
+
+      await account.getBalance(TEST_VAULT_3)
+
+      expect(getBalance).toHaveBeenCalledWith(TEST_VAULT_3, { commitment: 'confirmed' })
+    })
+
+    it('rejects an out-of-range index before hitting the RPC', async () => {
+      const { account, getBalance } = mockBalanceAccount(0n)
+
+      await expect(account.getBalance(256)).rejects.toThrow(/Invalid vault index/)
+      expect(getBalance).not.toHaveBeenCalled()
+    })
+
+    it('propagates RPC failures', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
+      account._rpc = {
+        getBalance: () => ({ send: async () => { throw new Error('503 Service Unavailable') } })
+      }
+
+      await expect(account.getBalance()).rejects.toThrow('503 Service Unavailable')
     })
   })
 
