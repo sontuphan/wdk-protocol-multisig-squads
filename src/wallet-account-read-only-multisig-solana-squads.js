@@ -20,8 +20,13 @@ import FailoverProvider from '@tetherto/wdk-failover-provider'
 
 import { createSolanaRpc } from '@solana/rpc'
 
+import { address, getAddressEncoder, getProgramDerivedAddress } from '@solana/addresses'
+
+import { getBase64Encoder } from '@solana/codecs'
+
 /** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
 /** @typedef {import('@solana/rpc-types').Commitment} Commitment */
+/** @typedef {import('@solana/addresses').Address} Address */
 
 /** @typedef {import('@tetherto/wdk-wallet').IWalletAccountReadOnlyMultisig} IWalletAccountReadOnlyMultisig */
 /** @typedef {import('@tetherto/wdk-wallet').MultisigInfo} MultisigInfo */
@@ -52,6 +57,34 @@ import { createSolanaRpc } from '@solana/rpc'
 /** @typedef {SolanaMultisigSquadsCommonConfig} SolanaMultisigSquadsReadOnlyConfig */
 
 export const DEFAULT_COMMITMENT = 'confirmed'
+
+/**
+ * The address of the Squads Protocol v4 program.
+ *
+ * @type {string}
+ */
+export const SQUADS_PROGRAM_ADDRESS = 'SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf'
+
+/**
+ * The 8-byte Anchor discriminator prefixing the data of a Squads `Multisig` account.
+ *
+ * @type {Uint8Array}
+ */
+const MULTISIG_DISCRIMINATOR = Uint8Array.from([224, 116, 121, 186, 68, 161, 79, 236])
+
+/**
+ * The seed prefix shared by every Squads program-derived address.
+ *
+ * @type {string}
+ */
+const SEED_PREFIX = 'multisig'
+
+/**
+ * The seed identifying a `Multisig` program-derived address.
+ *
+ * @type {string}
+ */
+const SEED_MULTISIG = 'multisig'
 
 /**
  * Read-only Solana Squads multisig wallet account.
@@ -87,11 +120,28 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     /**
      * The address of the Squads multisig account.
+     * Lazily populated by {@link _resolveMultisigPda} when only a `createKey` is configured.
      *
      * @protected
      * @type {string | null}
      */
     this._multisigPda = config.multisigPda ?? null
+
+    /**
+     * The create key used to derive the multisig address, if configured.
+     *
+     * @protected
+     * @type {string | null}
+     */
+    this._createKey = config.createKey ?? null
+
+    /**
+     * The address of the Squads program to operate against.
+     *
+     * @protected
+     * @type {Address}
+     */
+    this._programId = address(config.programId ?? SQUADS_PROGRAM_ADDRESS)
 
     /**
      * The commitment level for transactions.
@@ -142,25 +192,97 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the address of the Squads multisig account.
+   * Resolves the address of the Squads multisig account.
    *
+   * Uses the configured `multisigPda` when present, otherwise derives it from the
+   * configured `createKey`. The derived address is memoized, since the derivation
+   * is deterministic.
+   *
+   * @protected
    * @returns {Promise<string>} The multisig address.
+   * @throws {Error} If neither `multisigPda` nor `createKey` is configured.
    */
-  async getAddress () {
-    if (!this._multisigPda) {
-      throw new Error('No multisig address is configured. Provide `multisigPda` in the config.')
+  async _resolveMultisigPda () {
+    if (this._multisigPda) {
+      return this._multisigPda
     }
 
-    return this._multisigPda
+    if (!this._createKey) {
+      throw new Error(
+        'No multisig address is configured. Provide `multisigPda` or `createKey` in the config.'
+      )
+    }
+
+    const [multisigPda] = await getProgramDerivedAddress({
+      programAddress: this._programId,
+      seeds: [
+        SEED_PREFIX,
+        SEED_MULTISIG,
+        getAddressEncoder().encode(address(this._createKey))
+      ]
+    })
+
+    this._multisigPda = multisigPda
+
+    return multisigPda
   }
 
   /**
-   * Returns whether the multisig account is deployed on-chain.
+   * Returns the address of the Squads multisig account.
    *
-   * @returns {Promise<boolean>} Whether the multisig is deployed.
+   * @returns {Promise<string>} The multisig address.
+   * @throws {Error} If neither `multisigPda` nor `createKey` is configured.
+   */
+  async getAddress () {
+    return this._resolveMultisigPda()
+  }
+
+  /**
+   * Returns whether the multisig account exists on-chain.
+   *
+   * Squads deploys no program per multisig — the Squads program is shared by every
+   * multisig on the network. This reports whether the `Multisig` account at this
+   * account's address has been created (by `multisigCreateV2`), which is what
+   * `deploy()` does.
+   *
+   * Note that just after `deploy()` resolves this may still return `false`, until
+   * the creating transaction reaches this account's commitment level.
+   *
+   * @returns {Promise<boolean>} Whether the multisig account exists.
+   * @throws {Error} If no address is configured, or if the RPC request fails.
    */
   async isDeployed () {
-    throw new NotImplementedError('isDeployed()')
+    const multisigPda = await this._resolveMultisigPda()
+
+    const { value } = await this._rpc
+      .getAccountInfo(address(multisigPda), {
+        commitment: this._commitment,
+        encoding: 'base64',
+        // Only the discriminator is needed; a `Multisig` account grows with its
+        // member list, so there is no reason to fetch all of it.
+        dataSlice: { offset: 0, length: MULTISIG_DISCRIMINATOR.length }
+      })
+      .send()
+
+    if (!value) {
+      return false
+    }
+
+    // Anyone can send lamports to the multisig address before it is created,
+    // which leaves a System-Program-owned account with no data behind. Checking
+    // the owner is what distinguishes that from a real multisig.
+    if (value.owner !== this._programId) {
+      return false
+    }
+
+    const [data] = value.data
+    const discriminator = getBase64Encoder().encode(data)
+
+    if (discriminator.length !== MULTISIG_DISCRIMINATOR.length) {
+      return false
+    }
+
+    return MULTISIG_DISCRIMINATOR.every((byte, i) => byte === discriminator[i])
   }
 
   /**

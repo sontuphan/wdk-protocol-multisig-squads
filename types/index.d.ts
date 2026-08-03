@@ -15,4 +15,4 @@ export type SolanaMultisigSquadsCommonConfig = import("./src/wallet-account-read
 export type SolanaMultisigSquadsSigningConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsSigningConfig;
 export type SolanaMultisigSquadsConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsConfig;
 export type SolanaMultisigSquadsReadOnlyConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsReadOnlyConfig;
-export { default as WalletAccountReadOnlyMultisigSolanaSquads, DEFAULT_COMMITMENT } from "./src/wallet-account-read-only-multisig-solana-squads.js";
+export { default as WalletAccountReadOnlyMultisigSolanaSquads, DEFAULT_COMMITMENT, SQUADS_PROGRAM_ADDRESS } from "./src/wallet-account-read-only-multisig-solana-squads.js";

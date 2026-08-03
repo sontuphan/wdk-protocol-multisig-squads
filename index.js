@@ -46,6 +46,6 @@
 
 export { default } from './src/wallet-manager-multisig-solana-squads.js'
 
-export { default as WalletAccountReadOnlyMultisigSolanaSquads, DEFAULT_COMMITMENT } from './src/wallet-account-read-only-multisig-solana-squads.js'
+export { default as WalletAccountReadOnlyMultisigSolanaSquads, DEFAULT_COMMITMENT, SQUADS_PROGRAM_ADDRESS } from './src/wallet-account-read-only-multisig-solana-squads.js'
 
 export { default as WalletAccountMultisigSolanaSquads } from './src/wallet-account-multisig-solana-squads.js'

@@ -54,6 +54,17 @@ account.dispose()
 - **Message Proposals**: Propose and approve off-chain message signatures
 - **Read-Only Support**: Inspect multisig state without a signing key
 
+## Squads Protocol Version
+
+> [!IMPORTANT]
+> This package targets **Squads Protocol v4**, the live version. Program ID:
+>
+> ```
+> SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf
+> ```
+>
+> v3 (**"Squads Legacy"**) is a different program with a different account layout. Its documentation lives under [`/main/squads-legacy/*`](https://docs.squads.so/main/squads-legacy/getting-started/whats-a-squad.md) — do not use it as a reference for this package. Use the [v4 development docs](https://docs.squads.so/main/development/introduction/what-is-squads-protocol.md) instead.
+
 ## Compatibility
 
 - **Solana Mainnet Beta**

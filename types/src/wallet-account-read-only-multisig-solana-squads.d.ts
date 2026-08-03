@@ -1,5 +1,6 @@
 /** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
 /** @typedef {import('@solana/rpc-types').Commitment} Commitment */
+/** @typedef {import('@solana/addresses').Address} Address */
 /** @typedef {import('@tetherto/wdk-wallet').IWalletAccountReadOnlyMultisig} IWalletAccountReadOnlyMultisig */
 /** @typedef {import('@tetherto/wdk-wallet').MultisigInfo} MultisigInfo */
 /** @typedef {import('@tetherto/wdk-wallet').MessageInfo} MessageInfo */
@@ -23,6 +24,12 @@
 /** @typedef {SolanaMultisigSquadsCommonConfig & SolanaMultisigSquadsSigningConfig} SolanaMultisigSquadsConfig */
 /** @typedef {SolanaMultisigSquadsCommonConfig} SolanaMultisigSquadsReadOnlyConfig */
 export const DEFAULT_COMMITMENT: "confirmed";
+/**
+ * The address of the Squads Protocol v4 program.
+ *
+ * @type {string}
+ */
+export const SQUADS_PROGRAM_ADDRESS: string;
 /**
  * Read-only Solana Squads multisig wallet account.
  * Provides query-only operations for Squads multisig wallets.
@@ -53,11 +60,26 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     protected _signerAddress: string | null;
     /**
      * The address of the Squads multisig account.
+     * Lazily populated by {@link _resolveMultisigPda} when only a `createKey` is configured.
      *
      * @protected
      * @type {string | null}
      */
     protected _multisigPda: string | null;
+    /**
+     * The create key used to derive the multisig address, if configured.
+     *
+     * @protected
+     * @type {string | null}
+     */
+    protected _createKey: string | null;
+    /**
+     * The address of the Squads program to operate against.
+     *
+     * @protected
+     * @type {Address}
+     */
+    protected _programId: Address;
     /**
      * The commitment level for transactions.
      *
@@ -88,9 +110,30 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     getSignerAddress(): Promise<string | null>;
     /**
-     * Returns whether the multisig account is deployed on-chain.
+     * Resolves the address of the Squads multisig account.
      *
-     * @returns {Promise<boolean>} Whether the multisig is deployed.
+     * Uses the configured `multisigPda` when present, otherwise derives it from the
+     * configured `createKey`. The derived address is memoized, since the derivation
+     * is deterministic.
+     *
+     * @protected
+     * @returns {Promise<string>} The multisig address.
+     * @throws {Error} If neither `multisigPda` nor `createKey` is configured.
+     */
+    protected _resolveMultisigPda(): Promise<string>;
+    /**
+     * Returns whether the multisig account exists on-chain.
+     *
+     * Squads deploys no program per multisig — the Squads program is shared by every
+     * multisig on the network. This reports whether the `Multisig` account at this
+     * account's address has been created (by `multisigCreateV2`), which is what
+     * `deploy()` does.
+     *
+     * Note that just after `deploy()` resolves this may still return `false`, until
+     * the creating transaction reaches this account's commitment level.
+     *
+     * @returns {Promise<boolean>} Whether the multisig account exists.
+     * @throws {Error} If no address is configured, or if the RPC request fails.
      */
     isDeployed(): Promise<boolean>;
     /**
@@ -190,6 +233,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 }
 export type SolanaRpc = ReturnType<typeof import("@solana/rpc").createSolanaRpc>;
 export type Commitment = import("@solana/rpc-types").Commitment;
+export type Address = import("@solana/addresses").Address;
 export type IWalletAccountReadOnlyMultisig = any;
 export type MultisigInfo = import("@tetherto/wdk-wallet").MultisigInfo;
 export type MessageInfo = import("@tetherto/wdk-wallet").MessageInfo;
