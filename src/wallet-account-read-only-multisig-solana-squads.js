@@ -24,6 +24,8 @@ import { address, getAddressEncoder, getProgramDerivedAddress } from '@solana/ad
 
 import { getBase58Decoder, getBase64Encoder } from '@solana/codecs'
 
+import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token'
+
 /** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
 /** @typedef {import('@solana/rpc-types').Commitment} Commitment */
 /** @typedef {import('@solana/addresses').Address} Address */
@@ -579,13 +581,45 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the SPL token balance of the multisig vault.
+   * Returns the balance of an SPL token held by one of the multisig's vaults.
+   *
+   * Tokens are held in a token account owned by the vault, not in the vault account
+   * itself, so this reads the vault's associated token account for the given mint.
+   * Returns `0n` when the vault holds none of the token, including when no associated
+   * token account exists for it yet.
+   *
+   * @todo Only legacy SPL Token mints are supported. The associated token account is
+   *   derived with the SPL Token program as a seed, so a Token-2022 mint resolves to a
+   *   different address that does not exist, and this reports `0n` for a real balance.
+   *   Revisit by resolving the mint's owning program, or by looking accounts up with
+   *   `getTokenAccountsByOwner` filtered by mint, which is program-agnostic. See
+   *   `docs/getTokenBalance.md` §2 for a mainnet example of the wrong answer.
    *
    * @param {string} tokenAddress - The SPL token mint address.
+   * @param {number | string} [vaultIndexOrAddress=0] - A vault index between 0 and 255,
+   *   or a vault address to read as given.
    * @returns {Promise<bigint>} The token balance (in base unit).
+   * @throws {Error} If the mint address is malformed, or if the RPC request fails.
    */
-  async getTokenBalance (tokenAddress) {
-    throw new NotImplementedError('getTokenBalance(tokenAddress)')
+  async getTokenBalance (tokenAddress, vaultIndexOrAddress = DEFAULT_VAULT_INDEX) {
+    const mint = address(tokenAddress)
+    const vaultPda = await this.getVaultAddress(vaultIndexOrAddress)
+
+    const [ata] = await findAssociatedTokenPda({
+      mint,
+      owner: address(vaultPda),
+      tokenProgram: TOKEN_PROGRAM_ADDRESS
+    })
+
+    const { value } = await this._rpc
+      .getAccountInfo(ata, { commitment: this._commitment, encoding: 'jsonParsed' })
+      .send()
+
+    if (!value) {
+      return 0n
+    }
+
+    return BigInt(value.data.parsed.info.tokenAmount.amount)
   }
 
   /**

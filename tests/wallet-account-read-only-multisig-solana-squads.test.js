@@ -163,6 +163,46 @@ function mockBalanceAccount (lamports, config = { multisigPda: TEST_MULTISIG_PDA
   return { account, getBalance }
 }
 
+// Real mint addresses, and the legacy-SPL associated token accounts they derive to
+// under TEST_VAULT_0 / TEST_VAULT_3. Derived with `findAssociatedTokenPda`.
+const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+const USDC_ATA_VAULT_0 = 'HjTmApEb1hKe9snNpoqkv8HrXaEDSvhEJbsDVtBwZTsA'
+const USDC_ATA_VAULT_3 = 'AAd5adJNrMXHupG13WMvDzenYdVua77LEAbnJ89yRBwS'
+// A real Token-2022 mint. See the @todo on getTokenBalance.
+const TOKEN_2022_MINT = '7atgF8KQo4wJrD5ATGX7t1V2zVvykPJbFfNeVf1icFv1'
+
+/**
+ * Builds a read-only account whose RPC returns a fixed token account.
+ *
+ * @param {string|null} amount - The token amount as the RPC reports it, or null for
+ *   a non-existent account.
+ * @param {Object} [config] - Extra config for the account.
+ * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getAccountInfo: Function }}
+ */
+function mockTokenAccount (amount, config = { multisigPda: TEST_MULTISIG_PDA }) {
+  const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+    provider: TEST_RPC_URL,
+    commitment: 'confirmed',
+    ...config
+  })
+
+  const value = amount === null
+    ? null
+    : {
+        owner: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+        data: { parsed: { info: { tokenAmount: { amount, decimals: 6 } } }, program: 'spl-token' },
+        executable: false,
+        lamports: 2039280n,
+        space: 165n
+      }
+
+  const getAccountInfo = jest.fn(() => ({ send: async () => ({ value }) }))
+
+  account._rpc = { getAccountInfo }
+
+  return { account, getAccountInfo }
+}
+
 /**
  * Builds an account whose RPC rejects.
  *
@@ -716,6 +756,116 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       const account = mockFailingAccount(new Error('503 Service Unavailable'))
 
       await expect(account.getNonce()).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
+  describe('getTokenBalance', () => {
+    it('returns the token amount as a bigint', async () => {
+      const { account } = mockTokenAccount('51448811')
+
+      const balance = await account.getTokenBalance(USDC_MINT)
+
+      expect(balance).toBe(51448811n)
+      expect(typeof balance).toBe('bigint')
+    })
+
+    it('reads the vault\'s associated token account', async () => {
+      const { account, getAccountInfo } = mockTokenAccount('0')
+
+      await account.getTokenBalance(USDC_MINT)
+
+      expect(getAccountInfo).toHaveBeenCalledWith(
+        USDC_ATA_VAULT_0,
+        expect.objectContaining({ encoding: 'jsonParsed' })
+      )
+    })
+
+    it('returns 0n when no associated token account exists', async () => {
+      const { account } = mockTokenAccount(null)
+
+      expect(await account.getTokenBalance(USDC_MINT)).toBe(0n)
+    })
+
+    it('returns 0n for an existing account holding nothing', async () => {
+      const { account } = mockTokenAccount('0')
+
+      expect(await account.getTokenBalance(USDC_MINT)).toBe(0n)
+    })
+
+    it('preserves amounts beyond Number.MAX_SAFE_INTEGER', async () => {
+      // The RPC reports the amount as a decimal string precisely so it can exceed
+      // what a JS number holds.
+      const { account } = mockTokenAccount('18446744073709551615')
+
+      expect(await account.getTokenBalance(USDC_MINT)).toBe(18446744073709551615n)
+    })
+
+    it('reads the token account of a vault selected by index', async () => {
+      const { account, getAccountInfo } = mockTokenAccount('7')
+
+      expect(await account.getTokenBalance(USDC_MINT, 3)).toBe(7n)
+      expect(getAccountInfo).toHaveBeenCalledWith(USDC_ATA_VAULT_3, expect.anything())
+    })
+
+    it('queries a different account per mint, and never the vault itself', async () => {
+      const { account, getAccountInfo } = mockTokenAccount('0')
+
+      await account.getTokenBalance(USDC_MINT)
+      await account.getTokenBalance(TOKEN_2022_MINT)
+
+      const [[first], [second]] = getAccountInfo.mock.calls
+
+      expect(first).not.toBe(second)
+      // Tokens live in a token account owned by the vault, not in the vault.
+      expect([first, second]).not.toContain(TEST_VAULT_0)
+      expect([first, second]).not.toContain(TEST_MULTISIG_PDA)
+    })
+
+    it('throws on a malformed mint without hitting the RPC', async () => {
+      const { account, getAccountInfo } = mockTokenAccount('0')
+
+      await expect(account.getTokenBalance('not-a-mint')).rejects.toThrow()
+      expect(getAccountInfo).not.toHaveBeenCalled()
+    })
+
+    it('rejects an out-of-range vault index before hitting the RPC', async () => {
+      const { account, getAccountInfo } = mockTokenAccount('0')
+
+      await expect(account.getTokenBalance(USDC_MINT, 256)).rejects.toThrow(/Invalid vault index/)
+      expect(getAccountInfo).not.toHaveBeenCalled()
+    })
+
+    it('reports the mint problem first when both arguments are invalid', async () => {
+      // The mint is validated up front, so a caller fixing errors one at a time is
+      // told about the argument they passed first rather than the second.
+      const { account } = mockTokenAccount('0')
+
+      await expect(account.getTokenBalance('not-a-mint', 256))
+        .rejects.toThrow(/base58/)
+    })
+
+    it('propagates RPC failures', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
+      account._rpc = {
+        getAccountInfo: () => ({ send: async () => { throw new Error('503 Service Unavailable') } })
+      }
+
+      await expect(account.getTokenBalance(USDC_MINT)).rejects.toThrow('503 Service Unavailable')
+    })
+
+    it('resolves a Token-2022 mint to a legacy address — known limitation', async () => {
+      // Documents the @todo rather than asserting desired behaviour: the derivation
+      // uses the SPL Token program, so a Token-2022 mint yields an address that does
+      // not hold the real balance. Delete this test when Token-2022 is supported.
+      const { account, getAccountInfo } = mockTokenAccount(null)
+
+      expect(await account.getTokenBalance(TOKEN_2022_MINT)).toBe(0n)
+
+      const [queried] = getAccountInfo.mock.calls[0]
+      expect(queried).toBe('mKKRTmYrT4YywefDUvszdEqz7nm1oddDd6QRXn1snfz')
     })
   })
 
