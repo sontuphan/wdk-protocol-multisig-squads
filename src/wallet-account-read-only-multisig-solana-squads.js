@@ -22,7 +22,7 @@ import { createSolanaRpc } from '@solana/rpc'
 
 import { address, getAddressEncoder, getProgramDerivedAddress } from '@solana/addresses'
 
-import { getBase64Encoder } from '@solana/codecs'
+import { getBase58Decoder, getBase64Encoder } from '@solana/codecs'
 
 /** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
 /** @typedef {import('@solana/rpc-types').Commitment} Commitment */
@@ -73,6 +73,49 @@ export const SQUADS_PROGRAM_ADDRESS = 'SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52p
 const MULTISIG_DISCRIMINATOR = Uint8Array.from([224, 116, 121, 186, 68, 161, 79, 236])
 
 /**
+ * The offset of the optional `rentCollector` field within a `Multisig` account's
+ * data. See `docs/getOwners.md` for the full layout.
+ *
+ * @type {number}
+ */
+const MULTISIG_RENT_COLLECTOR_OFFSET = 94
+
+/**
+ * The serialized size of the tag preceding an optional field.
+ *
+ * @type {number}
+ */
+const OPTION_TAG_SIZE = 1
+
+/**
+ * The serialized size of an address.
+ *
+ * @type {number}
+ */
+const ADDRESS_SIZE = 32
+
+/**
+ * The serialized size of a `Multisig` account's `bump` field.
+ *
+ * @type {number}
+ */
+const BUMP_SIZE = 1
+
+/**
+ * The serialized size of the length prefix of the members array.
+ *
+ * @type {number}
+ */
+const MEMBER_COUNT_SIZE = 4
+
+/**
+ * The serialized size of a `Member`: an address plus a 1-byte permission mask.
+ *
+ * @type {number}
+ */
+const MEMBER_SIZE = ADDRESS_SIZE + 1
+
+/**
  * The seed prefix shared by every Squads program-derived address.
  *
  * @type {string}
@@ -120,7 +163,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     /**
      * The address of the Squads multisig account.
-     * Lazily populated by {@link _resolveMultisigPda} when only a `createKey` is configured.
+     * Lazily populated by {@link getAddress} when only a `createKey` is configured.
      *
      * @protected
      * @type {string | null}
@@ -192,17 +235,16 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Resolves the address of the Squads multisig account.
+   * Returns the address of the Squads multisig account.
    *
    * Uses the configured `multisigPda` when present, otherwise derives it from the
    * configured `createKey`. The derived address is memoized, since the derivation
    * is deterministic.
    *
-   * @protected
    * @returns {Promise<string>} The multisig address.
    * @throws {Error} If neither `multisigPda` nor `createKey` is configured.
    */
-  async _resolveMultisigPda () {
+  async getAddress () {
     if (this._multisigPda) {
       return this._multisigPda
     }
@@ -228,16 +270,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the address of the Squads multisig account.
-   *
-   * @returns {Promise<string>} The multisig address.
-   * @throws {Error} If neither `multisigPda` nor `createKey` is configured.
-   */
-  async getAddress () {
-    return this._resolveMultisigPda()
-  }
-
-  /**
    * Returns whether the multisig account exists on-chain.
    *
    * Squads deploys no program per multisig — the Squads program is shared by every
@@ -252,14 +284,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If no address is configured, or if the RPC request fails.
    */
   async isDeployed () {
-    const multisigPda = await this._resolveMultisigPda()
+    const multisigPda = await this.getAddress()
 
     const { value } = await this._rpc
       .getAccountInfo(address(multisigPda), {
         commitment: this._commitment,
         encoding: 'base64',
-        // Only the discriminator is needed; a `Multisig` account grows with its
-        // member list, so there is no reason to fetch all of it.
         dataSlice: { offset: 0, length: MULTISIG_DISCRIMINATOR.length }
       })
       .send()
@@ -268,30 +298,82 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       return false
     }
 
-    // Anyone can send lamports to the multisig address before it is created,
-    // which leaves a System-Program-owned account with no data behind. Checking
-    // the owner is what distinguishes that from a real multisig.
     if (value.owner !== this._programId) {
       return false
     }
 
-    const [data] = value.data
-    const discriminator = getBase64Encoder().encode(data)
-
-    if (discriminator.length !== MULTISIG_DISCRIMINATOR.length) {
-      return false
-    }
-
-    return MULTISIG_DISCRIMINATOR.every((byte, i) => byte === discriminator[i])
+    return this._hasMultisigDiscriminator(getBase64Encoder().encode(value.data[0]))
   }
 
   /**
-   * Returns the members of the multisig.
+   * Returns whether the given account data begins with the `Multisig` discriminator.
+   *
+   * @private
+   * @param {Uint8Array} data - The account data, or at least its first 8 bytes.
+   * @returns {boolean} Whether the data is that of a `Multisig` account.
+   */
+  _hasMultisigDiscriminator (data) {
+    if (data.length < MULTISIG_DISCRIMINATOR.length) {
+      return false
+    }
+
+    return MULTISIG_DISCRIMINATOR.every((byte, i) => byte === data[i])
+  }
+
+  /**
+   * Returns the addresses of the multisig's members, in on-chain order.
+   *
+   * Note that Squads members carry permissions (proposer / voter / executor) that
+   * this list does not express: the number of members is **not** the denominator
+   * of {@link getThreshold}, since only members holding the voter permission can
+   * approve a proposal.
    *
    * @returns {Promise<string[]>} The member addresses.
+   * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
    */
   async getOwners () {
-    throw new NotImplementedError('getOwners()')
+    const multisigPda = await this.getAddress()
+
+    const { value } = await this._rpc
+      .getAccountInfo(address(multisigPda), {
+        commitment: this._commitment,
+        encoding: 'base64'
+      })
+      .send()
+
+    if (!value) {
+      throw new Error(
+        `The multisig account ${multisigPda} does not exist. Deploy it before reading its members.`
+      )
+    }
+
+    const data = getBase64Encoder().encode(value.data[0])
+
+    if (value.owner !== this._programId || !this._hasMultisigDiscriminator(data)) {
+      throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
+    }
+
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    const addressDecoder = getBase58Decoder()
+
+    let offset = MULTISIG_RENT_COLLECTOR_OFFSET + OPTION_TAG_SIZE
+    if (data[MULTISIG_RENT_COLLECTOR_OFFSET] === 1) {
+      offset += ADDRESS_SIZE
+    }
+
+    offset += BUMP_SIZE
+
+    const count = view.getUint32(offset, true)
+    offset += MEMBER_COUNT_SIZE
+
+    const owners = []
+
+    for (let i = 0; i < count; i++) {
+      owners.push(addressDecoder.decode(data.subarray(offset, offset + ADDRESS_SIZE)))
+      offset += MEMBER_SIZE
+    }
+
+    return owners
   }
 
   /**

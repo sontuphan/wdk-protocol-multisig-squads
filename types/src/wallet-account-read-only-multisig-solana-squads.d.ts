@@ -60,7 +60,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     protected _signerAddress: string | null;
     /**
      * The address of the Squads multisig account.
-     * Lazily populated by {@link _resolveMultisigPda} when only a `createKey` is configured.
+     * Lazily populated by {@link getAddress} when only a `createKey` is configured.
      *
      * @protected
      * @type {string | null}
@@ -110,18 +110,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     getSignerAddress(): Promise<string | null>;
     /**
-     * Resolves the address of the Squads multisig account.
-     *
-     * Uses the configured `multisigPda` when present, otherwise derives it from the
-     * configured `createKey`. The derived address is memoized, since the derivation
-     * is deterministic.
-     *
-     * @protected
-     * @returns {Promise<string>} The multisig address.
-     * @throws {Error} If neither `multisigPda` nor `createKey` is configured.
-     */
-    protected _resolveMultisigPda(): Promise<string>;
-    /**
      * Returns whether the multisig account exists on-chain.
      *
      * Squads deploys no program per multisig — the Squads program is shared by every
@@ -137,9 +125,23 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     isDeployed(): Promise<boolean>;
     /**
-     * Returns the members of the multisig.
+     * Returns whether the given account data begins with the `Multisig` discriminator.
+     *
+     * @private
+     * @param {Uint8Array} data - The account data, or at least its first 8 bytes.
+     * @returns {boolean} Whether the data is that of a `Multisig` account.
+     */
+    private _hasMultisigDiscriminator;
+    /**
+     * Returns the addresses of the multisig's members, in on-chain order.
+     *
+     * Note that Squads members carry permissions (proposer / voter / executor) that
+     * this list does not express: the number of members is **not** the denominator
+     * of {@link getThreshold}, since only members holding the voter permission can
+     * approve a proposal.
      *
      * @returns {Promise<string[]>} The member addresses.
+     * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
      */
     getOwners(): Promise<string[]>;
     /**
