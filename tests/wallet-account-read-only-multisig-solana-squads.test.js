@@ -64,6 +64,8 @@ function encodeMultisigAccount ({
   rentCollector = false,
   threshold = 1,
   transactionIndex = 0n,
+  timeLock = 0,
+  staleTransactionIndex = 0n,
   discriminator = MULTISIG_DISCRIMINATOR,
   slack = 0
 }) {
@@ -73,7 +75,9 @@ function encodeMultisigAccount ({
 
   data.set(discriminator, 0)
   view.setUint16(72, threshold, true)
+  view.setUint32(74, timeLock, true)
   view.setBigUint64(78, transactionIndex, true)
+  view.setBigUint64(86, staleTransactionIndex, true)
 
   let offset = 94
 
@@ -233,6 +237,7 @@ const PROPOSAL_STATUS = {
  */
 function encodeProposalAccount ({
   status = PROPOSAL_STATUS.Active,
+  statusTimestamp = 0n,
   approved = [],
   rejected = [],
   cancelled = [],
@@ -253,6 +258,10 @@ function encodeProposalAccount ({
 
   data.set(discriminator, 0)
   data[48] = status
+
+  if (status !== PROPOSAL_STATUS.Executing) {
+    view.setBigInt64(49, statusTimestamp, true)
+  }
 
   let offset = 48 + statusSize
   data[offset] = 255 // bump
@@ -313,6 +322,104 @@ function mockProposals (proposals, multisig = multisigAccountValue({
   account._rpc = { getAccountInfo, getMultipleAccounts }
 
   return { account, getMultipleAccounts, getAccountInfo }
+}
+
+const VAULT_TRANSACTION_DISCRIMINATOR = [168, 250, 162, 100, 81, 14, 162, 207]
+const CONFIG_TRANSACTION_DISCRIMINATOR = [94, 8, 4, 35, 113, 139, 139, 112]
+const BATCH_DISCRIMINATOR = [156, 194, 70, 44, 22, 88, 137, 44]
+const CLOCK_SYSVAR_ADDRESS = 'SysvarC1ock11111111111111111111111111111111'
+
+/**
+ * Builds an RPC `value` for a transaction account, of which only the discriminator
+ * is read.
+ *
+ * @param {number[]} discriminator - The account discriminator.
+ * @returns {Object} The `value` field of a `getMultipleAccounts` entry.
+ */
+function transactionAccountValue (discriminator) {
+  const data = new Uint8Array(8)
+
+  data.set(discriminator, 0)
+
+  return {
+    owner: SQUADS_PROGRAM_ADDRESS,
+    data: [getBase64Decoder().decode(data), 'base64'],
+    executable: false,
+    lamports: 2039280n,
+    space: 8n
+  }
+}
+
+/**
+ * Builds an RPC `value` for the Clock sysvar.
+ *
+ * @param {bigint} unixTimestamp - The cluster time to report.
+ * @returns {Object} The `value` field of a `getMultipleAccounts` entry.
+ */
+function clockAccountValue (unixTimestamp) {
+  const data = new Uint8Array(40)
+
+  new DataView(data.buffer).setBigInt64(32, unixTimestamp, true)
+
+  return {
+    owner: 'Sysvar1111111111111111111111111111111111111',
+    data: [getBase64Decoder().decode(data), 'base64'],
+    executable: false,
+    lamports: 1169280n,
+    space: 40n
+  }
+}
+
+/**
+ * Builds a read-only account whose RPC serves the four accounts
+ * `isReadyToExecute` reads.
+ *
+ * @param {Object} options - The scenario.
+ * @param {number} [options.status=3] - The proposal status discriminant.
+ * @param {bigint} [options.approvedAt=1000n] - The proposal's status timestamp.
+ * @param {bigint} [options.now=1000n] - The cluster time.
+ * @param {number} [options.timeLock=0] - The multisig's time lock, in seconds.
+ * @param {bigint} [options.staleTransactionIndex=0n] - The multisig's stale index.
+ * @param {number[]} [options.transactionType] - The transaction account discriminator.
+ * @param {boolean} [options.proposalExists=true] - Whether the proposal account exists.
+ * @param {boolean} [options.transactionExists=true] - Whether the transaction exists.
+ * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getMultipleAccounts: Function }}
+ */
+function mockExecutable ({
+  status = PROPOSAL_STATUS.Approved,
+  approvedAt = 1000n,
+  now = 1000n,
+  timeLock = 0,
+  staleTransactionIndex = 0n,
+  transactionType = VAULT_TRANSACTION_DISCRIMINATOR,
+  proposalExists = true,
+  transactionExists = true
+} = {}) {
+  const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+    provider: TEST_RPC_URL,
+    commitment: 'confirmed',
+    multisigPda: TEST_MULTISIG_PDA
+  })
+
+  const value = [
+    multisigAccountValue({
+      members: [{ address: MEMBER_A }, { address: MEMBER_B }],
+      threshold: 2,
+      timeLock,
+      staleTransactionIndex
+    }),
+    proposalExists
+      ? proposalAccountValue({ status, statusTimestamp: approvedAt, approved: [MEMBER_A, MEMBER_B] })
+      : null,
+    transactionExists ? transactionAccountValue(transactionType) : null,
+    clockAccountValue(now)
+  ]
+
+  const getMultipleAccounts = jest.fn(() => ({ send: async () => ({ value }) }))
+
+  account._rpc = { getMultipleAccounts }
+
+  return { account, getMultipleAccounts }
 }
 
 /**
@@ -1044,6 +1151,171 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       })
 
       await expect(account.getProposals([1])).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
+  describe('isReadyToExecute', () => {
+    it('returns true for an approved proposal with no time lock', async () => {
+      const { account } = mockExecutable()
+
+      expect(await account.isReadyToExecute(1)).toBe(true)
+    })
+
+    it('returns false for every status other than approved', async () => {
+      for (const [name, status] of Object.entries(PROPOSAL_STATUS)) {
+        if (status === PROPOSAL_STATUS.Approved) continue
+
+        const { account } = mockExecutable({ status })
+
+        expect(await account.isReadyToExecute(1)).toBe(false)
+        expect(name).toBeTruthy()
+      }
+    })
+
+    it('returns false while the time lock has not elapsed', async () => {
+      const { account } = mockExecutable({ approvedAt: 1000n, now: 1059n, timeLock: 60 })
+
+      expect(await account.isReadyToExecute(1)).toBe(false)
+    })
+
+    it('returns true the moment the time lock elapses', async () => {
+      // The program compares with >=, so the boundary second counts as released.
+      const { account } = mockExecutable({ approvedAt: 1000n, now: 1060n, timeLock: 60 })
+
+      expect(await account.isReadyToExecute(1)).toBe(true)
+    })
+
+    it('returns true for a stale approved vault transaction', async () => {
+      // vault_transaction_execute performs no staleness check: a vault proposal
+      // approved before going stale stays executable.
+      const { account } = mockExecutable({
+        transactionType: VAULT_TRANSACTION_DISCRIMINATOR,
+        staleTransactionIndex: 100n
+      })
+
+      expect(await account.isReadyToExecute(1)).toBe(true)
+    })
+
+    it('returns false for a stale approved config transaction', async () => {
+      // config_transaction_execute does check staleness.
+      const { account } = mockExecutable({
+        transactionType: CONFIG_TRANSACTION_DISCRIMINATOR,
+        staleTransactionIndex: 100n
+      })
+
+      expect(await account.isReadyToExecute(1)).toBe(false)
+    })
+
+    it('returns true for a config transaction that is not stale', async () => {
+      const { account } = mockExecutable({
+        transactionType: CONFIG_TRANSACTION_DISCRIMINATOR,
+        staleTransactionIndex: 0n
+      })
+
+      expect(await account.isReadyToExecute(1)).toBe(true)
+    })
+
+    it('returns true for a stale approved batch', async () => {
+      // batch_execute_transaction performs no staleness check either.
+      const { account } = mockExecutable({
+        transactionType: BATCH_DISCRIMINATOR,
+        staleTransactionIndex: 100n
+      })
+
+      expect(await account.isReadyToExecute(1)).toBe(true)
+    })
+
+    it('treats an index equal to the stale index as stale for config transactions', async () => {
+      // The program requires transaction_index > stale_transaction_index.
+      const { account } = mockExecutable({
+        transactionType: CONFIG_TRANSACTION_DISCRIMINATOR,
+        staleTransactionIndex: 5n
+      })
+
+      expect(await account.isReadyToExecute(5)).toBe(false)
+      expect(await account.isReadyToExecute(6)).toBe(true)
+    })
+
+    it('returns false when the proposal does not exist', async () => {
+      const { account } = mockExecutable({ proposalExists: false })
+
+      expect(await account.isReadyToExecute(1)).toBe(false)
+    })
+
+    it('returns false when the transaction account does not exist', async () => {
+      const { account } = mockExecutable({ transactionExists: false })
+
+      expect(await account.isReadyToExecute(1)).toBe(false)
+    })
+
+    it('returns false rather than decoding another account type as a proposal', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
+      account._rpc = {
+        getMultipleAccounts: () => ({
+          send: async () => ({
+            value: [
+              multisigAccountValue({ members: [{ address: MEMBER_A }] }),
+              proposalAccountValue({
+                status: PROPOSAL_STATUS.Approved,
+                discriminator: MULTISIG_DISCRIMINATOR
+              }),
+              transactionAccountValue(VAULT_TRANSACTION_DISCRIMINATOR),
+              clockAccountValue(1000n)
+            ]
+          })
+        })
+      }
+
+      expect(await account.isReadyToExecute(1)).toBe(false)
+    })
+
+    it('reads the multisig, proposal, transaction and clock in one request', async () => {
+      const { account, getMultipleAccounts } = mockExecutable()
+
+      await account.isReadyToExecute(1)
+
+      expect(getMultipleAccounts).toHaveBeenCalledTimes(1)
+
+      const [addresses] = getMultipleAccounts.mock.calls[0]
+
+      expect(addresses).toHaveLength(4)
+      expect(addresses[0]).toBe(TEST_MULTISIG_PDA)
+      expect(addresses[1]).toBe(PROPOSAL_PDA_1)
+      expect(addresses[3]).toBe(CLOCK_SYSVAR_ADDRESS)
+      // The transaction account is a different PDA from the proposal.
+      expect(addresses[2]).not.toBe(PROPOSAL_PDA_1)
+    })
+
+    it('accepts ids as number, bigint and string', async () => {
+      const { account } = mockExecutable()
+
+      expect(await account.isReadyToExecute(1)).toBe(true)
+      expect(await account.isReadyToExecute(1n)).toBe(true)
+      expect(await account.isReadyToExecute('1')).toBe(true)
+    })
+
+    it('throws on an invalid id', async () => {
+      const { account, getMultipleAccounts } = mockExecutable()
+
+      await expect(account.isReadyToExecute(-1)).rejects.toThrow(/Invalid proposal id/)
+      expect(getMultipleAccounts).not.toHaveBeenCalled()
+    })
+
+    it('propagates RPC failures', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
+      account._rpc = {
+        getMultipleAccounts: () => ({
+          send: async () => { throw new Error('503 Service Unavailable') }
+        })
+      }
+
+      await expect(account.isReadyToExecute(1)).rejects.toThrow('503 Service Unavailable')
     })
   })
 

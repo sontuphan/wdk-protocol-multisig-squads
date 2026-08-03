@@ -64,12 +64,20 @@ export const SQUADS_PROGRAM_ADDRESS = 'SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52p
 
 const MULTISIG_DISCRIMINATOR = Uint8Array.from([224, 116, 121, 186, 68, 161, 79, 236])
 const PROPOSAL_DISCRIMINATOR = Uint8Array.from([26, 94, 189, 187, 116, 136, 53, 33])
+const CONFIG_TRANSACTION_DISCRIMINATOR = Uint8Array.from([94, 8, 4, 35, 113, 139, 139, 112])
+
+const CLOCK_SYSVAR_ADDRESS = 'SysvarC1ock11111111111111111111111111111111'
+const CLOCK_UNIX_TIMESTAMP_OFFSET = 32
 
 const MULTISIG_THRESHOLD_OFFSET = 72
+const MULTISIG_TIME_LOCK_OFFSET = 74
 const MULTISIG_TRANSACTION_INDEX_OFFSET = 78
+const MULTISIG_STALE_TRANSACTION_INDEX_OFFSET = 86
 const MULTISIG_RENT_COLLECTOR_OFFSET = 94
 
 const PROPOSAL_STATUS_OFFSET = 48
+const PROPOSAL_STATUS_TIMESTAMP_OFFSET = 49
+const PROPOSAL_STATUS_APPROVED = 3
 const PROPOSAL_STATUS_EXECUTING = 4
 
 const OPTION_TAG_SIZE = 1
@@ -601,13 +609,79 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns whether a proposal has reached the threshold and is ready to execute.
+   * Returns whether a proposal can be executed right now.
    *
-   * @param {number | bigint} proposalId - The proposal id.
-   * @returns {Promise<boolean>} Whether the proposal is ready to execute.
+   * A proposal becomes executable once it has been approved and its time lock has
+   * elapsed. Configuration proposals additionally must not have been invalidated by a
+   * later configuration change; vault and batch proposals that were approved before
+   * being invalidated stay executable.
+   *
+   * This is a point-in-time answer rather than a guarantee: a configuration change or
+   * a cancellation can make an executable proposal unexecutable. Every reason for a
+   * `false` result collapses into the same value, including a proposal that does not
+   * exist.
+   *
+   * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
+   * @returns {Promise<boolean>} Whether the proposal can be executed.
+   * @throws {Error} If the id is invalid, no address is configured, or the RPC fails.
    */
   async isReadyToExecute (proposalId) {
-    throw new NotImplementedError('isReadyToExecute(proposalId)')
+    const index = this._toProposalIndex(proposalId)
+    const multisigPda = await this.getAddress()
+
+    const [proposalPda, transactionPda] = await Promise.all([
+      this._getProposalPda(multisigPda, index),
+      this._getTransactionPda(multisigPda, index)
+    ])
+
+    const { value } = await this._rpc
+      .getMultipleAccounts(
+        [address(multisigPda), proposalPda, transactionPda, address(CLOCK_SYSVAR_ADDRESS)],
+        { commitment: this._commitment, encoding: 'base64' }
+      )
+      .send()
+
+    const [multisig, proposal, transaction, clock] = value
+
+    if (!multisig || !proposal || !transaction || !clock) {
+      return false
+    }
+
+    const proposalData = getBase64Encoder().encode(proposal.data[0])
+
+    if (
+      !this._hasDiscriminator(proposalData, PROPOSAL_DISCRIMINATOR) ||
+      proposalData[PROPOSAL_STATUS_OFFSET] !== PROPOSAL_STATUS_APPROVED
+    ) {
+      return false
+    }
+
+    const multisigData = getBase64Encoder().encode(multisig.data[0])
+
+    if (!this._hasDiscriminator(multisigData, MULTISIG_DISCRIMINATOR)) {
+      return false
+    }
+
+    const multisigView = new DataView(multisigData.buffer, multisigData.byteOffset, multisigData.byteLength)
+    const transactionData = getBase64Encoder().encode(transaction.data[0])
+
+    if (this._hasDiscriminator(transactionData, CONFIG_TRANSACTION_DISCRIMINATOR)) {
+      const staleIndex = multisigView.getBigUint64(MULTISIG_STALE_TRANSACTION_INDEX_OFFSET, true)
+
+      if (index <= staleIndex) {
+        return false
+      }
+    }
+
+    const clockData = getBase64Encoder().encode(clock.data[0])
+    const proposalView = new DataView(proposalData.buffer, proposalData.byteOffset, proposalData.byteLength)
+    const clockView = new DataView(clockData.buffer, clockData.byteOffset, clockData.byteLength)
+
+    const approvedAt = proposalView.getBigInt64(PROPOSAL_STATUS_TIMESTAMP_OFFSET, true)
+    const now = clockView.getBigInt64(CLOCK_UNIX_TIMESTAMP_OFFSET, true)
+    const timeLock = BigInt(multisigView.getUint32(MULTISIG_TIME_LOCK_OFFSET, true))
+
+    return now - approvedAt >= timeLock
   }
 
   /**
@@ -702,20 +776,34 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /** @private */
-  async _getProposalPda (multisigPda, index) {
+  _getTransactionSeeds (multisigPda, index) {
     const transactionIndex = new Uint8Array(TRANSACTION_INDEX_SIZE)
 
     new DataView(transactionIndex.buffer).setBigUint64(0, index, true)
 
+    return [
+      SEED_PREFIX,
+      getAddressEncoder().encode(address(multisigPda)),
+      SEED_TRANSACTION,
+      transactionIndex
+    ]
+  }
+
+  /** @private */
+  async _getTransactionPda (multisigPda, index) {
+    const [transactionPda] = await getProgramDerivedAddress({
+      programAddress: this._programId,
+      seeds: this._getTransactionSeeds(multisigPda, index)
+    })
+
+    return transactionPda
+  }
+
+  /** @private */
+  async _getProposalPda (multisigPda, index) {
     const [proposalPda] = await getProgramDerivedAddress({
       programAddress: this._programId,
-      seeds: [
-        SEED_PREFIX,
-        getAddressEncoder().encode(address(multisigPda)),
-        SEED_TRANSACTION,
-        transactionIndex,
-        SEED_PROPOSAL
-      ]
+      seeds: [...this._getTransactionSeeds(multisigPda, index), SEED_PROPOSAL]
     })
 
     return proposalPda

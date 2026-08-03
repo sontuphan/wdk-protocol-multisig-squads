@@ -255,12 +255,23 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     getProposals(proposalIds: Array<number | bigint | string>): Promise<Array<MultisigProposal | null>>;
     /**
-     * Returns whether a proposal has reached the threshold and is ready to execute.
+     * Returns whether a proposal can be executed right now.
      *
-     * @param {number | bigint} proposalId - The proposal id.
-     * @returns {Promise<boolean>} Whether the proposal is ready to execute.
+     * A proposal becomes executable once it has been approved and its time lock has
+     * elapsed. Configuration proposals additionally must not have been invalidated by a
+     * later configuration change; vault and batch proposals that were approved before
+     * being invalidated stay executable.
+     *
+     * This is a point-in-time answer rather than a guarantee: a configuration change or
+     * a cancellation can make an executable proposal unexecutable. Every reason for a
+     * `false` result collapses into the same value, including a proposal that does not
+     * exist.
+     *
+     * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
+     * @returns {Promise<boolean>} Whether the proposal can be executed.
+     * @throws {Error} If the id is invalid, no address is configured, or the RPC fails.
      */
-    isReadyToExecute(proposalId: number | bigint): Promise<boolean>;
+    isReadyToExecute(proposalId: number | bigint | string): Promise<boolean>;
     /**
      * Returns the signed-message proposals for the given message hashes.
      *
@@ -304,6 +315,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     private _isSignature;
     /** @private */
     private _toProposalIndex;
+    /** @private */
+    private _getTransactionSeeds;
+    /** @private */
+    private _getTransactionPda;
     /** @private */
     private _getProposalPda;
     /** @private */
