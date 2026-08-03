@@ -18,9 +18,12 @@ import { describe, it, expect, jest } from '@jest/globals'
 
 import { getBase58Decoder, getBase58Encoder, getBase64Decoder, getBase64Encoder } from '@solana/codecs'
 
+import { NotImplementedError } from '@tetherto/wdk-wallet'
+
 import {
   WalletAccountReadOnlyMultisigSolanaSquads,
-  SQUADS_PROGRAM_ADDRESS
+  SQUADS_PROGRAM_ADDRESS,
+  NotSupportedError
 } from '@tetherto/wdk-protocol-multisig-squads'
 
 const TEST_RPC_URL = 'https://mock-url.com'
@@ -1676,6 +1679,46 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       }
 
       await expect(account.getBalance()).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
+  describe('unsupported message operations', () => {
+    const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+      provider: TEST_RPC_URL,
+      multisigPda: TEST_MULTISIG_PDA
+    })
+
+    it('throws NotSupportedError from getMessages', async () => {
+      await expect(account.getMessages(['abc'])).rejects.toThrow(NotSupportedError)
+    })
+
+    it('throws NotSupportedError from verify', async () => {
+      await expect(account.verify('hello', 'sig')).rejects.toThrow(NotSupportedError)
+    })
+
+    it('distinguishes not-supported from not-implemented', async () => {
+      // quoteDeploy is pending work; getMessages never will be. A caller doing
+      // capability detection has to be able to tell them apart.
+      await expect(account.getMessages(['abc'])).rejects.toThrow(NotSupportedError)
+      await expect(account.quoteDeploy()).rejects.not.toThrow(NotSupportedError)
+    })
+
+    it('is not a NotImplementedError', async () => {
+      // Deliberate: a consumer catching NotImplementedError to mean "unfinished" must
+      // not also swallow "this protocol cannot do it".
+      const error = await account.getMessages(['abc']).catch((e) => e)
+
+      expect(error).toBeInstanceOf(NotSupportedError)
+      expect(error).not.toBeInstanceOf(NotImplementedError)
+    })
+
+    it('carries the method name and a reason', async () => {
+      const error = await account.getMessages(['abc']).catch((e) => e)
+
+      expect(error.name).toBe('NotSupportedError')
+      expect(error.methodName).toBe('getMessages(messageHashes)')
+      expect(error.reason).toMatch(/no message-signing primitive/)
+      expect(error.message).toContain('is not supported:')
     })
   })
 

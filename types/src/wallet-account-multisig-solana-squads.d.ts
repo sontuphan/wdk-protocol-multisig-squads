@@ -40,15 +40,31 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /**
      * Proposes a message to be signed by the multisig members.
      *
+     * **Not supported, and not pending work.** Squads has no message-signing primitive,
+     * and a multisig cannot produce a signature: its accounts are program-derived
+     * addresses with no private key. Members can approve a message on-chain by wrapping
+     * it in a vault transaction, but that yields proof of approval rather than a
+     * signature — and the resulting proposal is addressed by transaction index, not by
+     * message hash, so {@link approveMessage} could not find it again.
+     *
+     * Use {@link sign} to sign a message with this account's own signer key, which proves
+     * one member's consent rather than the multisig's.
+     *
      * @param {string | Uint8Array} message - The message to propose.
      * @returns {Promise<MessageProposal>} The message proposal.
+     * @throws {NotSupportedError} Always, for the reasons above.
      */
     proposeMessage(message: string | Uint8Array): Promise<MessageProposal>;
     /**
      * Approves a pending message proposal.
      *
+     * **Not supported, and not pending work.** See {@link proposeMessage}: Squads has no
+     * message-signing primitive, and a message hash cannot be resolved to a Squads
+     * account, which are keyed by sequential transaction index.
+     *
      * @param {string} messageHash - The hash of the proposed message.
      * @returns {Promise<MessageProposal>} The updated message proposal.
+     * @throws {NotSupportedError} Always, for the reasons above.
      */
     approveMessage(messageHash: string): Promise<MessageProposal>;
     /**

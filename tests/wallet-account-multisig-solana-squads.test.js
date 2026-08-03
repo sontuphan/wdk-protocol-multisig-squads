@@ -17,7 +17,8 @@
 import { describe, it, expect, beforeEach } from '@jest/globals'
 
 import WalletManagerMultisigSolanaSquads, {
-  WalletAccountReadOnlyMultisigSolanaSquads
+  WalletAccountReadOnlyMultisigSolanaSquads,
+  NotSupportedError
 } from '@tetherto/wdk-protocol-multisig-squads'
 
 const TEST_SEED_PHRASE =
@@ -59,5 +60,23 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     await expect(account.deploy()).rejects.toThrow()
     await expect(account.approveTx(1)).rejects.toThrow()
     await expect(account.executeTx(1)).rejects.toThrow()
+  })
+
+  it('throws NotSupportedError for message proposals', async () => {
+    // Not pending work: Squads cannot produce a multisig signature at all.
+    await expect(account.proposeMessage('hello')).rejects.toThrow(NotSupportedError)
+    await expect(account.approveMessage('abc')).rejects.toThrow(NotSupportedError)
+  })
+
+  it('separates unsupported message proposals from unimplemented writes', async () => {
+    await expect(account.deploy()).rejects.not.toThrow(NotSupportedError)
+  })
+
+  it('still signs with the member key', async () => {
+    // sign() is the one message operation that works — one member's consent.
+    const signature = await account.sign('hello')
+
+    expect(typeof signature).toBe('string')
+    expect(signature.length).toBeGreaterThan(0)
   })
 })

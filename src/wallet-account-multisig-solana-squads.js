@@ -20,6 +20,8 @@ import { WalletAccountSolana } from '@tetherto/wdk-wallet-solana'
 
 import WalletAccountReadOnlyMultisigSolanaSquads from './wallet-account-read-only-multisig-solana-squads.js'
 
+import { NotSupportedError } from './errors.js'
+
 /** @typedef {import('@tetherto/wdk-wallet').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet').MultisigResult} MultisigResult */
 /** @typedef {import('@tetherto/wdk-wallet').MultisigTransactionResult} MultisigTransactionResult */
@@ -82,21 +84,43 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /**
    * Proposes a message to be signed by the multisig members.
    *
+   * **Not supported, and not pending work.** Squads has no message-signing primitive,
+   * and a multisig cannot produce a signature: its accounts are program-derived
+   * addresses with no private key. Members can approve a message on-chain by wrapping
+   * it in a vault transaction, but that yields proof of approval rather than a
+   * signature — and the resulting proposal is addressed by transaction index, not by
+   * message hash, so {@link approveMessage} could not find it again.
+   *
+   * Use {@link sign} to sign a message with this account's own signer key, which proves
+   * one member's consent rather than the multisig's.
+   *
    * @param {string | Uint8Array} message - The message to propose.
    * @returns {Promise<MessageProposal>} The message proposal.
+   * @throws {NotSupportedError} Always, for the reasons above.
    */
   async proposeMessage (message) {
-    throw new NotImplementedError('proposeMessage(message)')
+    throw new NotSupportedError(
+      'proposeMessage(message)',
+      'Squads has no message-signing primitive, and a multisig cannot produce a signature because its accounts are program-derived addresses with no private key. Use sign(message) to sign with this account\'s own signer key instead.'
+    )
   }
 
   /**
    * Approves a pending message proposal.
    *
+   * **Not supported, and not pending work.** See {@link proposeMessage}: Squads has no
+   * message-signing primitive, and a message hash cannot be resolved to a Squads
+   * account, which are keyed by sequential transaction index.
+   *
    * @param {string} messageHash - The hash of the proposed message.
    * @returns {Promise<MessageProposal>} The updated message proposal.
+   * @throws {NotSupportedError} Always, for the reasons above.
    */
   async approveMessage (messageHash) {
-    throw new NotImplementedError('approveMessage(messageHash)')
+    throw new NotSupportedError(
+      'approveMessage(messageHash)',
+      'Squads has no message-signing primitive, and a message hash cannot be resolved to a Squads account, which are keyed by sequential transaction index'
+    )
   }
 
   /**

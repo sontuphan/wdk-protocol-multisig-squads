@@ -233,9 +233,17 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Verifies that a signature over a message is valid for this account.
      *
+     * **Not supported, and not pending work.** This account's address is a
+     * program-derived address with no private key, so no signature can be attributed to
+     * it and there is nothing to verify against. Solana has no equivalent of EIP-1271,
+     * which is what lets a keyless smart-contract wallet answer this question on other
+     * chains. To check an individual member's signature, verify it against that member's
+     * own address instead.
+     *
      * @param {string | Uint8Array} message - The signed message.
      * @param {string | Uint8Array} signature - The signature to verify.
      * @returns {Promise<boolean>} Whether the signature is valid.
+     * @throws {NotSupportedError} Always, for the reasons above.
      */
     verify(message: string | Uint8Array, signature: string | Uint8Array): Promise<boolean>;
     /**
@@ -275,10 +283,19 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Returns the signed-message proposals for the given message hashes.
      *
+     * **Not supported, and not pending work.** Squads has no message-signing primitive,
+     * and a multisig cannot produce a signature at all: its accounts are program-derived
+     * addresses, which hold no private key. A message's *approval* can be recorded
+     * on-chain by wrapping it in a vault transaction, but the result is proof of approval
+     * rather than a signature, and Squads keys its accounts by sequential transaction
+     * index rather than by message hash, so a hash cannot be resolved to an account.
+     *
      * @param {string[]} messageHashes - The message hashes.
-     * @returns {Promise<MessageInfo[]>} The message proposals.
+     * @returns {Promise<Array<MessageInfo | null>>} For each hash, the message proposal,
+     *   or null if it has not been found.
+     * @throws {NotSupportedError} Always, for the reasons above.
      */
-    getMessages(messageHashes: string[]): Promise<MessageInfo[]>;
+    getMessages(messageHashes: string[]): Promise<Array<MessageInfo | null>>;
     /**
      * Quotes the cost of deploying (creating) the multisig.
      *
