@@ -73,6 +73,37 @@ export const SQUADS_PROGRAM_ADDRESS = 'SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52p
 const MULTISIG_DISCRIMINATOR = Uint8Array.from([224, 116, 121, 186, 68, 161, 79, 236])
 
 /**
+ * The offset of the `threshold` field within a `Multisig` account's data. It
+ * precedes the optional `rentCollector`, so the offset is fixed.
+ * See `docs/getThreshold.md`.
+ *
+ * @type {number}
+ */
+const MULTISIG_THRESHOLD_OFFSET = 72
+
+/**
+ * The serialized size of a `Multisig` account's `threshold` field.
+ *
+ * @type {number}
+ */
+const THRESHOLD_SIZE = 2
+
+/**
+ * The offset of the `transactionIndex` field within a `Multisig` account's data.
+ * It precedes the optional `rentCollector`, so the offset is fixed.
+ *
+ * @type {number}
+ */
+const MULTISIG_TRANSACTION_INDEX_OFFSET = 78
+
+/**
+ * The serialized size of a `Multisig` account's `transactionIndex` field.
+ *
+ * @type {number}
+ */
+const TRANSACTION_INDEX_SIZE = 8
+
+/**
  * The offset of the optional `rentCollector` field within a `Multisig` account's
  * data. See `docs/getOwners.md` for the full layout.
  *
@@ -377,12 +408,41 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the approval threshold of the multisig.
+   * Returns the number of approvals a proposal needs before it can be executed.
+   *
+   * Note that only members holding the voter permission can approve, so this is
+   * **not** a fraction of {@link getOwners}'s length: a multisig can hold members
+   * that are unable to vote.
    *
    * @returns {Promise<number>} The threshold.
+   * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
    */
   async getThreshold () {
-    throw new NotImplementedError('getThreshold()')
+    const multisigPda = await this.getAddress()
+
+    const { value } = await this._rpc
+      .getAccountInfo(address(multisigPda), {
+        commitment: this._commitment,
+        encoding: 'base64',
+        dataSlice: { offset: 0, length: MULTISIG_THRESHOLD_OFFSET + THRESHOLD_SIZE }
+      })
+      .send()
+
+    if (!value) {
+      throw new Error(
+        `The multisig account ${multisigPda} does not exist. Deploy it before reading its threshold.`
+      )
+    }
+
+    const data = getBase64Encoder().encode(value.data[0])
+
+    if (value.owner !== this._programId || !this._hasMultisigDiscriminator(data)) {
+      throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
+    }
+
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+
+    return view.getUint16(MULTISIG_THRESHOLD_OFFSET, true)
   }
 
   /**
@@ -397,10 +457,42 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   /**
    * Returns the current transaction index (nonce) of the multisig.
    *
+   * This is the index of the **most recently created** transaction, or `0n` when
+   * none has been created yet. A new proposal takes the next index, so callers
+   * creating one want `await getNonce() + 1n` rather than this value.
+   *
    * @returns {Promise<bigint>} The transaction index.
+   * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
    */
   async getNonce () {
-    throw new NotImplementedError('getNonce()')
+    const multisigPda = await this.getAddress()
+
+    const { value } = await this._rpc
+      .getAccountInfo(address(multisigPda), {
+        commitment: this._commitment,
+        encoding: 'base64',
+        dataSlice: {
+          offset: 0,
+          length: MULTISIG_TRANSACTION_INDEX_OFFSET + TRANSACTION_INDEX_SIZE
+        }
+      })
+      .send()
+
+    if (!value) {
+      throw new Error(
+        `The multisig account ${multisigPda} does not exist. Deploy it before reading its transaction index.`
+      )
+    }
+
+    const data = getBase64Encoder().encode(value.data[0])
+
+    if (value.owner !== this._programId || !this._hasMultisigDiscriminator(data)) {
+      throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
+    }
+
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+
+    return view.getBigUint64(MULTISIG_TRANSACTION_INDEX_OFFSET, true)
   }
 
   /**

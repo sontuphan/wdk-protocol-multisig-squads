@@ -145,9 +145,14 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     getOwners(): Promise<string[]>;
     /**
-     * Returns the approval threshold of the multisig.
+     * Returns the number of approvals a proposal needs before it can be executed.
+     *
+     * Note that only members holding the voter permission can approve, so this is
+     * **not** a fraction of {@link getOwners}'s length: a multisig can hold members
+     * that are unable to vote.
      *
      * @returns {Promise<number>} The threshold.
+     * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
      */
     getThreshold(): Promise<number>;
     /**
@@ -159,7 +164,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Returns the current transaction index (nonce) of the multisig.
      *
+     * This is the index of the **most recently created** transaction, or `0n` when
+     * none has been created yet. A new proposal takes the next index, so callers
+     * creating one want `await getNonce() + 1n` rather than this value.
+     *
      * @returns {Promise<bigint>} The transaction index.
+     * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
      */
     getNonce(): Promise<bigint>;
     /**
