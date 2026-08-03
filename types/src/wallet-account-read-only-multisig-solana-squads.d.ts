@@ -182,12 +182,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     getNonce(): Promise<bigint>;
     /**
-     * Returns the on-chain version of the multisig program account.
-     *
-     * @returns {Promise<string>} The version.
-     */
-    getVersion(): Promise<string>;
-    /**
      * Returns the receipt of a confirmed transaction.
      *
      * @param {string} hash - The transaction signature.

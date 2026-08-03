@@ -490,15 +490,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the on-chain version of the multisig program account.
-   *
-   * @returns {Promise<string>} The version.
-   */
-  async getVersion () {
-    throw new NotImplementedError('getVersion()')
-  }
-
-  /**
    * Returns the native SOL balance of the multisig vault.
    *
    * @returns {Promise<bigint>} The balance in lamports.
