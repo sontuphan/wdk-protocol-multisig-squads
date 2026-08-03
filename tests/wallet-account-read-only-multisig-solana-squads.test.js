@@ -310,13 +310,14 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       expect(owners).not.toEqual([...owners].sort())
     })
 
-    it('fetches the whole account rather than a slice', async () => {
+    it('delegates to getMultisigInfo with a single account read', async () => {
       const { account, getAccountInfo } = mockAccount(multisigAccountValue({
         members: [{ address: MEMBER_A }]
       }))
 
       await account.getOwners()
 
+      expect(getAccountInfo).toHaveBeenCalledTimes(1)
       expect(getAccountInfo).toHaveBeenCalledWith(
         TEST_MULTISIG_PDA,
         expect.not.objectContaining({ dataSlice: expect.anything() })
@@ -352,6 +353,121 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       const account = mockFailingAccount(new Error('503 Service Unavailable'))
 
       await expect(account.getOwners()).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
+  describe('getMultisigInfo', () => {
+    it('returns address, owners, threshold and isCreated from one read', async () => {
+      const { account, getAccountInfo } = mockAccount(multisigAccountValue({
+        members: [{ address: MEMBER_A }, { address: MEMBER_B }],
+        threshold: 2
+      }))
+
+      expect(await account.getMultisigInfo()).toEqual({
+        address: TEST_MULTISIG_PDA,
+        owners: [MEMBER_A, MEMBER_B],
+        threshold: 2,
+        isCreated: true
+      })
+      expect(getAccountInfo).toHaveBeenCalledTimes(1)
+    })
+
+    it('decodes correctly when rentCollector is set', async () => {
+      const { account } = mockAccount(multisigAccountValue({
+        members: [{ address: MEMBER_A }, { address: MEMBER_B }],
+        threshold: 2,
+        rentCollector: true
+      }))
+
+      expect(await account.getMultisigInfo()).toEqual({
+        address: TEST_MULTISIG_PDA,
+        owners: [MEMBER_A, MEMBER_B],
+        threshold: 2,
+        isCreated: true
+      })
+    })
+
+    it('includes members that cannot vote', async () => {
+      const { account } = mockAccount(multisigAccountValue({
+        members: [
+          { address: MEMBER_A, mask: 6 },
+          { address: MEMBER_B, mask: 5 }
+        ],
+        threshold: 1
+      }))
+
+      const { owners, threshold } = await account.getMultisigInfo()
+
+      expect(owners).toEqual([MEMBER_A, MEMBER_B])
+      // 2 owners but only 1 voter, so this is a 1-of-1 despite owners.length === 2.
+      expect(threshold).toBe(1)
+    })
+
+    it('ignores pre-allocated slack', async () => {
+      const { account } = mockAccount(multisigAccountValue({
+        members: [{ address: MEMBER_A }],
+        slack: 9 * 33
+      }))
+
+      expect((await account.getMultisigInfo()).owners).toEqual([MEMBER_A])
+    })
+
+    it('reports isCreated false without throwing when the account is missing', async () => {
+      const { account } = mockAccount(null)
+
+      expect(await account.getMultisigInfo()).toEqual({
+        address: TEST_MULTISIG_PDA,
+        owners: [],
+        threshold: 0,
+        isCreated: false
+      })
+    })
+
+    it('sets isCreated explicitly rather than leaving it undefined', async () => {
+      // `undefined` is falsy, so an omitted flag would make a real multisig read
+      // as absent to `if (!info.isCreated)`.
+      const { account: missing } = mockAccount(null)
+      const { account: present } = mockAccount(multisigAccountValue({
+        members: [{ address: MEMBER_A }]
+      }))
+
+      expect(Object.keys(await missing.getMultisigInfo())).toContain('isCreated')
+      expect((await missing.getMultisigInfo()).isCreated).toBe(false)
+      expect((await present.getMultisigInfo()).isCreated).toBe(true)
+    })
+
+    it('throws rather than reporting isCreated false for another account type', async () => {
+      // isCreated false invites a caller to deploy; the address is already taken.
+      const { account } = mockAccount(multisigAccountValue({
+        members: [{ address: MEMBER_A }],
+        discriminator: PROGRAM_CONFIG_DISCRIMINATOR
+      }))
+
+      await expect(account.getMultisigInfo()).rejects.toThrow(/not a Squads multisig/)
+    })
+
+    it('throws when the account is owned by another program', async () => {
+      const { account } = mockAccount({
+        ...multisigAccountValue({ members: [{ address: MEMBER_A }] }),
+        owner: SYSTEM_PROGRAM_ADDRESS
+      })
+
+      await expect(account.getMultisigInfo()).rejects.toThrow(/not a Squads multisig/)
+    })
+
+    it('propagates RPC failures', async () => {
+      const account = mockFailingAccount(new Error('503 Service Unavailable'))
+
+      await expect(account.getMultisigInfo()).rejects.toThrow('503 Service Unavailable')
+    })
+
+    it('reports the derived address when only a createKey is configured', async () => {
+      const { account } = mockAccount(
+        multisigAccountValue({ members: [{ address: MEMBER_A }] }),
+        { createKey: TEST_CREATE_KEY }
+      )
+
+      expect((await account.getMultisigInfo()).address).toBe(TEST_DERIVED_PDA)
     })
   })
 
@@ -411,7 +527,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       expect(await account.getThreshold()).toBe(1)
     })
 
-    it('reads only the bytes up to the threshold field', async () => {
+    it('delegates to getMultisigInfo with a single account read', async () => {
       const { account, getAccountInfo } = mockAccount(multisigAccountValue({
         members: [{ address: MEMBER_A }],
         threshold: 1
@@ -419,33 +535,11 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
 
       await account.getThreshold()
 
+      expect(getAccountInfo).toHaveBeenCalledTimes(1)
       expect(getAccountInfo).toHaveBeenCalledWith(
         TEST_MULTISIG_PDA,
-        expect.objectContaining({ dataSlice: { offset: 0, length: 74 } })
+        expect.not.objectContaining({ dataSlice: expect.anything() })
       )
-    })
-
-    it('decodes a response truncated to the requested 74 bytes', async () => {
-      // A real RPC honours dataSlice, so `threshold` lands in the last two bytes
-      // of the payload. The mock returns whole accounts, so without this the
-      // boundary is never exercised.
-      const full = encodeMultisigAccount({
-        members: [{ address: MEMBER_A }],
-        threshold: 300
-      })
-      const truncated = getBase64Decoder().decode(
-        getBase64Encoder().encode(full).subarray(0, 74)
-      )
-
-      const { account } = mockAccount({
-        owner: SQUADS_PROGRAM_ADDRESS,
-        data: [truncated, 'base64'],
-        executable: false,
-        lamports: 2039280n,
-        space: 165n
-      })
-
-      expect(await account.getThreshold()).toBe(300)
     })
 
     it('throws when the multisig does not exist', async () => {

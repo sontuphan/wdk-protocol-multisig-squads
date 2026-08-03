@@ -82,13 +82,6 @@ const MULTISIG_DISCRIMINATOR = Uint8Array.from([224, 116, 121, 186, 68, 161, 79,
 const MULTISIG_THRESHOLD_OFFSET = 72
 
 /**
- * The serialized size of a `Multisig` account's `threshold` field.
- *
- * @type {number}
- */
-const THRESHOLD_SIZE = 2
-
-/**
  * The offset of the `transactionIndex` field within a `Multisig` account's data.
  * It precedes the optional `rentCollector`, so the offset is fixed.
  *
@@ -363,6 +356,54 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
    */
   async getOwners () {
+    const { address: multisigPda, owners, isCreated } = await this.getMultisigInfo()
+
+    if (!isCreated) {
+      throw new Error(
+        `The multisig account ${multisigPda} does not exist. Deploy it before reading its members.`
+      )
+    }
+
+    return owners
+  }
+
+  /**
+   * Returns the number of approvals a proposal needs before it can be executed.
+   *
+   * Note that only members holding the voter permission can approve, so this is
+   * **not** a fraction of {@link getOwners}'s length: a multisig can hold members
+   * that are unable to vote.
+   *
+   * @returns {Promise<number>} The threshold.
+   * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
+   */
+  async getThreshold () {
+    const { address: multisigPda, threshold, isCreated } = await this.getMultisigInfo()
+
+    if (!isCreated) {
+      throw new Error(
+        `The multisig account ${multisigPda} does not exist. Deploy it before reading its threshold.`
+      )
+    }
+
+    return threshold
+  }
+
+  /**
+   * Returns aggregated information about the multisig.
+   *
+   * This is the single account read the other accessors are derived from:
+   * {@link getOwners} and {@link getThreshold} both delegate here, so every field
+   * they return comes from one consistent snapshot.
+   *
+   * When `isCreated` is `false` the multisig does not exist on chain yet, and
+   * `owners` and `threshold` are placeholders that must not be read — they are `[]`
+   * and `0` regardless of what a future multisig at this address would hold.
+   *
+   * @returns {Promise<MultisigInfo>} The multisig info.
+   * @throws {Error} If the address holds a non-Squads account, or if the RPC request fails.
+   */
+  async getMultisigInfo () {
     const multisigPda = await this.getAddress()
 
     const { value } = await this._rpc
@@ -373,9 +414,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       .send()
 
     if (!value) {
-      throw new Error(
-        `The multisig account ${multisigPda} does not exist. Deploy it before reading its members.`
-      )
+      return { address: multisigPda, owners: [], threshold: 0, isCreated: false }
     }
 
     const data = getBase64Encoder().encode(value.data[0])
@@ -386,6 +425,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
     const addressDecoder = getBase58Decoder()
+
+    const threshold = view.getUint16(MULTISIG_THRESHOLD_OFFSET, true)
 
     let offset = MULTISIG_RENT_COLLECTOR_OFFSET + OPTION_TAG_SIZE
     if (data[MULTISIG_RENT_COLLECTOR_OFFSET] === 1) {
@@ -404,54 +445,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       offset += MEMBER_SIZE
     }
 
-    return owners
-  }
-
-  /**
-   * Returns the number of approvals a proposal needs before it can be executed.
-   *
-   * Note that only members holding the voter permission can approve, so this is
-   * **not** a fraction of {@link getOwners}'s length: a multisig can hold members
-   * that are unable to vote.
-   *
-   * @returns {Promise<number>} The threshold.
-   * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
-   */
-  async getThreshold () {
-    const multisigPda = await this.getAddress()
-
-    const { value } = await this._rpc
-      .getAccountInfo(address(multisigPda), {
-        commitment: this._commitment,
-        encoding: 'base64',
-        dataSlice: { offset: 0, length: MULTISIG_THRESHOLD_OFFSET + THRESHOLD_SIZE }
-      })
-      .send()
-
-    if (!value) {
-      throw new Error(
-        `The multisig account ${multisigPda} does not exist. Deploy it before reading its threshold.`
-      )
-    }
-
-    const data = getBase64Encoder().encode(value.data[0])
-
-    if (value.owner !== this._programId || !this._hasMultisigDiscriminator(data)) {
-      throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
-    }
-
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-
-    return view.getUint16(MULTISIG_THRESHOLD_OFFSET, true)
-  }
-
-  /**
-   * Returns aggregated information about the multisig.
-   *
-   * @returns {Promise<MultisigInfo>} The multisig info.
-   */
-  async getMultisigInfo () {
-    throw new NotImplementedError('getMultisigInfo()')
+    return { address: multisigPda, owners, threshold, isCreated: true }
   }
 
   /**

@@ -158,7 +158,16 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Returns aggregated information about the multisig.
      *
+     * This is the single account read the other accessors are derived from:
+     * {@link getOwners} and {@link getThreshold} both delegate here, so every field
+     * they return comes from one consistent snapshot.
+     *
+     * When `isCreated` is `false` the multisig does not exist on chain yet, and
+     * `owners` and `threshold` are placeholders that must not be read — they are `[]`
+     * and `0` regardless of what a future multisig at this address would hold.
+     *
      * @returns {Promise<MultisigInfo>} The multisig info.
+     * @throws {Error} If the address holds a non-Squads account, or if the RPC request fails.
      */
     getMultisigInfo(): Promise<MultisigInfo>;
     /**
