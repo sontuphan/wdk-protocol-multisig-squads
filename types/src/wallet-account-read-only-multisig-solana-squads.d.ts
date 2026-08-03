@@ -344,9 +344,24 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Quotes the cost of a transfer.
      *
+     * This is what the **proposer** is debited: rent for the transaction and proposal
+     * accounts Squads creates, plus the base fee for the single signature that creates
+     * them. Approvals and execution are paid by the members who submit them, and priority
+     * fees are excluded.
+     *
+     * One cost is deliberately **not** included. When the recipient holds no account for
+     * the token yet, one is created during execution and paid for by the **vault**, not by
+     * the proposer. That rent leaves the treasury, is not refundable to the multisig, and a
+     * vault without enough SOL to cover it will fail execution after the proposal has
+     * already been created and approved.
+     *
      * @param {import('@tetherto/wdk-wallet').TransferOptions} transferOptions - The transfer options.
-     * @param {SolanaMultisigSquadsConfig} [config] - An optional config override.
-     * @returns {Promise<{ fee: bigint }>} The transfer quote.
+     * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged
+     *   over this account's configuration.
+     * @returns {Promise<{ fee: bigint }>} The transfer quote, in lamports.
+     * @throws {Error} If the mint or recipient is malformed, the multisig does not exist,
+     *   or the RPC request fails.
+     * @todo Support Token-2022 (Token Extensions Program).
      */
     quoteTransfer(transferOptions: import("@tetherto/wdk-wallet").TransferOptions, config?: SolanaMultisigSquadsConfig): Promise<{
         fee: bigint;
@@ -363,6 +378,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     private _withConfig;
     /** @private */
     private _vaultTransactionMessageSize;
+    /** @private */
+    private _splTransferMessageSize;
     /** @private */
     private _getTransactionSeeds;
     /** @private */

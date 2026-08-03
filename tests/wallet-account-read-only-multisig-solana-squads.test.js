@@ -1941,6 +1941,141 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
   })
 
+  describe('quoteTransfer', () => {
+    const OPTIONS = { token: USDC_MINT, recipient: MEMBER_C, amount: 1000000n }
+
+    /**
+     * Builds an account serving a multisig, an ATA lookup and real rent minimums.
+     *
+     * @param {Object} [options] - The scenario.
+     * @param {number} [options.memberCount=2] - How many members the multisig holds.
+     * @param {boolean} [options.recipientAtaExists=true] - Whether the recipient holds the token.
+     * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getAccountInfo: Function, getMinimumBalanceForRentExemption: Function }}
+     */
+    function mockTransferQuote ({ memberCount = 2, recipientAtaExists = true } = {}) {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        commitment: 'confirmed',
+        multisigPda: TEST_MULTISIG_PDA
+      })
+
+      const members = [MEMBER_A, MEMBER_B, MEMBER_C]
+        .slice(0, memberCount)
+        .map((address) => ({ address }))
+
+      const getAccountInfo = jest.fn((queried) => ({
+        send: async () => {
+          if (queried === TEST_MULTISIG_PDA) {
+            return { value: multisigAccountValue({ members, threshold: 1 }) }
+          }
+
+          // Anything else is the recipient's associated token account. Only its
+          // existence matters here, not its contents.
+          return {
+            value: recipientAtaExists
+              ? { owner: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', data: ['', 'base64'], space: 165n, lamports: 2039280n, executable: false }
+              : null
+          }
+        }
+      }))
+      const getMinimumBalanceForRentExemption = jest.fn((size) => ({
+        send: async () => (128n + size) * 6960n
+      }))
+
+      account._rpc = { getAccountInfo, getMinimumBalanceForRentExemption }
+
+      return { account, getAccountInfo, getMinimumBalanceForRentExemption }
+    }
+
+    it('quotes a transfer to a recipient that already holds the token', async () => {
+      const { account } = mockTransferQuote({ memberCount: 2 })
+
+      // 251 B tx rent + 262 B proposal rent + 5000
+      expect(await account.quoteTransfer(OPTIONS)).toEqual({ fee: 5357240n })
+    })
+
+    it('quotes more when the recipient token account must be created', async () => {
+      const { account } = mockTransferQuote({ memberCount: 2, recipientAtaExists: false })
+
+      // 395 B tx rent instead of 251 B
+      expect(await account.quoteTransfer(OPTIONS)).toEqual({ fee: 6359480n })
+    })
+
+    it('sizes the transaction account from the branch it observed', async () => {
+      const { account: withAta, getMinimumBalanceForRentExemption: a } = mockTransferQuote()
+      const { account: without, getMinimumBalanceForRentExemption: b } = mockTransferQuote({
+        recipientAtaExists: false
+      })
+
+      await withAta.quoteTransfer(OPTIONS)
+      await without.quoteTransfer(OPTIONS)
+
+      // 83 + 4 + 164, versus 83 + 4 + 308
+      expect(a).toHaveBeenCalledWith(251n)
+      expect(b).toHaveBeenCalledWith(395n)
+    })
+
+    it('scales with the member count', async () => {
+      const { account: two } = mockTransferQuote({ memberCount: 2 })
+      const { account: three } = mockTransferQuote({ memberCount: 3 })
+
+      const diff = (await three.quoteTransfer(OPTIONS)).fee - (await two.quoteTransfer(OPTIONS)).fee
+
+      expect(diff).toBe(96n * 6960n)
+    })
+
+    it('queries the recipient token account, not the recipient address', async () => {
+      const { account, getAccountInfo } = mockTransferQuote()
+
+      await account.quoteTransfer(OPTIONS)
+
+      const queried = getAccountInfo.mock.calls.map(([addr]) => addr)
+
+      expect(queried).toContain(TEST_MULTISIG_PDA)
+      expect(queried).not.toContain(MEMBER_C)
+      expect(queried).toHaveLength(2)
+    })
+
+    it('charges one signature, not two', async () => {
+      const { account } = mockTransferQuote({ memberCount: 2 })
+
+      const { fee } = await account.quoteTransfer(OPTIONS)
+      const rent = (128n + 251n) * 6960n + (128n + 262n) * 6960n
+
+      expect(fee - rent).toBe(5000n)
+    })
+
+    it('throws on a malformed mint or recipient before any RPC call', async () => {
+      const { account, getAccountInfo } = mockTransferQuote()
+
+      await expect(account.quoteTransfer({ ...OPTIONS, token: 'nope' })).rejects.toThrow()
+      await expect(account.quoteTransfer({ ...OPTIONS, recipient: 'nope' })).rejects.toThrow()
+      expect(getAccountInfo).not.toHaveBeenCalled()
+    })
+
+    it('throws when the multisig does not exist', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
+      account._rpc = {
+        getAccountInfo: () => ({ send: async () => ({ value: null }) }),
+        getMinimumBalanceForRentExemption: () => ({ send: async () => 0n })
+      }
+
+      await expect(account.quoteTransfer(OPTIONS)).rejects.toThrow(/does not exist/)
+    })
+
+    it('propagates RPC failures', async () => {
+      const { account } = mockTransferQuote()
+      account._rpc.getMinimumBalanceForRentExemption = () => ({
+        send: async () => { throw new Error('503 Service Unavailable') }
+      })
+
+      await expect(account.quoteTransfer(OPTIONS)).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
   describe('unsupported message operations', () => {
     const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
       provider: TEST_RPC_URL,

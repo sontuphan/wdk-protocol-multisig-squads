@@ -14,7 +14,7 @@
 
 'use strict'
 
-import { WalletAccountReadOnly, NotImplementedError } from '@tetherto/wdk-wallet'
+import { WalletAccountReadOnly } from '@tetherto/wdk-wallet'
 
 import FailoverProvider from '@tetherto/wdk-failover-provider'
 
@@ -105,6 +105,9 @@ const PROGRAM_ID_INDEX_SIZE = 1
 const SYSTEM_TRANSFER_DATA_SIZE = 12
 const SYSTEM_TRANSFER_ACCOUNT_INDEX_COUNT = 2
 const SOL_TRANSFER_ACCOUNT_KEY_COUNT = 3
+
+const SPL_TRANSFER_MESSAGE_SIZE = 164
+const SPL_TRANSFER_WITH_ATA_MESSAGE_SIZE = 308
 
 const SIGNATURE_BASE_FEE = 5000n
 const MULTISIG_CREATE_SIGNATURE_COUNT = 2n
@@ -843,12 +846,48 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   /**
    * Quotes the cost of a transfer.
    *
+   * This is what the **proposer** is debited: rent for the transaction and proposal
+   * accounts Squads creates, plus the base fee for the single signature that creates
+   * them. Approvals and execution are paid by the members who submit them, and priority
+   * fees are excluded.
+   *
+   * One cost is deliberately **not** included. When the recipient holds no account for
+   * the token yet, one is created during execution and paid for by the **vault**, not by
+   * the proposer. That rent leaves the treasury, is not refundable to the multisig, and a
+   * vault without enough SOL to cover it will fail execution after the proposal has
+   * already been created and approved.
+   *
    * @param {import('@tetherto/wdk-wallet').TransferOptions} transferOptions - The transfer options.
-   * @param {SolanaMultisigSquadsConfig} [config] - An optional config override.
-   * @returns {Promise<{ fee: bigint }>} The transfer quote.
+   * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged
+   *   over this account's configuration.
+   * @returns {Promise<{ fee: bigint }>} The transfer quote, in lamports.
+   * @throws {Error} If the mint or recipient is malformed, the multisig does not exist,
+   *   or the RPC request fails.
+   * @todo Support Token-2022 (Token Extensions Program).
    */
   async quoteTransfer (transferOptions, config) {
-    throw new NotImplementedError('quoteTransfer(transferOptions, config)')
+    const mint = address(transferOptions.token)
+    const recipient = address(transferOptions.recipient)
+
+    const account = this._withConfig(config)
+    const { address: multisigPda, owners, isCreated } = await account.getMultisigInfo()
+
+    if (!isCreated) {
+      throw new Error(
+        `The multisig account ${multisigPda} does not exist. Deploy it before quoting transfers.`
+      )
+    }
+
+    const messageSize = await account._splTransferMessageSize(mint, recipient)
+    const transactionSize = VAULT_TRANSACTION_BASE_SIZE + VEC_PREFIX_SIZE + messageSize
+    const proposalSize = PROPOSAL_BASE_SIZE + PROPOSAL_MEMBER_SIZE * owners.length
+
+    const [transactionRent, proposalRent] = await Promise.all([
+      account._rpc.getMinimumBalanceForRentExemption(BigInt(transactionSize)).send(),
+      account._rpc.getMinimumBalanceForRentExemption(BigInt(proposalSize)).send()
+    ])
+
+    return { fee: transactionRent + proposalRent + SIGNATURE_BASE_FEE }
   }
 
   /** @private */
@@ -934,6 +973,24 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       (VEC_PREFIX_SIZE + instructionSize) +
       VEC_PREFIX_SIZE
     )
+  }
+
+  /** @private */
+  async _splTransferMessageSize (mint, recipient) {
+    const [recipientAta] = await findAssociatedTokenPda({
+      mint,
+      owner: recipient,
+      tokenProgram: TOKEN_PROGRAM_ADDRESS
+    })
+
+    const { value } = await this._rpc
+      .getAccountInfo(recipientAta, {
+        commitment: this._commitment,
+        encoding: 'base64'
+      })
+      .send()
+
+    return value ? SPL_TRANSFER_MESSAGE_SIZE : SPL_TRANSFER_WITH_ATA_MESSAGE_SIZE
   }
 
   /** @private */
