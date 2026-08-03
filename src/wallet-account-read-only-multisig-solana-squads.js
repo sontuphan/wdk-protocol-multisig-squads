@@ -67,6 +67,7 @@ export const SQUADS_PROGRAM_ADDRESS = 'SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52p
 const MULTISIG_DISCRIMINATOR = Uint8Array.from([224, 116, 121, 186, 68, 161, 79, 236])
 const PROPOSAL_DISCRIMINATOR = Uint8Array.from([26, 94, 189, 187, 116, 136, 53, 33])
 const CONFIG_TRANSACTION_DISCRIMINATOR = Uint8Array.from([94, 8, 4, 35, 113, 139, 139, 112])
+const PROGRAM_CONFIG_DISCRIMINATOR = Uint8Array.from([196, 210, 90, 231, 144, 149, 140, 63])
 
 const CLOCK_SYSVAR_ADDRESS = 'SysvarC1ock11111111111111111111111111111111'
 const CLOCK_UNIX_TIMESTAMP_OFFSET = 32
@@ -76,6 +77,8 @@ const MULTISIG_TIME_LOCK_OFFSET = 74
 const MULTISIG_TRANSACTION_INDEX_OFFSET = 78
 const MULTISIG_STALE_TRANSACTION_INDEX_OFFSET = 86
 const MULTISIG_RENT_COLLECTOR_OFFSET = 94
+
+const PROGRAM_CONFIG_CREATION_FEE_OFFSET = 40
 
 const PROPOSAL_STATUS_OFFSET = 48
 const PROPOSAL_STATUS_TIMESTAMP_OFFSET = 49
@@ -91,12 +94,19 @@ const MEMBER_SIZE = ADDRESS_SIZE + 1
 const TRANSACTION_INDEX_SIZE = 8
 const TIMESTAMP_SIZE = 8
 const SIGNATURE_SIZE = 64
+const MULTISIG_BASE_SIZE = 132
+
+const SIGNATURE_BASE_FEE = 5000n
+const MULTISIG_CREATE_SIGNATURE_COUNT = 2n
+const DEFAULT_MEMBER_COUNT = 1
+const MAX_MEMBER_COUNT = 65535
 
 const SEED_PREFIX = 'multisig'
 const SEED_MULTISIG = 'multisig'
 const SEED_VAULT = 'vault'
 const SEED_TRANSACTION = 'transaction'
 const SEED_PROPOSAL = 'proposal'
+const SEED_PROGRAM_CONFIG = 'program_config'
 
 const DEFAULT_VAULT_INDEX = 0
 const MAX_VAULT_INDEX = 255
@@ -722,10 +732,60 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   /**
    * Quotes the cost of deploying (creating) the multisig.
    *
-   * @returns {Promise<{ fee: bigint }>} The deploy quote.
+   * The quote covers what the creator's account is debited: rent for the multisig
+   * account, the protocol's creation fee, and the base fee for the two signatures the
+   * creation transaction carries. It excludes priority fees, which the sender chooses,
+   * and excludes funding a vault, which is a separate step.
+   *
+   * Rent scales with the number of members, which the multisig does not have until it
+   * is created, so `memberCount` defaults to a single member. Pass the intended count
+   * to quote a larger multisig.
+   *
+   * Note that this rent is **not** refundable: Squads has no instruction to close a
+   * multisig account, unlike the accounts backing proposals and transactions.
+   *
+   * @param {number} [memberCount=1] - The number of members the multisig will hold.
+   * @returns {Promise<{ fee: bigint }>} The deploy quote, in lamports.
+   * @throws {Error} If `memberCount` is out of range, or if the RPC request fails.
    */
-  async quoteDeploy () {
-    throw new NotImplementedError('quoteDeploy()')
+  async quoteDeploy (memberCount = DEFAULT_MEMBER_COUNT) {
+    if (!Number.isInteger(memberCount) || memberCount < 1 || memberCount > MAX_MEMBER_COUNT) {
+      throw new Error(
+        `Invalid member count ${memberCount}. It must be an integer between 1 and ${MAX_MEMBER_COUNT}.`
+      )
+    }
+
+    const [programConfigPda] = await getProgramDerivedAddress({
+      programAddress: this._programId,
+      seeds: [SEED_PREFIX, SEED_PROGRAM_CONFIG]
+    })
+
+    const [{ value }, rent] = await Promise.all([
+      this._rpc
+        .getAccountInfo(programConfigPda, {
+          commitment: this._commitment,
+          encoding: 'base64'
+        })
+        .send(),
+      this._rpc
+        .getMinimumBalanceForRentExemption(BigInt(MULTISIG_BASE_SIZE + MEMBER_SIZE * memberCount))
+        .send()
+    ])
+
+    const data = value && getBase64Encoder().encode(value.data[0])
+
+    if (!data || !this._hasDiscriminator(data, PROGRAM_CONFIG_DISCRIMINATOR)) {
+      throw new Error(
+        `The Squads program config account ${programConfigPda} could not be read.`
+      )
+    }
+
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    const creationFee = view.getBigUint64(PROGRAM_CONFIG_CREATION_FEE_OFFSET, true)
+
+    return {
+      fee: rent + creationFee + SIGNATURE_BASE_FEE * MULTISIG_CREATE_SIGNATURE_COUNT
+    }
   }
 
   /**

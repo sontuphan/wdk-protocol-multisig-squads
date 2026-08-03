@@ -426,6 +426,52 @@ function mockExecutable ({
 }
 
 /**
+ * Builds a read-only account whose RPC serves a program config and a rent quote.
+ *
+ * @param {Object} [options] - The scenario.
+ * @param {bigint} [options.creationFee=0n] - The protocol's multisig creation fee.
+ * @param {bigint} [options.rent=2039280n] - The rent-exempt minimum to report.
+ * @param {number[]} [options.discriminator] - An override for the account discriminator.
+ * @param {boolean} [options.exists=true] - Whether the program config account exists.
+ * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getAccountInfo: Function, getMinimumBalanceForRentExemption: Function }}
+ */
+function mockDeployQuote ({
+  creationFee = 0n,
+  rent = 2039280n,
+  discriminator = PROGRAM_CONFIG_DISCRIMINATOR,
+  exists = true
+} = {}) {
+  const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+    provider: TEST_RPC_URL,
+    commitment: 'confirmed',
+    multisigPda: TEST_MULTISIG_PDA
+  })
+
+  // ProgramConfig: discriminator(8) authority(32) multisigCreationFee(u64) treasury(32) reserved(64)
+  const data = new Uint8Array(144)
+
+  data.set(discriminator, 0)
+  new DataView(data.buffer).setBigUint64(40, creationFee, true)
+
+  const value = exists
+    ? {
+        owner: SQUADS_PROGRAM_ADDRESS,
+        data: [getBase64Decoder().decode(data), 'base64'],
+        executable: false,
+        lamports: 1893120n,
+        space: 144n
+      }
+    : null
+
+  const getAccountInfo = jest.fn(() => ({ send: async () => ({ value }) }))
+  const getMinimumBalanceForRentExemption = jest.fn(() => ({ send: async () => rent }))
+
+  account._rpc = { getAccountInfo, getMinimumBalanceForRentExemption }
+
+  return { account, getAccountInfo, getMinimumBalanceForRentExemption }
+}
+
+/**
  * Builds an account whose RPC rejects.
  *
  * @param {Error} error - The error to reject with.
@@ -1679,6 +1725,99 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       }
 
       await expect(account.getBalance()).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
+  describe('quoteDeploy', () => {
+    it('sums rent, creation fee and the two-signature base fee', async () => {
+      const { account } = mockDeployQuote({ rent: 2039280n, creationFee: 0n })
+
+      // 2039280 rent + 0 fee + 2 x 5000 signatures
+      expect(await account.quoteDeploy()).toEqual({ fee: 2049280n })
+    })
+
+    it('includes a non-zero creation fee', async () => {
+      // The mainnet fee is currently 0, so this is the only case that catches an
+      // implementation ignoring the program config.
+      const { account } = mockDeployQuote({ rent: 2039280n, creationFee: 100000000n })
+
+      expect(await account.quoteDeploy()).toEqual({ fee: 102049280n })
+    })
+
+    it('requests rent for the size the member count implies', async () => {
+      const { account, getMinimumBalanceForRentExemption } = mockDeployQuote()
+
+      await account.quoteDeploy(3)
+
+      // 132 base + 3 x 33 per member
+      expect(getMinimumBalanceForRentExemption).toHaveBeenCalledWith(231n)
+    })
+
+    it('quotes a single member by default', async () => {
+      const { account, getMinimumBalanceForRentExemption } = mockDeployQuote()
+
+      await account.quoteDeploy()
+
+      expect(getMinimumBalanceForRentExemption).toHaveBeenCalledWith(165n)
+    })
+
+    it('reads the creation fee from the program config account', async () => {
+      const { account, getAccountInfo } = mockDeployQuote()
+
+      await account.quoteDeploy()
+
+      // Derived PDA for ["multisig", "program_config"], not a hardcoded fee.
+      expect(getAccountInfo).toHaveBeenCalledWith(
+        'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr',
+        expect.anything()
+      )
+    })
+
+    it('returns a bigint', async () => {
+      const { account } = mockDeployQuote()
+
+      expect(typeof (await account.quoteDeploy()).fee).toBe('bigint')
+    })
+
+    it('throws when the program config does not exist', async () => {
+      const { account } = mockDeployQuote({ exists: false })
+
+      await expect(account.quoteDeploy()).rejects.toThrow(/program config/)
+    })
+
+    it('throws rather than reading a fee from another account type', async () => {
+      const { account } = mockDeployQuote({ discriminator: MULTISIG_DISCRIMINATOR })
+
+      await expect(account.quoteDeploy()).rejects.toThrow(/program config/)
+    })
+
+    it('rejects an out-of-range member count before hitting the RPC', async () => {
+      const { account, getAccountInfo } = mockDeployQuote()
+
+      for (const bad of [0, -1, 1.5, 65536]) {
+        await expect(account.quoteDeploy(bad)).rejects.toThrow(/Invalid member count/)
+      }
+
+      expect(getAccountInfo).not.toHaveBeenCalled()
+    })
+
+    it('accepts the full member range', async () => {
+      const { account } = mockDeployQuote()
+
+      await expect(account.quoteDeploy(65535)).resolves.toEqual(expect.any(Object))
+    })
+
+    it('propagates RPC failures', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
+      account._rpc = {
+        getAccountInfo: () => ({ send: async () => { throw new Error('503 Service Unavailable') } }),
+        getMinimumBalanceForRentExemption: () => ({ send: async () => 0n })
+      }
+
+      await expect(account.quoteDeploy()).rejects.toThrow('503 Service Unavailable')
     })
   })
 

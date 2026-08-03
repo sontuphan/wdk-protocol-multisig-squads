@@ -299,9 +299,23 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Quotes the cost of deploying (creating) the multisig.
      *
-     * @returns {Promise<{ fee: bigint }>} The deploy quote.
+     * The quote covers what the creator's account is debited: rent for the multisig
+     * account, the protocol's creation fee, and the base fee for the two signatures the
+     * creation transaction carries. It excludes priority fees, which the sender chooses,
+     * and excludes funding a vault, which is a separate step.
+     *
+     * Rent scales with the number of members, which the multisig does not have until it
+     * is created, so `memberCount` defaults to a single member. Pass the intended count
+     * to quote a larger multisig.
+     *
+     * Note that this rent is **not** refundable: Squads has no instruction to close a
+     * multisig account, unlike the accounts backing proposals and transactions.
+     *
+     * @param {number} [memberCount=1] - The number of members the multisig will hold.
+     * @returns {Promise<{ fee: bigint }>} The deploy quote, in lamports.
+     * @throws {Error} If `memberCount` is out of range, or if the RPC request fails.
      */
-    quoteDeploy(): Promise<{
+    quoteDeploy(memberCount?: number): Promise<{
         fee: bigint;
     }>;
     /**
