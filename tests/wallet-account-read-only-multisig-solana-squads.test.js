@@ -1821,6 +1821,126 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
   })
 
+  describe('quoteSendTransaction', () => {
+    const TX = { to: MEMBER_C, value: 1000000n }
+
+    /**
+     * Builds an account serving a multisig and real rent-exempt minimums.
+     *
+     * @param {number} memberCount - How many members the multisig holds.
+     * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getMinimumBalanceForRentExemption: Function }}
+     */
+    function mockQuote (memberCount) {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        commitment: 'confirmed',
+        multisigPda: TEST_MULTISIG_PDA
+      })
+
+      const members = [MEMBER_A, MEMBER_B, MEMBER_C]
+        .slice(0, memberCount)
+        .map((address) => ({ address }))
+
+      const getAccountInfo = jest.fn(() => ({
+        send: async () => ({ value: multisigAccountValue({ members, threshold: 1 }) })
+      }))
+      // The real rent formula: (128 + size) * 6960 lamports.
+      const getMinimumBalanceForRentExemption = jest.fn((size) => ({
+        send: async () => (128n + size) * 6960n
+      }))
+
+      account._rpc = { getAccountInfo, getMinimumBalanceForRentExemption }
+
+      return { account, getMinimumBalanceForRentExemption }
+    }
+
+    it('sums transaction rent, proposal rent and one signature', async () => {
+      const { account } = mockQuote(2)
+
+      // 221 B tx rent + 262 B proposal rent + 5000
+      expect(await account.quoteSendTransaction(TX)).toEqual({ fee: 5148440n })
+    })
+
+    it('scales with the member count', async () => {
+      const { account: two } = mockQuote(2)
+      const { account: three } = mockQuote(3)
+
+      const a = (await two.quoteSendTransaction(TX)).fee
+      const b = (await three.quoteSendTransaction(TX)).fee
+
+      expect(b).toBeGreaterThan(a)
+      // One more member adds 96 bytes of proposal rent.
+      expect(b - a).toBe(96n * 6960n)
+    })
+
+    it('sizes the transaction account from the message, not a constant', async () => {
+      const { account, getMinimumBalanceForRentExemption } = mockQuote(2)
+
+      await account.quoteSendTransaction(TX)
+
+      // 83 base + 4 ephemeral prefix + 134 message
+      expect(getMinimumBalanceForRentExemption).toHaveBeenCalledWith(221n)
+    })
+
+    it('sizes the proposal account as 70 + 96 per member', async () => {
+      const { account, getMinimumBalanceForRentExemption } = mockQuote(3)
+
+      await account.quoteSendTransaction(TX)
+
+      expect(getMinimumBalanceForRentExemption).toHaveBeenCalledWith(358n)
+    })
+
+    it('charges one signature, not two', async () => {
+      // Creating the transaction and its proposal share a single transaction, unlike
+      // multisigCreateV2 which needs the createKey to sign as well.
+      const { account } = mockQuote(2)
+
+      const { fee } = await account.quoteSendTransaction(TX)
+      const rent = (128n + 221n) * 6960n + (128n + 262n) * 6960n
+
+      expect(fee - rent).toBe(5000n)
+    })
+
+    it('throws on a malformed recipient', async () => {
+      const { account } = mockQuote(2)
+
+      await expect(account.quoteSendTransaction({ to: 'nope', value: 1n })).rejects.toThrow()
+    })
+
+    it('throws when the multisig does not exist', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
+      account._rpc = {
+        getAccountInfo: () => ({ send: async () => ({ value: null }) }),
+        getMinimumBalanceForRentExemption: () => ({ send: async () => 0n })
+      }
+
+      await expect(account.quoteSendTransaction(TX)).rejects.toThrow(/does not exist/)
+    })
+
+    it('quotes the multisig named in a config override', async () => {
+      const { account } = mockQuote(2)
+      const shared = account._rpc
+
+      const { fee } = await account.quoteSendTransaction(TX, { multisigPda: TEST_DERIVED_PDA })
+
+      // The override reuses this account's RPC, so the mock still serves it.
+      expect(shared.getAccountInfo).toHaveBeenCalled()
+      expect(typeof fee).toBe('bigint')
+    })
+
+    it('propagates RPC failures', async () => {
+      const { account } = mockQuote(2)
+      account._rpc.getMinimumBalanceForRentExemption = () => ({
+        send: async () => { throw new Error('503 Service Unavailable') }
+      })
+
+      await expect(account.quoteSendTransaction(TX)).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
   describe('unsupported message operations', () => {
     const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
       provider: TEST_RPC_URL,

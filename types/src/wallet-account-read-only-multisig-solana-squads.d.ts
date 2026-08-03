@@ -321,9 +321,22 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Quotes the cost of proposing a transaction.
      *
+     * This is what the **proposer** is debited: rent for the transaction and proposal
+     * accounts Squads creates, plus the base fee for the single signature that creates
+     * them. Approvals and execution are paid by the members who submit them, from their
+     * own accounts, so they are excluded — as are priority fees.
+     *
+     * Most of the quote is refundable rent rather than a fee: the accounts can be closed
+     * once the proposal is executed or cancelled, refunding to the multisig's rent
+     * collector when one is configured. Proposal rent scales with the number of members,
+     * so it usually dominates.
+     *
      * @param {SimpleSolanaTransaction} tx - The transaction to quote.
-     * @param {SolanaMultisigSquadsConfig} [config] - An optional config override.
-     * @returns {Promise<{ fee: bigint }>} The transaction quote.
+     * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged
+     *   over this account's configuration.
+     * @returns {Promise<{ fee: bigint }>} The transaction quote, in lamports.
+     * @throws {Error} If the multisig does not exist, the transaction is malformed, or the
+     *   RPC request fails.
      */
     quoteSendTransaction(tx: SimpleSolanaTransaction, config?: SolanaMultisigSquadsConfig): Promise<{
         fee: bigint;
@@ -346,6 +359,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     private _isSignature;
     /** @private */
     private _toProposalIndex;
+    /** @private */
+    private _withConfig;
+    /** @private */
+    private _vaultTransactionMessageSize;
     /** @private */
     private _getTransactionSeeds;
     /** @private */

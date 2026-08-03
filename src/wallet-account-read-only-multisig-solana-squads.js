@@ -89,12 +89,22 @@ const OPTION_TAG_SIZE = 1
 const ENUM_TAG_SIZE = 1
 const ADDRESS_SIZE = 32
 const BUMP_SIZE = 1
-const MEMBER_COUNT_SIZE = 4
+const VEC_PREFIX_SIZE = 4
 const MEMBER_SIZE = ADDRESS_SIZE + 1
 const TRANSACTION_INDEX_SIZE = 8
 const TIMESTAMP_SIZE = 8
 const SIGNATURE_SIZE = 64
 const MULTISIG_BASE_SIZE = 132
+
+const VAULT_TRANSACTION_BASE_SIZE = 83
+const PROPOSAL_BASE_SIZE = 70
+const PROPOSAL_MEMBER_SIZE = 96
+
+const MESSAGE_HEADER_SIZE = 3
+const PROGRAM_ID_INDEX_SIZE = 1
+const SYSTEM_TRANSFER_DATA_SIZE = 12
+const SYSTEM_TRANSFER_ACCOUNT_INDEX_COUNT = 2
+const SOL_TRANSFER_ACCOUNT_KEY_COUNT = 3
 
 const SIGNATURE_BASE_FEE = 5000n
 const MULTISIG_CREATE_SIGNATURE_COUNT = 2n
@@ -363,7 +373,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     offset += BUMP_SIZE
 
     const count = view.getUint32(offset, true)
-    offset += MEMBER_COUNT_SIZE
+    offset += VEC_PREFIX_SIZE
 
     const owners = []
 
@@ -791,12 +801,43 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   /**
    * Quotes the cost of proposing a transaction.
    *
+   * This is what the **proposer** is debited: rent for the transaction and proposal
+   * accounts Squads creates, plus the base fee for the single signature that creates
+   * them. Approvals and execution are paid by the members who submit them, from their
+   * own accounts, so they are excluded — as are priority fees.
+   *
+   * Most of the quote is refundable rent rather than a fee: the accounts can be closed
+   * once the proposal is executed or cancelled, refunding to the multisig's rent
+   * collector when one is configured. Proposal rent scales with the number of members,
+   * so it usually dominates.
+   *
    * @param {SimpleSolanaTransaction} tx - The transaction to quote.
-   * @param {SolanaMultisigSquadsConfig} [config] - An optional config override.
-   * @returns {Promise<{ fee: bigint }>} The transaction quote.
+   * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged
+   *   over this account's configuration.
+   * @returns {Promise<{ fee: bigint }>} The transaction quote, in lamports.
+   * @throws {Error} If the multisig does not exist, the transaction is malformed, or the
+   *   RPC request fails.
    */
   async quoteSendTransaction (tx, config) {
-    throw new NotImplementedError('quoteSendTransaction(tx, config)')
+    const account = this._withConfig(config)
+    const { address: multisigPda, owners, isCreated } = await account.getMultisigInfo()
+
+    if (!isCreated) {
+      throw new Error(
+        `The multisig account ${multisigPda} does not exist. Deploy it before quoting transactions.`
+      )
+    }
+
+    const transactionSize =
+      VAULT_TRANSACTION_BASE_SIZE + VEC_PREFIX_SIZE + this._vaultTransactionMessageSize(tx)
+    const proposalSize = PROPOSAL_BASE_SIZE + PROPOSAL_MEMBER_SIZE * owners.length
+
+    const [transactionRent, proposalRent] = await Promise.all([
+      account._rpc.getMinimumBalanceForRentExemption(BigInt(transactionSize)).send(),
+      account._rpc.getMinimumBalanceForRentExemption(BigInt(proposalSize)).send()
+    ])
+
+    return { fee: transactionRent + proposalRent + SIGNATURE_BASE_FEE }
   }
 
   /**
@@ -858,6 +899,41 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     }
 
     return index
+  }
+
+  /** @private */
+  _withConfig (config) {
+    if (!config) {
+      return this
+    }
+
+    const account = new WalletAccountReadOnlyMultisigSolanaSquads(this._signerAddress, {
+      ...this._config,
+      ...config
+    })
+
+    if (!config.provider) {
+      account._rpc = this._rpc
+    }
+
+    return account
+  }
+
+  /** @private */
+  _vaultTransactionMessageSize (tx) {
+    address(tx.to)
+
+    const instructionSize =
+      PROGRAM_ID_INDEX_SIZE +
+      (VEC_PREFIX_SIZE + SYSTEM_TRANSFER_ACCOUNT_INDEX_COUNT) +
+      (VEC_PREFIX_SIZE + SYSTEM_TRANSFER_DATA_SIZE)
+
+    return (
+      MESSAGE_HEADER_SIZE +
+      (VEC_PREFIX_SIZE + ADDRESS_SIZE * SOL_TRANSFER_ACCOUNT_KEY_COUNT) +
+      (VEC_PREFIX_SIZE + instructionSize) +
+      VEC_PREFIX_SIZE
+    )
   }
 
   /** @private */
