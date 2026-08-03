@@ -16,7 +16,7 @@
 
 import { describe, it, expect, jest } from '@jest/globals'
 
-import { getBase58Encoder, getBase64Decoder, getBase64Encoder } from '@solana/codecs'
+import { getBase58Decoder, getBase58Encoder, getBase64Decoder, getBase64Encoder } from '@solana/codecs'
 
 import {
   WalletAccountReadOnlyMultisigSolanaSquads,
@@ -756,6 +756,133 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       const account = mockFailingAccount(new Error('503 Service Unavailable'))
 
       await expect(account.getNonce()).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
+  describe('getTransactionReceipt', () => {
+    // A well-formed 64-byte signature, and a 32-byte address that must be rejected.
+    const SIGNATURE = getBase58Decoder().decode(new Uint8Array(64).fill(7))
+    const RECEIPT = {
+      blockTime: 1785346451n,
+      slot: 435990582n,
+      version: 0n,
+      transactionIndex: 12n,
+      meta: { err: null, fee: 6890n },
+      transaction: { signatures: [SIGNATURE] }
+    }
+
+    /**
+     * Builds an account whose RPC returns a fixed `getTransaction` result.
+     *
+     * @param {Object|null} value - The receipt to return.
+     * @param {Object} [config] - Extra config for the account.
+     * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getTransaction: Function }}
+     */
+    function mockReceipt (value, config = {}) {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA,
+        ...config
+      })
+
+      const getTransaction = jest.fn(() => ({ send: async () => value }))
+
+      account._rpc = { getTransaction }
+
+      return { account, getTransaction }
+    }
+
+    it('returns the receipt unchanged', async () => {
+      const { account } = mockReceipt(RECEIPT)
+
+      expect(await account.getTransactionReceipt(SIGNATURE)).toBe(RECEIPT)
+    })
+
+    it('returns null when the transaction is not found', async () => {
+      const { account } = mockReceipt(null)
+
+      expect(await account.getTransactionReceipt(SIGNATURE)).toBeNull()
+    })
+
+    it('returns the receipt of a failed transaction rather than throwing', async () => {
+      // A failed transaction is still in a block and still has a receipt; callers
+      // must check meta.err themselves.
+      const failed = { ...RECEIPT, meta: { err: { InstructionError: [0, 'Custom'] }, fee: 5000n } }
+      const { account } = mockReceipt(failed)
+
+      const receipt = await account.getTransactionReceipt(SIGNATURE)
+
+      expect(receipt).toBe(failed)
+      expect(receipt.meta.err).not.toBeNull()
+    })
+
+    it('requests support for versioned transactions', async () => {
+      // Squads executes v0 transactions; without this the RPC refuses them outright,
+      // so the method would fail on exactly the transactions it exists to report on.
+      const { account, getTransaction } = mockReceipt(RECEIPT)
+
+      await account.getTransactionReceipt(SIGNATURE)
+
+      expect(getTransaction).toHaveBeenCalledWith(
+        SIGNATURE,
+        expect.objectContaining({ maxSupportedTransactionVersion: 0 })
+      )
+    })
+
+    it('raises a processed commitment to confirmed', async () => {
+      // getTransaction rejects anything below confirmed.
+      const { account, getTransaction } = mockReceipt(RECEIPT, { commitment: 'processed' })
+
+      await account.getTransactionReceipt(SIGNATURE)
+
+      expect(getTransaction).toHaveBeenCalledWith(
+        SIGNATURE,
+        expect.objectContaining({ commitment: 'confirmed' })
+      )
+    })
+
+    it('does not lower a finalized commitment', async () => {
+      const { account, getTransaction } = mockReceipt(RECEIPT, { commitment: 'finalized' })
+
+      await account.getTransactionReceipt(SIGNATURE)
+
+      expect(getTransaction).toHaveBeenCalledWith(
+        SIGNATURE,
+        expect.objectContaining({ commitment: 'finalized' })
+      )
+    })
+
+    it('throws on a malformed signature without hitting the RPC', async () => {
+      const { account, getTransaction } = mockReceipt(RECEIPT)
+
+      await expect(account.getTransactionReceipt('nope')).rejects.toThrow(/Invalid transaction signature/)
+      expect(getTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws on an empty signature', async () => {
+      const { account } = mockReceipt(RECEIPT)
+
+      await expect(account.getTransactionReceipt('')).rejects.toThrow(/Invalid transaction signature/)
+    })
+
+    it('rejects a 32-byte address passed as a signature', async () => {
+      // Valid base58, wrong length — the mistake a caller is most likely to make.
+      const { account, getTransaction } = mockReceipt(RECEIPT)
+
+      await expect(account.getTransactionReceipt(TEST_MULTISIG_PDA)).rejects.toThrow(/Invalid transaction signature/)
+      expect(getTransaction).not.toHaveBeenCalled()
+    })
+
+    it('propagates RPC failures', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
+      account._rpc = {
+        getTransaction: () => ({ send: async () => { throw new Error('503 Service Unavailable') } })
+      }
+
+      await expect(account.getTransactionReceipt(SIGNATURE)).rejects.toThrow('503 Service Unavailable')
     })
   })
 

@@ -22,7 +22,7 @@ import { createSolanaRpc } from '@solana/rpc'
 
 import { address, getAddressEncoder, getProgramDerivedAddress } from '@solana/addresses'
 
-import { getBase58Decoder, getBase64Encoder } from '@solana/codecs'
+import { getBase58Decoder, getBase58Encoder, getBase64Encoder } from '@solana/codecs'
 
 import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token'
 
@@ -60,121 +60,27 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
 
 export const DEFAULT_COMMITMENT = 'confirmed'
 
-/**
- * The address of the Squads Protocol v4 program.
- *
- * @type {string}
- */
 export const SQUADS_PROGRAM_ADDRESS = 'SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf'
 
-/**
- * The 8-byte Anchor discriminator prefixing the data of a Squads `Multisig` account.
- *
- * @type {Uint8Array}
- */
 const MULTISIG_DISCRIMINATOR = Uint8Array.from([224, 116, 121, 186, 68, 161, 79, 236])
 
-/**
- * The offset of the `threshold` field within a `Multisig` account's data. It
- * precedes the optional `rentCollector`, so the offset is fixed.
- * See `docs/getThreshold.md`.
- *
- * @type {number}
- */
 const MULTISIG_THRESHOLD_OFFSET = 72
-
-/**
- * The offset of the `transactionIndex` field within a `Multisig` account's data.
- * It precedes the optional `rentCollector`, so the offset is fixed.
- *
- * @type {number}
- */
 const MULTISIG_TRANSACTION_INDEX_OFFSET = 78
-
-/**
- * The serialized size of a `Multisig` account's `transactionIndex` field.
- *
- * @type {number}
- */
-const TRANSACTION_INDEX_SIZE = 8
-
-/**
- * The offset of the optional `rentCollector` field within a `Multisig` account's
- * data. See `docs/getOwners.md` for the full layout.
- *
- * @type {number}
- */
 const MULTISIG_RENT_COLLECTOR_OFFSET = 94
 
-/**
- * The serialized size of the tag preceding an optional field.
- *
- * @type {number}
- */
 const OPTION_TAG_SIZE = 1
-
-/**
- * The serialized size of an address.
- *
- * @type {number}
- */
 const ADDRESS_SIZE = 32
-
-/**
- * The serialized size of a `Multisig` account's `bump` field.
- *
- * @type {number}
- */
 const BUMP_SIZE = 1
-
-/**
- * The serialized size of the length prefix of the members array.
- *
- * @type {number}
- */
 const MEMBER_COUNT_SIZE = 4
-
-/**
- * The serialized size of a `Member`: an address plus a 1-byte permission mask.
- *
- * @type {number}
- */
 const MEMBER_SIZE = ADDRESS_SIZE + 1
+const TRANSACTION_INDEX_SIZE = 8
+const SIGNATURE_SIZE = 64
 
-/**
- * The seed prefix shared by every Squads program-derived address.
- *
- * @type {string}
- */
 const SEED_PREFIX = 'multisig'
-
-/**
- * The seed identifying a `Multisig` program-derived address.
- *
- * @type {string}
- */
 const SEED_MULTISIG = 'multisig'
-
-/**
- * The seed identifying a vault program-derived address.
- *
- * @type {string}
- */
 const SEED_VAULT = 'vault'
 
-/**
- * The index of the multisig's main vault.
- *
- * @type {number}
- */
 const DEFAULT_VAULT_INDEX = 0
-
-/**
- * The highest addressable vault index. The index is serialized as a `u8`, so a
- * multisig has at most 256 vaults.
- *
- * @type {number}
- */
 const MAX_VAULT_INDEX = 255
 
 /**
@@ -255,14 +161,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       : createSolanaRpc(provider)
   }
 
-  /**
-   * Builds a failover-backed Solana RPC client from a list of URLs.
-   *
-   * @private
-   * @param {string[]} urls - The RPC URLs.
-   * @param {number} retries - The number of retries.
-   * @returns {SolanaRpc} The failover RPC client.
-   */
+  /** @private */
   _createFailoverRpc (urls, retries) {
     const failoverProvider = new FailoverProvider({ retries })
 
@@ -353,13 +252,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     return this._hasMultisigDiscriminator(getBase64Encoder().encode(value.data[0]))
   }
 
-  /**
-   * Returns whether the given account data begins with the `Multisig` discriminator.
-   *
-   * @private
-   * @param {Uint8Array} data - The account data, or at least its first 8 bytes.
-   * @returns {boolean} Whether the data is that of a `Multisig` account.
-   */
+  /** @private */
   _hasMultisigDiscriminator (data) {
     if (data.length < MULTISIG_DISCRIMINATOR.length) {
       return false
@@ -622,14 +515,52 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     return BigInt(value.data.parsed.info.tokenAmount.amount)
   }
 
+  /** @private */
+  _isSignature (hash) {
+    if (typeof hash !== 'string') {
+      return false
+    }
+
+    try {
+      return getBase58Encoder().encode(hash).length === SIGNATURE_SIZE
+    } catch {
+      return false
+    }
+  }
+
   /**
-   * Returns the receipt of a confirmed transaction.
+   * Returns the receipt of a transaction, or `null` if the RPC has no record of it.
+   *
+   * This reports on a single Solana transaction and is not proposal-aware: a Squads
+   * proposal spans a creation, one approval per voter, and an execution, each with its
+   * own signature. Use {@link getProposals} to ask about a proposal's state.
+   *
+   * A returned receipt does **not** imply the transaction succeeded — a failed
+   * transaction is still included in a block and has a receipt, with `meta.err` set.
+   * Note also that `null` covers both "not confirmed yet" and "no longer served by
+   * this node", since nodes retain transaction history for a limited window.
+   *
+   * A configured commitment of `processed` is raised to `confirmed`, because the
+   * underlying RPC method rejects anything lower and a receipt cannot exist for an
+   * unconfirmed transaction.
    *
    * @param {string} hash - The transaction signature.
-   * @returns {Promise<SolanaTransactionReceipt>} The transaction receipt.
+   * @returns {Promise<SolanaTransactionReceipt | null>} The receipt, or null if the
+   *   transaction was not found.
+   * @throws {Error} If the signature is malformed, or if the RPC request fails.
    */
   async getTransactionReceipt (hash) {
-    throw new NotImplementedError('getTransactionReceipt(hash)')
+    if (!this._isSignature(hash)) {
+      throw new Error(`Invalid transaction signature: ${hash}`)
+    }
+
+    return this._rpc
+      .getTransaction(hash, {
+        commitment: this._commitment === 'processed' ? DEFAULT_COMMITMENT : this._commitment,
+        maxSupportedTransactionVersion: 0,
+        encoding: 'json'
+      })
+      .send()
   }
 
   /**

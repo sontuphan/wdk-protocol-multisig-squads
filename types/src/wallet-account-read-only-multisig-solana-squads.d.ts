@@ -24,12 +24,7 @@
 /** @typedef {SolanaMultisigSquadsCommonConfig & SolanaMultisigSquadsSigningConfig} SolanaMultisigSquadsConfig */
 /** @typedef {SolanaMultisigSquadsCommonConfig} SolanaMultisigSquadsReadOnlyConfig */
 export const DEFAULT_COMMITMENT: "confirmed";
-/**
- * The address of the Squads Protocol v4 program.
- *
- * @type {string}
- */
-export const SQUADS_PROGRAM_ADDRESS: string;
+export const SQUADS_PROGRAM_ADDRESS: "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf";
 /**
  * Read-only Solana Squads multisig wallet account.
  * Provides query-only operations for Squads multisig wallets.
@@ -94,14 +89,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @type {SolanaRpc}
      */
     protected _rpc: SolanaRpc;
-    /**
-     * Builds a failover-backed Solana RPC client from a list of URLs.
-     *
-     * @private
-     * @param {string[]} urls - The RPC URLs.
-     * @param {number} retries - The number of retries.
-     * @returns {SolanaRpc} The failover RPC client.
-     */
+    /** @private */
     private _createFailoverRpc;
     /**
      * Returns the signer's address.
@@ -124,13 +112,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @throws {Error} If no address is configured, or if the RPC request fails.
      */
     isDeployed(): Promise<boolean>;
-    /**
-     * Returns whether the given account data begins with the `Multisig` discriminator.
-     *
-     * @private
-     * @param {Uint8Array} data - The account data, or at least its first 8 bytes.
-     * @returns {boolean} Whether the data is that of a `Multisig` account.
-     */
+    /** @private */
     private _hasMultisigDiscriminator;
     /**
      * Returns the addresses of the multisig's members, in on-chain order.
@@ -232,13 +214,30 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @throws {Error} If the mint address is malformed, or if the RPC request fails.
      */
     getTokenBalance(tokenAddress: string, vaultIndexOrAddress?: number | string): Promise<bigint>;
+    /** @private */
+    private _isSignature;
     /**
-     * Returns the receipt of a confirmed transaction.
+     * Returns the receipt of a transaction, or `null` if the RPC has no record of it.
+     *
+     * This reports on a single Solana transaction and is not proposal-aware: a Squads
+     * proposal spans a creation, one approval per voter, and an execution, each with its
+     * own signature. Use {@link getProposals} to ask about a proposal's state.
+     *
+     * A returned receipt does **not** imply the transaction succeeded — a failed
+     * transaction is still included in a block and has a receipt, with `meta.err` set.
+     * Note also that `null` covers both "not confirmed yet" and "no longer served by
+     * this node", since nodes retain transaction history for a limited window.
+     *
+     * A configured commitment of `processed` is raised to `confirmed`, because the
+     * underlying RPC method rejects anything lower and a receipt cannot exist for an
+     * unconfirmed transaction.
      *
      * @param {string} hash - The transaction signature.
-     * @returns {Promise<SolanaTransactionReceipt>} The transaction receipt.
+     * @returns {Promise<SolanaTransactionReceipt | null>} The receipt, or null if the
+     *   transaction was not found.
+     * @throws {Error} If the signature is malformed, or if the RPC request fails.
      */
-    getTransactionReceipt(hash: string): Promise<SolanaTransactionReceipt>;
+    getTransactionReceipt(hash: string): Promise<SolanaTransactionReceipt | null>;
     /**
      * Verifies that a signature over a message is valid for this account.
      *
