@@ -80,9 +80,23 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /**
      * Deploys (creates) the multisig account on-chain.
      *
-     * @returns {Promise<MultisigResult>} The deploy result.
+     * Requires `createKeySecret` in the configuration: the multisig's address derives from
+     * that key, so **retain it** — losing it makes the address, and any funds in its vault,
+     * unrecoverable.
+     *
+     * Owners default to this account's signer alone with a threshold of 1, creating a
+     * single-member multisig that {@link addOwner} can grow. Every owner is created with
+     * full permissions.
+     *
+     * @param {string[]} [owners] - The member addresses. Defaults to this account's signer.
+     * @param {number} [threshold=1] - The approvals a proposal needs.
+     * @returns {Promise<{ hash: string }>} The creation transaction's signature.
+     * @throws {Error} If `createKeySecret` is missing, the owners or threshold are invalid,
+     *   the multisig already exists, or the quoted fee exceeds `createMaxFee`.
      */
-    deploy(): Promise<MultisigResult>;
+    deploy(owners?: string[], threshold?: number): Promise<{
+        hash: string;
+    }>;
     /**
      * Proposes a transaction to the multisig (and optionally executes it once approved).
      *
@@ -174,6 +188,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @returns {void}
      */
     dispose(): void;
+    /** @private */
+    private _getCreateKeySigner;
+    /** @private */
+    private _validateOwners;
+    /** @private */
+    private _encodeMultisigCreateV2Data;
 }
 export type IWalletAccountMultisig = any;
 export type MultisigResult = import("@tetherto/wdk-wallet").MultisigResult;

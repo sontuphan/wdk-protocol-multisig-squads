@@ -18,12 +18,13 @@
  */
 /**
  * @typedef {Object} SolanaMultisigSquadsSigningConfig
+ * @property {string | Uint8Array} [createKeySecret] - The create key's secret, required to
+ *   deploy a multisig. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
  * @property {number | bigint} [createMaxFee] - The maximum fee amount for the create/deploy operation.
  * @property {number | bigint} [transferMaxFee] - The maximum fee amount for transfers.
  */
 /** @typedef {SolanaMultisigSquadsCommonConfig & SolanaMultisigSquadsSigningConfig} SolanaMultisigSquadsConfig */
 /** @typedef {SolanaMultisigSquadsCommonConfig} SolanaMultisigSquadsReadOnlyConfig */
-export const DEFAULT_COMMITMENT: "confirmed";
 export const SQUADS_PROGRAM_ADDRESS: "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf";
 /**
  * Read-only Solana Squads multisig wallet account.
@@ -366,6 +367,19 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     quoteTransfer(transferOptions: import("@tetherto/wdk-wallet").TransferOptions, config?: SolanaMultisigSquadsConfig): Promise<{
         fee: bigint;
     }>;
+    /**
+     * Reads the Squads program config account.
+     *
+     * @protected
+     * @returns {Promise<{ programConfigPda: Address, creationFee: bigint, treasury: string }>}
+     *   The program config address, its multisig creation fee, and its treasury address.
+     * @throws {Error} If the account is missing or is not a program config.
+     */
+    protected _getProgramConfig(): Promise<{
+        programConfigPda: Address;
+        creationFee: bigint;
+        treasury: string;
+    }>;
     /** @private */
     private _createFailoverRpc;
     /** @private */
@@ -427,6 +441,11 @@ export type SolanaMultisigSquadsCommonConfig = {
     createKey?: string;
 };
 export type SolanaMultisigSquadsSigningConfig = {
+    /**
+     * - The create key's secret, required to
+     * deploy a multisig. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
+     */
+    createKeySecret?: string | Uint8Array;
     /**
      * - The maximum fee amount for the create/deploy operation.
      */

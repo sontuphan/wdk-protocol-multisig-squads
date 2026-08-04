@@ -52,6 +52,8 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
 
 /**
  * @typedef {Object} SolanaMultisigSquadsSigningConfig
+ * @property {string | Uint8Array} [createKeySecret] - The create key's secret, required to
+ *   deploy a multisig. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
  * @property {number | bigint} [createMaxFee] - The maximum fee amount for the create/deploy operation.
  * @property {number | bigint} [transferMaxFee] - The maximum fee amount for transfers.
  */
@@ -59,8 +61,6 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
 /** @typedef {SolanaMultisigSquadsCommonConfig & SolanaMultisigSquadsSigningConfig} SolanaMultisigSquadsConfig */
 
 /** @typedef {SolanaMultisigSquadsCommonConfig} SolanaMultisigSquadsReadOnlyConfig */
-
-export const DEFAULT_COMMITMENT = 'confirmed'
 
 export const SQUADS_PROGRAM_ADDRESS = 'SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf'
 
@@ -79,6 +79,7 @@ const MULTISIG_STALE_TRANSACTION_INDEX_OFFSET = 86
 const MULTISIG_RENT_COLLECTOR_OFFSET = 94
 
 const PROGRAM_CONFIG_CREATION_FEE_OFFSET = 40
+const PROGRAM_CONFIG_TREASURY_OFFSET = 48
 
 const PROPOSAL_STATUS_OFFSET = 48
 const PROPOSAL_STATUS_TIMESTAMP_OFFSET = 49
@@ -189,7 +190,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @protected
      * @type {Commitment}
      */
-    this._commitment = config.commitment ?? DEFAULT_COMMITMENT
+    this._commitment = config.commitment ?? 'confirmed'
 
     const { provider, retries = 3 } = config
 
@@ -564,7 +565,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     return this._rpc
       .getTransaction(hash, {
-        commitment: this._commitment === 'processed' ? DEFAULT_COMMITMENT : this._commitment,
+        commitment: this._commitment === 'processed' ? 'confirmed' : this._commitment,
         maxSupportedTransactionVersion: 0,
         encoding: 'json'
       })
@@ -768,33 +769,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       )
     }
 
-    const [programConfigPda] = await getProgramDerivedAddress({
-      programAddress: this._programId,
-      seeds: [SEED_PREFIX, SEED_PROGRAM_CONFIG]
-    })
-
-    const [{ value }, rent] = await Promise.all([
-      this._rpc
-        .getAccountInfo(programConfigPda, {
-          commitment: this._commitment,
-          encoding: 'base64'
-        })
-        .send(),
+    const [{ creationFee }, rent] = await Promise.all([
+      this._getProgramConfig(),
       this._rpc
         .getMinimumBalanceForRentExemption(BigInt(MULTISIG_BASE_SIZE + MEMBER_SIZE * memberCount))
         .send()
     ])
-
-    const data = value && getBase64Encoder().encode(value.data[0])
-
-    if (!data || !this._hasDiscriminator(data, PROGRAM_CONFIG_DISCRIMINATOR)) {
-      throw new Error(
-        `The Squads program config account ${programConfigPda} could not be read.`
-      )
-    }
-
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-    const creationFee = view.getBigUint64(PROGRAM_CONFIG_CREATION_FEE_OFFSET, true)
 
     return {
       fee: rent + creationFee + SIGNATURE_BASE_FEE * MULTISIG_CREATE_SIGNATURE_COUNT
@@ -888,6 +868,46 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     ])
 
     return { fee: transactionRent + proposalRent + SIGNATURE_BASE_FEE }
+  }
+
+  /**
+   * Reads the Squads program config account.
+   *
+   * @protected
+   * @returns {Promise<{ programConfigPda: Address, creationFee: bigint, treasury: string }>}
+   *   The program config address, its multisig creation fee, and its treasury address.
+   * @throws {Error} If the account is missing or is not a program config.
+   */
+  async _getProgramConfig () {
+    const [programConfigPda] = await getProgramDerivedAddress({
+      programAddress: this._programId,
+      seeds: [SEED_PREFIX, SEED_PROGRAM_CONFIG]
+    })
+
+    const { value } = await this._rpc
+      .getAccountInfo(programConfigPda, {
+        commitment: this._commitment,
+        encoding: 'base64'
+      })
+      .send()
+
+    const data = value && getBase64Encoder().encode(value.data[0])
+
+    if (!data || !this._hasDiscriminator(data, PROGRAM_CONFIG_DISCRIMINATOR)) {
+      throw new Error(
+        `The Squads program config account ${programConfigPda} could not be read.`
+      )
+    }
+
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+
+    return {
+      programConfigPda,
+      creationFee: view.getBigUint64(PROGRAM_CONFIG_CREATION_FEE_OFFSET, true),
+      treasury: getBase58Decoder().decode(
+        data.subarray(PROGRAM_CONFIG_TREASURY_OFFSET, PROGRAM_CONFIG_TREASURY_OFFSET + ADDRESS_SIZE)
+      )
+    }
   }
 
   /** @private */

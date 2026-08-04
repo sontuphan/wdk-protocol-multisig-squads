@@ -30,19 +30,28 @@ const seedPhrase = 'abandon abandon abandon abandon abandon abandon abandon aban
 
 const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
   provider: 'https://api.devnet.solana.com',
-  commitment: 'confirmed'
+  commitment: 'confirmed',
+  // The multisig's address derives from this key, so keep it: without it the address —
+  // and anything in its vault — cannot be recovered.
+  createKeySecret: '<base58 32-byte private key or 64-byte keypair>'
   // multisigPda: '<existing multisig address>'
 })
 
 const account = await wallet.getAccount(0)
 
-// Create (deploy) a new Squads multisig
+// Create (deploy) a new Squads multisig. Defaults to this account's signer as the sole
+// owner with a threshold of 1; pass owners and a threshold for anything else.
 const { hash } = await account.deploy()
 console.log('Multisig address:', await account.getAddress())
 console.log('Create tx:', hash)
 
 account.dispose()
 ```
+
+> [!IMPORTANT]
+> `createKeySecret` is required to create a multisig, and is the only way to recover its
+> address later. To attach to an existing multisig instead, pass `multisigPda` (or
+> `createKey`) and omit it.
 
 ## Key Capabilities
 
