@@ -28,6 +28,13 @@ import { getBase58Encoder } from '@solana/codecs'
 
 import { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes } from '@solana/signers'
 
+import {
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenIdempotentInstruction,
+  getTransferInstruction,
+  TOKEN_PROGRAM_ADDRESS
+} from '@solana-program/token'
+
 const SYSTEM_PROGRAM_ADDRESS = '11111111111111111111111111111111'
 
 const MULTISIG_CREATE_V2_DISCRIMINATOR = [50, 221, 199, 93, 40, 245, 139, 233]
@@ -60,13 +67,12 @@ const SEED_MULTISIG = 'multisig'
 const VAULT_TRANSACTION_CREATE_DISCRIMINATOR = [48, 250, 78, 168, 208, 226, 218, 211]
 const PROPOSAL_CREATE_DISCRIMINATOR = [220, 60, 73, 224, 30, 108, 79, 159]
 
+const TOKEN_2022_PROGRAM_ADDRESS = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
+
 const PERMISSION_INITIATE = 1
 
 const SYSTEM_TRANSFER_INSTRUCTION = 2
 const SYSTEM_TRANSFER_DATA_SIZE = 12
-const SOL_TRANSFER_ACCOUNT_KEY_COUNT = 3
-const SOL_TRANSFER_PROGRAM_ID_INDEX = 2
-const SOL_TRANSFER_ACCOUNT_INDEXES = [0, 1]
 
 const DEFAULT_VAULT_INDEX = 0
 const NO_EPHEMERAL_SIGNERS = 0
@@ -317,93 +323,86 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       throw new NotImplementedError('sendTransaction(tx, { autoExecute: true })')
     }
 
-    const {
-      address: multisigPda,
-      isCreated,
-      threshold,
-      transactionIndex,
-      members
-    } = await this._getMultisigAccount()
+    const vaultPda = await this.getVaultAddress(DEFAULT_VAULT_INDEX)
 
-    if (!isCreated) {
-      throw new Error(
-        `The multisig account ${multisigPda} does not exist. Deploy it before proposing transactions.`
-      )
-    }
-
-    const signerAddress = await this.getSignerAddress()
-    const member = members.find((candidate) => candidate.address === signerAddress)
-
-    if (!member) {
-      throw new Error(
-        `The signer ${signerAddress} is not a member of the multisig ${multisigPda}.`
-      )
-    }
-
-    if (!(member.mask & PERMISSION_INITIATE)) {
-      throw new Error(
-        `The signer ${signerAddress} does not hold the permission to propose transactions.`
-      )
-    }
-
-    const index = transactionIndex + 1n
-    const [transactionPda, proposalPda, vaultPda] = await Promise.all([
-      this._getTransactionPda(multisigPda, index),
-      this._getProposalPda(multisigPda, index),
-      this.getVaultAddress(DEFAULT_VAULT_INDEX)
-    ])
-
-    const creator = { address: address(signerAddress), role: ACCOUNT_ROLE_WRITABLE_SIGNER }
-    const systemProgram = { address: address(SYSTEM_PROGRAM_ADDRESS), role: ACCOUNT_ROLE_READONLY }
-
-    const instructions = [
-      {
-        programAddress: this._programId,
-        accounts: [
-          { address: address(multisigPda), role: ACCOUNT_ROLE_WRITABLE },
-          { address: transactionPda, role: ACCOUNT_ROLE_WRITABLE },
-          creator,
-          creator,
-          systemProgram
-        ],
-        data: this._encodeVaultTransactionCreateData(
-          this._encodeTransactionMessage(vaultPda, tx)
-        )
-      },
-      {
-        programAddress: this._programId,
-        accounts: [
-          { address: address(multisigPda), role: ACCOUNT_ROLE_READONLY },
-          { address: proposalPda, role: ACCOUNT_ROLE_WRITABLE },
-          creator,
-          creator,
-          systemProgram
-        ],
-        data: this._encodeProposalCreateData(index)
-      }
-    ]
-
-    const { hash, fee } = await this._signerAccount.sendTransaction({ instructions })
-
-    return {
-      proposalId: index.toString(),
-      hash,
-      fee,
-      confirmations: 0,
-      threshold,
-      executed: false
-    }
+    return this._proposeVaultTransaction(this._encodeTransactionMessage(vaultPda, tx))
   }
 
   /**
-   * Proposes a native SOL / SPL token transfer to the multisig.
+   * Proposes an SPL token transfer to the multisig.
+   *
+   * Native SOL transfers go through {@link sendTransaction} instead.
    *
    * @param {TransferOptions} transferOptions - The transfer options.
    * @param {MultisigTransactionOptions} [options] - The send options.
    * @returns {Promise<MultisigTransactionResult>} The transfer proposal result.
    */
   async transfer (transferOptions, options = {}) {
-    throw new NotImplementedError('transfer(transferOptions, options)')
+    if (options.autoExecute) {
+      throw new NotImplementedError('transfer(transferOptions, { autoExecute: true })')
+    }
+
+    const mint = address(transferOptions.token)
+    const recipient = address(transferOptions.recipient)
+    const vaultPda = await this.getVaultAddress(DEFAULT_VAULT_INDEX)
+
+    const [source, destination] = await Promise.all([
+      findAssociatedTokenPda({ mint, owner: address(vaultPda), tokenProgram: TOKEN_PROGRAM_ADDRESS }),
+      findAssociatedTokenPda({ mint, owner: recipient, tokenProgram: TOKEN_PROGRAM_ADDRESS })
+    ])
+
+    const { value } = await this._rpc
+      .getMultipleAccounts([mint, destination[0]], {
+        commitment: this._commitment,
+        encoding: 'base64'
+      })
+      .send()
+
+    const [mintAccount, destinationAccount] = value
+
+    if (!mintAccount) {
+      throw new Error(`The token mint ${mint} does not exist.`)
+    }
+
+    if (mintAccount.owner === TOKEN_2022_PROGRAM_ADDRESS) {
+      throw new NotSupportedError(
+        'transfer(transferOptions, options)',
+        `the mint ${mint} belongs to the Token-2022 program, whose associated token accounts this package does not derive`
+      )
+    }
+
+    const { fee } = await this.quoteTransfer(transferOptions)
+    const { transferMaxFee } = this._config
+
+    if (transferMaxFee !== undefined && fee >= BigInt(transferMaxFee)) {
+      throw new Error('Exceeded maximum fee cost for the transfer operation.')
+    }
+
+    const instructions = []
+
+    if (!destinationAccount) {
+      instructions.push(
+        getCreateAssociatedTokenIdempotentInstruction({
+          ata: destination[0],
+          mint,
+          owner: recipient,
+          payer: address(vaultPda)
+        })
+      )
+    }
+
+    instructions.push(
+      getTransferInstruction({
+        source: source[0],
+        destination: destination[0],
+        authority: address(vaultPda),
+        amount: BigInt(transferOptions.amount)
+      })
+    )
+
+    return this._proposeVaultTransaction(
+      this._compileTransactionMessage(address(vaultPda), instructions)
+    )
   }
 
   /**
@@ -557,61 +556,215 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
   }
 
+  /**
+   * Proposes a vault transaction carrying the given message, opening it for voting.
+   *
+   * @private
+   */
+  async _proposeVaultTransaction (message) {
+    const {
+      address: multisigPda,
+      isCreated,
+      threshold,
+      transactionIndex,
+      members
+    } = await this._getMultisigAccount()
+
+    if (!isCreated) {
+      throw new Error(
+        `The multisig account ${multisigPda} does not exist. Deploy it before proposing transactions.`
+      )
+    }
+
+    const signerAddress = await this.getSignerAddress()
+    const member = members.find((candidate) => candidate.address === signerAddress)
+
+    if (!member) {
+      throw new Error(
+        `The signer ${signerAddress} is not a member of the multisig ${multisigPda}.`
+      )
+    }
+
+    if (!(member.mask & PERMISSION_INITIATE)) {
+      throw new Error(
+        `The signer ${signerAddress} does not hold the permission to propose transactions.`
+      )
+    }
+
+    const index = transactionIndex + 1n
+    const [transactionPda, proposalPda] = await Promise.all([
+      this._getTransactionPda(multisigPda, index),
+      this._getProposalPda(multisigPda, index)
+    ])
+
+    const creator = { address: address(signerAddress), role: ACCOUNT_ROLE_WRITABLE_SIGNER }
+    const systemProgram = { address: address(SYSTEM_PROGRAM_ADDRESS), role: ACCOUNT_ROLE_READONLY }
+
+    const instructions = [
+      {
+        programAddress: this._programId,
+        accounts: [
+          { address: address(multisigPda), role: ACCOUNT_ROLE_WRITABLE },
+          { address: transactionPda, role: ACCOUNT_ROLE_WRITABLE },
+          creator,
+          creator,
+          systemProgram
+        ],
+        data: this._encodeVaultTransactionCreateData(message)
+      },
+      {
+        programAddress: this._programId,
+        accounts: [
+          { address: address(multisigPda), role: ACCOUNT_ROLE_READONLY },
+          { address: proposalPda, role: ACCOUNT_ROLE_WRITABLE },
+          creator,
+          creator,
+          systemProgram
+        ],
+        data: this._encodeProposalCreateData(index)
+      }
+    ]
+
+    const { hash, fee } = await this._signerAccount.sendTransaction({ instructions })
+
+    return {
+      proposalId: index.toString(),
+      hash,
+      fee,
+      confirmations: 0,
+      threshold,
+      executed: false
+    }
+  }
+
   /** @private */
   _encodeTransactionMessage (vaultPda, tx) {
     if (!tx || tx.to === undefined || tx.value === undefined) {
       throw new NotImplementedError('sendTransaction(tx) for anything but a native transfer')
     }
 
-    const addressEncoder = getAddressEncoder()
-    const keys = [address(vaultPda), address(tx.to), address(SYSTEM_PROGRAM_ADDRESS)]
-
-    // The instruction argument uses one-byte length prefixes, unlike the four-byte
-    // prefixes of the message the program then stores.
-    const size =
-      MESSAGE_HEADER_SIZE +
-      SMALL_PREFIX_SIZE + ADDRESS_SIZE * SOL_TRANSFER_ACCOUNT_KEY_COUNT +
-      SMALL_PREFIX_SIZE +
-      PROGRAM_ID_INDEX_SIZE +
-      SMALL_PREFIX_SIZE + SOL_TRANSFER_ACCOUNT_INDEXES.length +
-      DATA_PREFIX_SIZE + SYSTEM_TRANSFER_DATA_SIZE +
-      SMALL_PREFIX_SIZE
-
-    const data = new Uint8Array(size)
+    const data = new Uint8Array(SYSTEM_TRANSFER_DATA_SIZE)
     const view = new DataView(data.buffer)
 
-    data[0] = 1
-    data[1] = 1
-    data[2] = 1
+    view.setUint32(0, SYSTEM_TRANSFER_INSTRUCTION, true)
+    view.setBigUint64(4, BigInt(tx.value), true)
+
+    return this._compileTransactionMessage(address(vaultPda), [
+      {
+        programAddress: address(SYSTEM_PROGRAM_ADDRESS),
+        accounts: [
+          { address: address(vaultPda), role: ACCOUNT_ROLE_WRITABLE_SIGNER },
+          { address: address(tx.to), role: ACCOUNT_ROLE_WRITABLE }
+        ],
+        data
+      }
+    ])
+  }
+
+  /**
+   * Compiles instructions into the message Squads takes as an instruction argument.
+   *
+   * Note this is not the message the program then stores: the argument uses one-byte
+   * length prefixes where the stored account uses four-byte ones.
+   *
+   * @private
+   */
+  _compileTransactionMessage (payer, instructions) {
+    const roles = new Map()
+    const note = (candidate, signer, writable) => {
+      const current = roles.get(candidate) ?? { signer: false, writable: false }
+
+      roles.set(candidate, {
+        signer: current.signer || signer,
+        writable: current.writable || writable
+      })
+    }
+
+    note(payer, true, true)
+
+    for (const instruction of instructions) {
+      // The program is recorded before its own accounts, which is the order the on-chain
+      // message compiler uses and therefore the order the keys end up in.
+      note(instruction.programAddress, false, false)
+
+      for (const account of instruction.accounts) {
+        note(
+          account.address,
+          account.role === ACCOUNT_ROLE_READONLY_SIGNER || account.role === ACCOUNT_ROLE_WRITABLE_SIGNER,
+          account.role === ACCOUNT_ROLE_WRITABLE || account.role === ACCOUNT_ROLE_WRITABLE_SIGNER
+        )
+      }
+    }
+
+    const entries = [...roles.entries()]
+    const group = (signer, writable) => entries
+      .filter(([, role]) => role.signer === signer && role.writable === writable)
+      .map(([candidate]) => candidate)
+
+    const keys = [
+      ...group(true, true),
+      ...group(true, false),
+      ...group(false, true),
+      ...group(false, false)
+    ]
+
+    const compiled = instructions.map((instruction) => ({
+      programIdIndex: keys.indexOf(instruction.programAddress),
+      accountIndexes: instruction.accounts.map((account) => keys.indexOf(account.address)),
+      data: instruction.data
+    }))
+
+    const size =
+      MESSAGE_HEADER_SIZE +
+      SMALL_PREFIX_SIZE + ADDRESS_SIZE * keys.length +
+      SMALL_PREFIX_SIZE +
+      compiled.reduce(
+        (total, instruction) =>
+          total +
+          PROGRAM_ID_INDEX_SIZE +
+          SMALL_PREFIX_SIZE + instruction.accountIndexes.length +
+          DATA_PREFIX_SIZE + instruction.data.length,
+        0
+      ) +
+      SMALL_PREFIX_SIZE
+
+    const message = new Uint8Array(size)
+    const view = new DataView(message.buffer)
+    const addressEncoder = getAddressEncoder()
+
+    message[0] = entries.filter(([, role]) => role.signer).length
+    message[1] = group(true, true).length
+    message[2] = group(false, true).length
 
     let offset = MESSAGE_HEADER_SIZE
 
-    data[offset] = keys.length
+    message[offset] = keys.length
     offset += SMALL_PREFIX_SIZE
 
     for (const key of keys) {
-      data.set(addressEncoder.encode(key), offset)
+      message.set(addressEncoder.encode(key), offset)
       offset += ADDRESS_SIZE
     }
 
-    data[offset] = 1
+    message[offset] = compiled.length
     offset += SMALL_PREFIX_SIZE
 
-    data[offset] = SOL_TRANSFER_PROGRAM_ID_INDEX
-    offset += PROGRAM_ID_INDEX_SIZE
+    for (const instruction of compiled) {
+      message[offset] = instruction.programIdIndex
+      offset += PROGRAM_ID_INDEX_SIZE
 
-    data[offset] = SOL_TRANSFER_ACCOUNT_INDEXES.length
-    offset += SMALL_PREFIX_SIZE
-    data.set(SOL_TRANSFER_ACCOUNT_INDEXES, offset)
-    offset += SOL_TRANSFER_ACCOUNT_INDEXES.length
+      message[offset] = instruction.accountIndexes.length
+      offset += SMALL_PREFIX_SIZE
+      message.set(instruction.accountIndexes, offset)
+      offset += instruction.accountIndexes.length
 
-    view.setUint16(offset, SYSTEM_TRANSFER_DATA_SIZE, true)
-    offset += DATA_PREFIX_SIZE
+      view.setUint16(offset, instruction.data.length, true)
+      offset += DATA_PREFIX_SIZE
+      message.set(instruction.data, offset)
+      offset += instruction.data.length
+    }
 
-    view.setUint32(offset, SYSTEM_TRANSFER_INSTRUCTION, true)
-    view.setBigUint64(offset + 4, BigInt(tx.value), true)
-
-    return data
+    return message
   }
 
   /** @private */

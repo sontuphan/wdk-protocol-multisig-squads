@@ -23,6 +23,14 @@ import { generated, utils } from '@sqds/multisig'
 import { PublicKey, TransactionMessage, SystemProgram } from '@solana/web3.js'
 import { getBase58Decoder } from '@solana/codecs'
 
+import { address } from '@solana/addresses'
+import {
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenIdempotentInstruction,
+  getTransferInstruction,
+  TOKEN_PROGRAM_ADDRESS
+} from '@solana-program/token'
+
 import WalletManagerMultisigSolanaSquads from '@tetherto/wdk-protocol-multisig-squads'
 
 const TEST_SEED_PHRASE =
@@ -142,6 +150,83 @@ describe('wire format', () => {
       const vault = await account.getVaultAddress()
 
       expect(() => account._encodeTransactionMessage(vault, { instructions: [] })).toThrow()
+    })
+  })
+
+  describe('spl transfer message', () => {
+    const RECIPIENT = '2JvLzXomThTBMSj2YQY3wE21kiaSpwGyJ17nm9xiLMsE'
+    const MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+
+    /**
+     * Converts a kit instruction to the web3.js shape the SDK helper expects.
+     *
+     * @param {Object} instruction - The kit instruction.
+     * @returns {Object} The web3.js instruction.
+     */
+    function toWeb3 (instruction) {
+      return {
+        programId: new PublicKey(instruction.programAddress),
+        keys: instruction.accounts.map((account) => ({
+          pubkey: new PublicKey(account.address),
+          isSigner: account.role === 2 || account.role === 3,
+          isWritable: account.role === 1 || account.role === 3
+        })),
+        data: Buffer.from(instruction.data)
+      }
+    }
+
+    /**
+     * Builds the transfer instructions, optionally preceded by an ATA creation.
+     *
+     * @param {string} vault - The vault address.
+     * @param {boolean} createAta - Whether to include the creation instruction.
+     * @returns {Promise<Object[]>} The kit instructions.
+     */
+    async function buildInstructions (vault, createAta) {
+      const mint = address(MINT)
+      const [source] = await findAssociatedTokenPda({ mint, owner: address(vault), tokenProgram: TOKEN_PROGRAM_ADDRESS })
+      const [destination] = await findAssociatedTokenPda({ mint, owner: address(RECIPIENT), tokenProgram: TOKEN_PROGRAM_ADDRESS })
+
+      const instructions = []
+
+      if (createAta) {
+        instructions.push(getCreateAssociatedTokenIdempotentInstruction({
+          ata: destination,
+          mint,
+          owner: address(RECIPIENT),
+          payer: address(vault)
+        }))
+      }
+
+      instructions.push(getTransferInstruction({
+        source,
+        destination,
+        authority: address(vault),
+        amount: 1000000n
+      }))
+
+      return instructions
+    }
+
+    it.each([
+      ['the recipient already holds the token', false, 150],
+      ['the recipient token account must be created', true, 289]
+    ])('matches the SDK when %s', async (_label, createAta, size) => {
+      const vault = await account.getVaultAddress()
+      const instructions = await buildInstructions(vault, createAta)
+
+      const mine = account._compileTransactionMessage(address(vault), instructions)
+      const reference = utils.transactionMessageToMultisigTransactionMessageBytes({
+        message: new TransactionMessage({
+          payerKey: new PublicKey(vault),
+          recentBlockhash: '11111111111111111111111111111111',
+          instructions: instructions.map(toWeb3)
+        }),
+        vaultPda: new PublicKey(vault)
+      })
+
+      expect(mine).toHaveLength(size)
+      expect(Array.from(mine)).toEqual(Array.from(reference))
     })
   })
 })

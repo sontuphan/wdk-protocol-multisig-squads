@@ -116,9 +116,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
   })
 
   it('throws NotImplementedError for unimplemented write methods', async () => {
-    await expect(account.sendTransaction({ to: TEST_SIGNER, value: 1n })).rejects.toThrow()
+    // Only methods that still throw before touching the network belong here.
     await expect(account.approveTx(1)).rejects.toThrow()
     await expect(account.executeTx(1)).rejects.toThrow()
+    await expect(account.addOwner(TEST_SIGNER)).rejects.toThrow()
   })
 
   it('throws NotSupportedError for message proposals', async () => {
@@ -474,6 +475,134 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const { account, sendTransaction } = await proposingAccount()
 
       await expect(account.sendTransaction(TX, { autoExecute: true })).rejects.toThrow()
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('transfer', () => {
+    const MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+    const OPTIONS = { token: MINT, recipient: OTHER_MEMBER, amount: 1000n }
+    const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
+    const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
+
+    /**
+     * Builds a transferring account with a stubbed RPC and send.
+     *
+     * @param {Object} [options] - The scenario.
+     * @param {string} [options.mintOwner] - The program owning the mint.
+     * @param {boolean} [options.recipientHasAta=true] - Whether the recipient holds the token.
+     * @param {Object} [options.config] - Extra configuration.
+     * @returns {Promise<{ account: Object, sendTransaction: Function }>}
+     */
+    async function transferringAccount ({
+      mintOwner = TOKEN_PROGRAM,
+      recipientHasAta = true,
+      config = {}
+    } = {}) {
+      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA,
+        ...config
+      })
+      const account = await wallet.getAccount(0)
+
+      const tokenAccount = {
+        owner: mintOwner,
+        data: ['', 'base64'],
+        executable: false,
+        lamports: 2039280n,
+        space: 165n
+      }
+
+      account._rpc = {
+        getAccountInfo: serveAccount(
+          multisigAccountValue([{ address: TEST_SIGNER }], { threshold: 1 })
+        ),
+        getMultipleAccounts: jest.fn(() => ({
+          send: async () => ({
+            value: [tokenAccount, recipientHasAta ? tokenAccount : null]
+          })
+        })),
+        getMinimumBalanceForRentExemption: jest.fn(() => ({ send: async () => 2039280n }))
+      }
+
+      const sendTransaction = jest.fn(async () => ({ hash: 'feedface', fee: 5000n }))
+      account._signerAccount.sendTransaction = sendTransaction
+
+      return { account, sendTransaction }
+    }
+
+    it('proposes a token transfer', async () => {
+      const { account } = await transferringAccount()
+
+      expect(await account.transfer(OPTIONS)).toEqual({
+        proposalId: '1',
+        hash: 'feedface',
+        fee: 5000n,
+        confirmations: 0,
+        threshold: 1,
+        executed: false
+      })
+    })
+
+    it('includes an ATA creation only when the recipient lacks one', async () => {
+      const { account: withAta, sendTransaction: a } = await transferringAccount()
+      const { account: without, sendTransaction: b } = await transferringAccount({
+        recipientHasAta: false
+      })
+
+      await withAta.transfer(OPTIONS)
+      await without.transfer(OPTIONS)
+
+      // The inner message is the third field of vaultTransactionCreate's data, after the
+      // discriminator, vault index and ephemeral signer count.
+      const messageLength = (mock) => {
+        const data = mock.mock.calls[0][0].instructions[0].data
+        return new DataView(data.buffer).getUint32(10, true)
+      }
+
+      expect(messageLength(a)).toBe(150)
+      expect(messageLength(b)).toBe(289)
+    })
+
+    it('refuses a Token-2022 mint rather than building an unusable transfer', async () => {
+      const { account, sendTransaction } = await transferringAccount({
+        mintOwner: TOKEN_2022_PROGRAM
+      })
+
+      await expect(account.transfer(OPTIONS)).rejects.toThrow(NotSupportedError)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws when the mint does not exist', async () => {
+      const { account } = await transferringAccount()
+      account._rpc.getMultipleAccounts = () => ({
+        send: async () => ({ value: [null, null] })
+      })
+
+      await expect(account.transfer(OPTIONS)).rejects.toThrow(/mint .* does not exist/)
+    })
+
+    it('refuses when the quote exceeds transferMaxFee', async () => {
+      const { account, sendTransaction } = await transferringAccount({
+        config: { transferMaxFee: 1000n }
+      })
+
+      await expect(account.transfer(OPTIONS)).rejects.toThrow(/maximum fee/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws on a malformed mint before any RPC call', async () => {
+      const { account, sendTransaction } = await transferringAccount()
+
+      await expect(account.transfer({ ...OPTIONS, token: 'nope' })).rejects.toThrow()
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('rejects autoExecute as unimplemented', async () => {
+      const { account, sendTransaction } = await transferringAccount()
+
+      await expect(account.transfer(OPTIONS, { autoExecute: true })).rejects.toThrow()
       expect(sendTransaction).not.toHaveBeenCalled()
     })
   })

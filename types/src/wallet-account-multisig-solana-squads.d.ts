@@ -116,7 +116,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     sendTransaction(tx: SolanaTransaction, options?: MultisigTransactionOptions): Promise<MultisigTransactionResult>;
     /**
-     * Proposes a native SOL / SPL token transfer to the multisig.
+     * Proposes an SPL token transfer to the multisig.
+     *
+     * Native SOL transfers go through {@link sendTransaction} instead.
      *
      * @param {TransferOptions} transferOptions - The transfer options.
      * @param {MultisigTransactionOptions} [options] - The send options.
@@ -202,8 +204,23 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     private _getCreateKeySigner;
     /** @private */
     private _validateOwners;
+    /**
+     * Proposes a vault transaction carrying the given message, opening it for voting.
+     *
+     * @private
+     */
+    private _proposeVaultTransaction;
     /** @private */
     private _encodeTransactionMessage;
+    /**
+     * Compiles instructions into the message Squads takes as an instruction argument.
+     *
+     * Note this is not the message the program then stores: the argument uses one-byte
+     * length prefixes where the stored account uses four-byte ones.
+     *
+     * @private
+     */
+    private _compileTransactionMessage;
     /** @private */
     private _encodeVaultTransactionCreateData;
     /** @private */
