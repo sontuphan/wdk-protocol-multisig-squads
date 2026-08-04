@@ -66,10 +66,17 @@ const SEED_MULTISIG = 'multisig'
 
 const VAULT_TRANSACTION_CREATE_DISCRIMINATOR = [48, 250, 78, 168, 208, 226, 218, 211]
 const PROPOSAL_CREATE_DISCRIMINATOR = [220, 60, 73, 224, 30, 108, 79, 159]
+const PROPOSAL_APPROVE_DISCRIMINATOR = [144, 37, 164, 136, 188, 216, 42, 248]
 
 const TOKEN_2022_PROGRAM_ADDRESS = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
 
 const PERMISSION_INITIATE = 1
+const PERMISSION_VOTE = 2
+
+const PROPOSAL_STATUS_ACTIVE = 1
+
+const OPTION_SOME = 1
+const OPTION_TAG_SIZE = 1
 
 const SYSTEM_TRANSFER_INSTRUCTION = 2
 const SYSTEM_TRANSFER_DATA_SIZE = 12
@@ -331,11 +338,21 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /**
    * Proposes an SPL token transfer to the multisig.
    *
-   * Native SOL transfers go through {@link sendTransaction} instead.
+   * Native SOL transfers go through {@link sendTransaction} instead. Token-2022 mints are
+   * refused rather than transferred to an address this package cannot derive.
+   *
+   * Creating the recipient's token account, when it has none, is paid for by the vault at
+   * execution rather than by the proposer — so a vault holding enough tokens but too little
+   * SOL will propose and collect approvals, then fail to execute.
    *
    * @param {TransferOptions} transferOptions - The transfer options.
    * @param {MultisigTransactionOptions} [options] - The send options.
    * @returns {Promise<MultisigTransactionResult>} The transfer proposal result.
+   * @throws {Error} If the mint or recipient is malformed, the mint does not exist, the
+   *   signer cannot propose, or the quote exceeds `transferMaxFee`.
+   * @throws {NotSupportedError} If the mint belongs to the Token-2022 program.
+   * @todo Support Token-2022 (Token Extensions Program).
+   * @todo Support `autoExecute`.
    */
   async transfer (transferOptions, options = {}) {
     if (options.autoExecute) {
@@ -408,11 +425,77 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /**
    * Approves a pending transaction proposal.
    *
-   * @param {number | bigint} proposalId - The proposal (transaction index) id.
+   * A previous rejection does not block an approval: Squads withdraws the rejection, so a
+   * member can change their vote. Approving twice is refused.
+   *
+   * The returned `confirmations` reaching the threshold means the proposal has just become
+   * approved, not that it ran — execution is a separate step, so `executed` is always
+   * `false`.
+   *
+   * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
+   * @param {string} [memo] - An optional note recorded on chain with the vote. It costs
+   *   rent, and an empty string is stored as a present-but-empty memo rather than none.
    * @returns {Promise<MultisigTransactionResult>} The approval result.
+   * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the
+   *   signer cannot vote, the proposal is not open for voting, the signer has already
+   *   approved it, or the RPC request fails.
    */
-  async approveTx (proposalId) {
-    throw new NotImplementedError('approveTx(proposalId)')
+  async approveTx (proposalId, memo) {
+    const index = this._toProposalIndex(proposalId)
+    const { multisig, proposal } = await this._getMultisigAndProposal(index)
+
+    if (!multisig.isCreated) {
+      throw new Error(
+        `The multisig account ${multisig.address} does not exist. Deploy it before voting on proposals.`
+      )
+    }
+
+    const signerAddress = await this.getSignerAddress()
+
+    this._requirePermission(multisig, signerAddress, PERMISSION_VOTE, 'vote on proposals')
+
+    if (!proposal.exists) {
+      throw new Error(
+        `The multisig ${multisig.address} has no proposal at index ${index}.`
+      )
+    }
+
+    if (proposal.status !== PROPOSAL_STATUS_ACTIVE) {
+      throw new Error(
+        `The proposal ${index} is ${proposal.statusName} rather than open for voting.`
+      )
+    }
+
+    if (index <= multisig.staleTransactionIndex) {
+      throw new Error(
+        `The proposal ${index} was invalidated by a later configuration change and can no longer be voted on.`
+      )
+    }
+
+    if (proposal.approved.includes(signerAddress)) {
+      throw new Error(`The signer ${signerAddress} has already approved the proposal ${index}.`)
+    }
+
+    const instruction = this._buildProposalVoteInstruction(
+      PROPOSAL_APPROVE_DISCRIMINATOR,
+      multisig.address,
+      signerAddress,
+      proposal.address,
+      memo
+    )
+
+    const { hash, fee } = await this._signerAccount.sendTransaction({
+      instructions: [instruction]
+    })
+
+    return {
+      proposalId: index.toString(),
+      hash,
+      fee,
+      confirmations: proposal.approved.length + 1,
+      threshold: multisig.threshold,
+      executed: false
+    }
   }
 
   /**
@@ -577,19 +660,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
 
     const signerAddress = await this.getSignerAddress()
-    const member = members.find((candidate) => candidate.address === signerAddress)
 
-    if (!member) {
-      throw new Error(
-        `The signer ${signerAddress} is not a member of the multisig ${multisigPda}.`
-      )
-    }
-
-    if (!(member.mask & PERMISSION_INITIATE)) {
-      throw new Error(
-        `The signer ${signerAddress} does not hold the permission to propose transactions.`
-      )
-    }
+    this._requirePermission(
+      { address: multisigPda, members },
+      signerAddress,
+      PERMISSION_INITIATE,
+      'propose transactions'
+    )
 
     const index = transactionIndex + 1n
     const [transactionPda, proposalPda] = await Promise.all([
@@ -765,6 +842,79 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
 
     return message
+  }
+
+  /** @private */
+  _requirePermission (multisig, signerAddress, mask, permission) {
+    const member = multisig.members.find((candidate) => candidate.address === signerAddress)
+
+    if (!member) {
+      throw new Error(
+        `The signer ${signerAddress} is not a member of the multisig ${multisig.address}.`
+      )
+    }
+
+    if (!(member.mask & mask)) {
+      throw new Error(
+        `The signer ${signerAddress} does not hold the permission to ${permission}.`
+      )
+    }
+
+    return member
+  }
+
+  /**
+   * Builds a `proposalApprove` or `proposalReject` instruction.
+   *
+   * Kept separate from the methods that send it so a future `autoExecute` can pack a vote
+   * and an execution into one transaction.
+   *
+   * @private
+   */
+  _buildProposalVoteInstruction (discriminator, multisigPda, signerAddress, proposalPda, memo) {
+    return {
+      programAddress: this._programId,
+      accounts: [
+        { address: address(multisigPda), role: ACCOUNT_ROLE_READONLY },
+        { address: address(signerAddress), role: ACCOUNT_ROLE_WRITABLE_SIGNER },
+        { address: address(proposalPda), role: ACCOUNT_ROLE_WRITABLE }
+      ],
+      data: this._encodeProposalVoteData(discriminator, memo)
+    }
+  }
+
+  /** @private */
+  _encodeProposalVoteData (discriminator, memo) {
+    if (memo === undefined || memo === null) {
+      const data = new Uint8Array(discriminator.length + OPTION_TAG_SIZE)
+
+      data.set(discriminator, 0)
+      data[discriminator.length] = OPTION_NONE
+
+      return data
+    }
+
+    if (typeof memo !== 'string') {
+      throw new Error(`Invalid memo ${memo}. It must be a string.`)
+    }
+
+    const bytes = new TextEncoder().encode(memo)
+    const data = new Uint8Array(
+      discriminator.length + OPTION_TAG_SIZE + VEC_PREFIX_SIZE + bytes.length
+    )
+    const view = new DataView(data.buffer)
+
+    data.set(discriminator, 0)
+    data[discriminator.length] = OPTION_SOME
+
+    let offset = discriminator.length + OPTION_TAG_SIZE
+
+    view.setUint32(offset, bytes.length, true)
+    offset += VEC_PREFIX_SIZE
+
+    data.set(bytes, offset)
+
+    return data
   }
 
   /** @private */

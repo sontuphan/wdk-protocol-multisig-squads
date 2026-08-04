@@ -2093,6 +2093,11 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     it('distinguishes not-supported from not-implemented', async () => {
       // quoteDeploy is pending work; getMessages never will be. A caller doing
       // capability detection has to be able to tell them apart.
+      account._rpc = {
+        getAccountInfo: () => ({ send: async () => ({ value: null }) }),
+        getMinimumBalanceForRentExemption: () => ({ send: async () => 2039280n })
+      }
+
       await expect(account.getMessages(['abc'])).rejects.toThrow(NotSupportedError)
       await expect(account.quoteDeploy()).rejects.not.toThrow(NotSupportedError)
     })

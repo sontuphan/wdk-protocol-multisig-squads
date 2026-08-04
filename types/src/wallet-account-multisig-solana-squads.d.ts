@@ -118,20 +118,42 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /**
      * Proposes an SPL token transfer to the multisig.
      *
-     * Native SOL transfers go through {@link sendTransaction} instead.
+     * Native SOL transfers go through {@link sendTransaction} instead. Token-2022 mints are
+     * refused rather than transferred to an address this package cannot derive.
+     *
+     * Creating the recipient's token account, when it has none, is paid for by the vault at
+     * execution rather than by the proposer — so a vault holding enough tokens but too little
+     * SOL will propose and collect approvals, then fail to execute.
      *
      * @param {TransferOptions} transferOptions - The transfer options.
      * @param {MultisigTransactionOptions} [options] - The send options.
      * @returns {Promise<MultisigTransactionResult>} The transfer proposal result.
+     * @throws {Error} If the mint or recipient is malformed, the mint does not exist, the
+     *   signer cannot propose, or the quote exceeds `transferMaxFee`.
+     * @throws {NotSupportedError} If the mint belongs to the Token-2022 program.
+     * @todo Support Token-2022 (Token Extensions Program).
+     * @todo Support `autoExecute`.
      */
     transfer(transferOptions: TransferOptions, options?: MultisigTransactionOptions): Promise<MultisigTransactionResult>;
     /**
      * Approves a pending transaction proposal.
      *
-     * @param {number | bigint} proposalId - The proposal (transaction index) id.
+     * A previous rejection does not block an approval: Squads withdraws the rejection, so a
+     * member can change their vote. Approving twice is refused.
+     *
+     * The returned `confirmations` reaching the threshold means the proposal has just become
+     * approved, not that it ran — execution is a separate step, so `executed` is always
+     * `false`.
+     *
+     * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
+     * @param {string} [memo] - An optional note recorded on chain with the vote. It costs
+     *   rent, and an empty string is stored as a present-but-empty memo rather than none.
      * @returns {Promise<MultisigTransactionResult>} The approval result.
+     * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the
+     *   signer cannot vote, the proposal is not open for voting, the signer has already
+     *   approved it, or the RPC request fails.
      */
-    approveTx(proposalId: number | bigint): Promise<MultisigTransactionResult>;
+    approveTx(proposalId: number | bigint | string, memo?: string): Promise<MultisigTransactionResult>;
     /**
      * Rejects a pending transaction proposal.
      *
@@ -221,6 +243,19 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @private
      */
     private _compileTransactionMessage;
+    /** @private */
+    private _requirePermission;
+    /**
+     * Builds a `proposalApprove` or `proposalReject` instruction.
+     *
+     * Kept separate from the methods that send it so a future `autoExecute` can pack a vote
+     * and an execution into one transaction.
+     *
+     * @private
+     */
+    private _buildProposalVoteInstruction;
+    /** @private */
+    private _encodeProposalVoteData;
     /** @private */
     private _encodeVaultTransactionCreateData;
     /** @private */

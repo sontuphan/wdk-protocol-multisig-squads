@@ -85,6 +85,15 @@ const PROPOSAL_STATUS_OFFSET = 48
 const PROPOSAL_STATUS_TIMESTAMP_OFFSET = 49
 const PROPOSAL_STATUS_APPROVED = 3
 const PROPOSAL_STATUS_EXECUTING = 4
+const PROPOSAL_STATUS_NAMES = [
+  'a draft',
+  'open for voting',
+  'rejected',
+  'approved',
+  'executing',
+  'executed',
+  'cancelled'
+]
 
 const OPTION_TAG_SIZE = 1
 const ENUM_TAG_SIZE = 1
@@ -858,63 +867,38 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       })
       .send()
 
-    if (!value) {
-      return {
-        address: multisigPda,
-        isCreated: false,
-        threshold: 0,
-        timeLock: 0,
-        transactionIndex: 0n,
-        staleTransactionIndex: 0n,
-        rentCollector: null,
-        members: []
-      }
-    }
+    return this._decodeMultisigAccount(multisigPda, value)
+  }
 
-    const data = getBase64Encoder().encode(value.data[0])
+  /**
+   * Reads the multisig and one of its proposals in a single request.
+   *
+   * Every precondition on voting and execution spans both accounts — the member set and
+   * the stale index live on the multisig, the status and vote lists on the proposal — so
+   * they are read together to keep them from disagreeing.
+   *
+   * @protected
+   * @param {bigint} index - The proposal (transaction index) id.
+   * @returns {Promise<{ multisig: Awaited<ReturnType<WalletAccountReadOnlyMultisigSolanaSquads['_getMultisigAccount']>>, proposal: { address: Address, exists: boolean, status: number, statusName: string | null, approved: string[], rejected: string[], cancelled: string[] } }>}
+   *   The decoded accounts. `proposal.exists` is false when no proposal has been created
+   *   at that index, in which case its other fields are placeholders.
+   * @throws {Error} If the multisig address holds a non-Squads account, or if the RPC
+   *   request fails.
+   */
+  async _getMultisigAndProposal (index) {
+    const multisigPda = await this.getAddress()
+    const proposalPda = await this._getProposalPda(multisigPda, index)
 
-    if (value.owner !== this._programId || !this._hasDiscriminator(data, MULTISIG_DISCRIMINATOR)) {
-      throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
-    }
-
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-    const addressDecoder = getBase58Decoder()
-
-    const hasRentCollector = data[MULTISIG_RENT_COLLECTOR_OFFSET] === 1
-
-    let offset = MULTISIG_RENT_COLLECTOR_OFFSET + OPTION_TAG_SIZE
-    const rentCollector = hasRentCollector
-      ? addressDecoder.decode(data.subarray(offset, offset + ADDRESS_SIZE))
-      : null
-
-    if (hasRentCollector) {
-      offset += ADDRESS_SIZE
-    }
-
-    offset += BUMP_SIZE
-
-    const count = view.getUint32(offset, true)
-    offset += VEC_PREFIX_SIZE
-
-    const members = []
-
-    for (let i = 0; i < count; i++) {
-      members.push({
-        address: addressDecoder.decode(data.subarray(offset, offset + ADDRESS_SIZE)),
-        mask: data[offset + ADDRESS_SIZE]
+    const { value } = await this._rpc
+      .getMultipleAccounts([address(multisigPda), proposalPda], {
+        commitment: this._commitment,
+        encoding: 'base64'
       })
-      offset += MEMBER_SIZE
-    }
+      .send()
 
     return {
-      address: multisigPda,
-      isCreated: true,
-      threshold: view.getUint16(MULTISIG_THRESHOLD_OFFSET, true),
-      timeLock: view.getUint32(MULTISIG_TIME_LOCK_OFFSET, true),
-      transactionIndex: view.getBigUint64(MULTISIG_TRANSACTION_INDEX_OFFSET, true),
-      staleTransactionIndex: view.getBigUint64(MULTISIG_STALE_TRANSACTION_INDEX_OFFSET, true),
-      rentCollector,
-      members
+      multisig: this._decodeMultisigAccount(multisigPda, value[0]),
+      proposal: this._decodeProposalAccount(proposalPda, value[1])
     }
   }
 
@@ -1093,6 +1077,125 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     })
 
     return proposalPda
+  }
+
+  /** @private */
+  _decodeMultisigAccount (multisigPda, account) {
+    if (!account) {
+      return {
+        address: multisigPda,
+        isCreated: false,
+        threshold: 0,
+        timeLock: 0,
+        transactionIndex: 0n,
+        staleTransactionIndex: 0n,
+        rentCollector: null,
+        members: []
+      }
+    }
+
+    const data = getBase64Encoder().encode(account.data[0])
+
+    if (account.owner !== this._programId || !this._hasDiscriminator(data, MULTISIG_DISCRIMINATOR)) {
+      throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
+    }
+
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    const addressDecoder = getBase58Decoder()
+
+    const hasRentCollector = data[MULTISIG_RENT_COLLECTOR_OFFSET] === 1
+
+    let offset = MULTISIG_RENT_COLLECTOR_OFFSET + OPTION_TAG_SIZE
+    const rentCollector = hasRentCollector
+      ? addressDecoder.decode(data.subarray(offset, offset + ADDRESS_SIZE))
+      : null
+
+    if (hasRentCollector) {
+      offset += ADDRESS_SIZE
+    }
+
+    offset += BUMP_SIZE
+
+    const count = view.getUint32(offset, true)
+    offset += VEC_PREFIX_SIZE
+
+    const members = []
+
+    for (let i = 0; i < count; i++) {
+      members.push({
+        address: addressDecoder.decode(data.subarray(offset, offset + ADDRESS_SIZE)),
+        mask: data[offset + ADDRESS_SIZE]
+      })
+      offset += MEMBER_SIZE
+    }
+
+    return {
+      address: multisigPda,
+      isCreated: true,
+      threshold: view.getUint16(MULTISIG_THRESHOLD_OFFSET, true),
+      timeLock: view.getUint32(MULTISIG_TIME_LOCK_OFFSET, true),
+      transactionIndex: view.getBigUint64(MULTISIG_TRANSACTION_INDEX_OFFSET, true),
+      staleTransactionIndex: view.getBigUint64(MULTISIG_STALE_TRANSACTION_INDEX_OFFSET, true),
+      rentCollector,
+      members
+    }
+  }
+
+  /** @private */
+  _decodeProposalAccount (proposalPda, account) {
+    const absent = {
+      address: proposalPda,
+      exists: false,
+      status: -1,
+      statusName: null,
+      approved: [],
+      rejected: [],
+      cancelled: []
+    }
+
+    if (!account) {
+      return absent
+    }
+
+    const data = getBase64Encoder().encode(account.data[0])
+
+    if (account.owner !== this._programId || !this._hasDiscriminator(data, PROPOSAL_DISCRIMINATOR)) {
+      return absent
+    }
+
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    const addressDecoder = getBase58Decoder()
+    const status = data[PROPOSAL_STATUS_OFFSET]
+
+    const statusSize = status === PROPOSAL_STATUS_EXECUTING
+      ? ENUM_TAG_SIZE
+      : ENUM_TAG_SIZE + TIMESTAMP_SIZE
+
+    let offset = PROPOSAL_STATUS_OFFSET + statusSize + BUMP_SIZE
+
+    const readVoters = () => {
+      const count = view.getUint32(offset, true)
+      offset += VEC_PREFIX_SIZE
+
+      const voters = []
+
+      for (let i = 0; i < count; i++) {
+        voters.push(addressDecoder.decode(data.subarray(offset, offset + ADDRESS_SIZE)))
+        offset += ADDRESS_SIZE
+      }
+
+      return voters
+    }
+
+    return {
+      address: proposalPda,
+      exists: true,
+      status,
+      statusName: PROPOSAL_STATUS_NAMES[status] ?? `in an unknown status (${status})`,
+      approved: readVoters(),
+      rejected: readVoters(),
+      cancelled: readVoters()
+    }
   }
 
   /** @private */

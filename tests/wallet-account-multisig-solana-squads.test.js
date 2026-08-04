@@ -35,6 +35,7 @@ const OTHER_MEMBER = '2JvLzXomThTBMSj2YQY3wE21kiaSpwGyJ17nm9xiLMsE'
 const THIRD_MEMBER = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 
 const MULTISIG_DISCRIMINATOR = [224, 116, 121, 186, 68, 161, 79, 236]
+const PROPOSAL_DISCRIMINATOR = [26, 94, 189, 187, 116, 136, 53, 33]
 
 // Program-derived, so identical on every cluster.
 const PROGRAM_CONFIG_PDA = 'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr'
@@ -47,13 +48,18 @@ const PROGRAM_CONFIG_PDA = 'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr'
  *   to report the multisig as absent.
  * @returns {Function} A `getAccountInfo` mock.
  */
-function multisigAccountValue (members, { threshold = 1, transactionIndex = 0n } = {}) {
+function multisigAccountValue (members, {
+  threshold = 1,
+  transactionIndex = 0n,
+  staleTransactionIndex = 0n
+} = {}) {
   const data = new Uint8Array(95 + 1 + 4 + members.length * 33)
   const view = new DataView(data.buffer)
 
   data.set(MULTISIG_DISCRIMINATOR, 0)
   view.setUint16(72, threshold, true)
   view.setBigUint64(78, transactionIndex, true)
+  view.setBigUint64(86, staleTransactionIndex, true)
 
   let offset = 96
 
@@ -72,6 +78,45 @@ function multisigAccountValue (members, { threshold = 1, transactionIndex = 0n }
     executable: false,
     lamports: 2039280n,
     space: BigInt(data.length)
+  }
+}
+
+/**
+ * Serves a `Proposal` account in the given status, holding the given votes.
+ *
+ * @param {Object} [options] - The proposal state.
+ * @param {number} [options.status=1] - The status enum tag; 1 is open for voting.
+ * @param {string[]} [options.approved] - The members who have approved.
+ * @param {string[]} [options.rejected] - The members who have rejected.
+ * @returns {Object} An account value.
+ */
+function proposalAccountValue ({ status = 1, approved = [], rejected = [] } = {}) {
+  const voters = [approved, rejected, []]
+  const data = new Uint8Array(58 + voters.reduce((total, list) => total + 4 + list.length * 32, 0))
+  const view = new DataView(data.buffer)
+
+  data.set(PROPOSAL_DISCRIMINATOR, 0)
+  data[48] = status
+
+  // The status carries an i64 timestamp for every tag but Executing, then the bump.
+  let offset = status === 4 ? 50 : 58
+
+  for (const list of voters) {
+    view.setUint32(offset, list.length, true)
+    offset += 4
+
+    for (const voter of list) {
+      data.set(getBase58Encoder().encode(voter), offset)
+      offset += 32
+    }
+  }
+
+  return {
+    owner: SQUADS_PROGRAM_ADDRESS,
+    data: [getBase64Decoder().decode(data.subarray(0, offset)), 'base64'],
+    executable: false,
+    lamports: 2039280n,
+    space: BigInt(offset)
   }
 }
 
@@ -117,7 +162,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
   it('throws NotImplementedError for unimplemented write methods', async () => {
     // Only methods that still throw before touching the network belong here.
-    await expect(account.approveTx(1)).rejects.toThrow()
     await expect(account.executeTx(1)).rejects.toThrow()
     await expect(account.addOwner(TEST_SIGNER)).rejects.toThrow()
   })
@@ -129,7 +173,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
   })
 
   it('separates unsupported message proposals from unimplemented writes', async () => {
-    await expect(account.approveTx(1)).rejects.not.toThrow(NotSupportedError)
+    await expect(account.executeTx(1)).rejects.not.toThrow(NotSupportedError)
   })
 
   describe('deploy', () => {
@@ -475,6 +519,191 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const { account, sendTransaction } = await proposingAccount()
 
       await expect(account.sendTransaction(TX, { autoExecute: true })).rejects.toThrow()
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('approveTx', () => {
+    /**
+     * Builds a voting account with a stubbed RPC and send.
+     *
+     * @param {Object} [options] - The scenario.
+     * @param {number} [options.mask=7] - The signer's permission mask.
+     * @param {boolean} [options.isMember=true] - Whether the signer is a member.
+     * @param {boolean} [options.deployed=true] - Whether the multisig exists.
+     * @param {Object|null} [options.proposal] - The proposal state, or null for absent.
+     * @param {bigint} [options.staleTransactionIndex=0n] - The multisig's stale index.
+     * @returns {Promise<{ account: Object, sendTransaction: Function, getMultipleAccounts: Function }>}
+     */
+    async function votingAccount ({
+      mask = 7,
+      isMember = true,
+      deployed = true,
+      proposal = {},
+      staleTransactionIndex = 0n
+    } = {}) {
+      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
+      const account = await wallet.getAccount(0)
+
+      const members = isMember
+        ? [{ address: TEST_SIGNER, mask }, { address: OTHER_MEMBER, mask: 7 }]
+        : [{ address: OTHER_MEMBER, mask: 7 }]
+
+      const getMultipleAccounts = jest.fn(() => ({
+        send: async () => ({
+          value: [
+            deployed
+              ? multisigAccountValue(members, { threshold: 2, transactionIndex: 7n, staleTransactionIndex })
+              : null,
+            proposal && proposalAccountValue(proposal)
+          ]
+        })
+      }))
+      const sendTransaction = jest.fn(async () => ({ hash: 'deadbeef', fee: 5000n }))
+
+      account._rpc = { getMultipleAccounts }
+      account._signerAccount.sendTransaction = sendTransaction
+
+      return { account, sendTransaction, getMultipleAccounts }
+    }
+
+    it('sends a single proposalApprove instruction', async () => {
+      const { account, sendTransaction } = await votingAccount()
+
+      await account.approveTx(3)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+
+      expect(instructions).toHaveLength(1)
+      expect(Array.from(instructions[0].data))
+        .toEqual([144, 37, 164, 136, 188, 216, 42, 248, 0])
+      expect(instructions[0].accounts.map((a) => a.role)).toEqual([0, 3, 1])
+    })
+
+    it('addresses the proposal at the given index', async () => {
+      const { account, sendTransaction, getMultipleAccounts } = await votingAccount()
+
+      await account.approveTx(3)
+
+      const [[queried]] = getMultipleAccounts.mock.calls[0]
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+      const expected = await account._getProposalPda(TEST_MULTISIG_PDA, 3n)
+
+      expect(queried).toBe(TEST_MULTISIG_PDA)
+      expect(instructions[0].accounts[2].address).toBe(expected)
+    })
+
+    it('carries a memo when one is given', async () => {
+      const { account, sendTransaction } = await votingAccount()
+
+      await account.approveTx(3, 'ok')
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+
+      expect(Array.from(instructions[0].data.slice(8)))
+        .toEqual([1, 2, 0, 0, 0, 111, 107])
+    })
+
+    it('counts the approval it is about to add', async () => {
+      const { account } = await votingAccount({ proposal: { approved: [OTHER_MEMBER] } })
+
+      expect(await account.approveTx(3)).toEqual({
+        proposalId: '3',
+        hash: 'deadbeef',
+        fee: 5000n,
+        confirmations: 2,
+        threshold: 2,
+        executed: false
+      })
+    })
+
+    it('reads the multisig and the proposal in one request', async () => {
+      const { account, getMultipleAccounts } = await votingAccount()
+
+      await account.approveTx(3)
+
+      expect(getMultipleAccounts).toHaveBeenCalledTimes(1)
+    })
+
+    it('lets a member switch a rejection to an approval', async () => {
+      const { account, sendTransaction } = await votingAccount({
+        proposal: { rejected: [TEST_SIGNER] }
+      })
+
+      await expect(account.approveTx(3)).resolves.toMatchObject({ confirmations: 1 })
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+    })
+
+    it('refuses a second approval from the same member', async () => {
+      const { account, sendTransaction } = await votingAccount({
+        proposal: { approved: [TEST_SIGNER] }
+      })
+
+      await expect(account.approveTx(3)).rejects.toThrow(/already approved/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws when the signer cannot vote', async () => {
+      // Mask 5 is propose plus execute: a member, but unable to vote.
+      const { account, sendTransaction } = await votingAccount({ mask: 5 })
+
+      await expect(account.approveTx(3)).rejects.toThrow(/permission to vote/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws when the signer is not a member', async () => {
+      const { account } = await votingAccount({ isMember: false })
+
+      await expect(account.approveTx(3)).rejects.toThrow(/not a member/)
+    })
+
+    it('throws when the multisig does not exist', async () => {
+      const { account } = await votingAccount({ deployed: false })
+
+      await expect(account.approveTx(3)).rejects.toThrow(/does not exist/)
+    })
+
+    it('throws when the proposal does not exist', async () => {
+      const { account } = await votingAccount({ proposal: null })
+
+      await expect(account.approveTx(3)).rejects.toThrow(/no proposal at index 3/)
+    })
+
+    it.each([
+      ['a draft', 0, /is a draft/],
+      ['rejected', 2, /is rejected/],
+      ['approved', 3, /is approved/],
+      ['executing', 4, /is executing/],
+      ['executed', 5, /is executed/],
+      ['cancelled', 6, /is cancelled/]
+    ])('names the status when the proposal is %s', async (_label, status, message) => {
+      const { account, sendTransaction } = await votingAccount({ proposal: { status } })
+
+      await expect(account.approveTx(3)).rejects.toThrow(message)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws when the proposal has gone stale', async () => {
+      const { account, sendTransaction } = await votingAccount({ staleTransactionIndex: 3n })
+
+      await expect(account.approveTx(3)).rejects.toThrow(/invalidated/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws on an invalid proposal id before any RPC call', async () => {
+      const { account, getMultipleAccounts } = await votingAccount()
+
+      await expect(account.approveTx(-1)).rejects.toThrow(/Invalid proposal id/)
+      expect(getMultipleAccounts).not.toHaveBeenCalled()
+    })
+
+    it('throws on a non-string memo', async () => {
+      const { account, sendTransaction } = await votingAccount()
+
+      await expect(account.approveTx(3, 42)).rejects.toThrow(/must be a string/)
       expect(sendTransaction).not.toHaveBeenCalled()
     })
   })

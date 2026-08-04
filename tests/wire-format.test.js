@@ -53,6 +53,28 @@ describe('wire format', () => {
     account = await wallet.getAccount(0)
   })
 
+  describe('proposalApprove instruction data', () => {
+    const DISCRIMINATOR = [144, 37, 164, 136, 188, 216, 42, 248]
+
+    it.each([
+      ['no memo', undefined, 9],
+      ['an empty memo', '', 13],
+      ['a short memo', 'ok', 15],
+      ['a longer memo', 'looks good to me', 29],
+      ['a multi-byte memo', 'schön 👍', 24]
+    ])('matches the SDK with %s', (_label, memo, size) => {
+      const [bytes] = generated.proposalApproveStruct.serialize({
+        instructionDiscriminator: generated.proposalApproveInstructionDiscriminator,
+        args: { memo: memo ?? null }
+      })
+
+      const mine = account._encodeProposalVoteData(DISCRIMINATOR, memo)
+
+      expect(mine).toHaveLength(size)
+      expect(Array.from(mine)).toEqual(Array.from(bytes))
+    })
+  })
+
   describe('multisigCreateV2 instruction data', () => {
     /**
      * Serializes the create args with the Squads SDK.

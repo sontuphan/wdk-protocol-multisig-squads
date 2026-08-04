@@ -393,6 +393,33 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
         }>;
     }>;
     /**
+     * Reads the multisig and one of its proposals in a single request.
+     *
+     * Every precondition on voting and execution spans both accounts — the member set and
+     * the stale index live on the multisig, the status and vote lists on the proposal — so
+     * they are read together to keep them from disagreeing.
+     *
+     * @protected
+     * @param {bigint} index - The proposal (transaction index) id.
+     * @returns {Promise<{ multisig: Awaited<ReturnType<WalletAccountReadOnlyMultisigSolanaSquads['_getMultisigAccount']>>, proposal: { address: Address, exists: boolean, status: number, statusName: string | null, approved: string[], rejected: string[], cancelled: string[] } }>}
+     *   The decoded accounts. `proposal.exists` is false when no proposal has been created
+     *   at that index, in which case its other fields are placeholders.
+     * @throws {Error} If the multisig address holds a non-Squads account, or if the RPC
+     *   request fails.
+     */
+    protected _getMultisigAndProposal(index: bigint): Promise<{
+        multisig: Awaited<ReturnType<WalletAccountReadOnlyMultisigSolanaSquads["_getMultisigAccount"]>>;
+        proposal: {
+            address: Address;
+            exists: boolean;
+            status: number;
+            statusName: string | null;
+            approved: string[];
+            rejected: string[];
+            cancelled: string[];
+        };
+    }>;
+    /**
      * Reads the Squads program config account.
      *
      * @protected
@@ -425,6 +452,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     private _getTransactionPda;
     /** @private */
     private _getProposalPda;
+    /** @private */
+    private _decodeMultisigAccount;
+    /** @private */
+    private _decodeProposalAccount;
     /** @private */
     private _toProposal;
     /** @private */
