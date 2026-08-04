@@ -126,11 +126,30 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /**
    * Validates that the signer is a member of the multisig.
    *
+   * Checks membership only — not the permission a given operation requires.
+   *
    * @returns {Promise<void>}
-   * @throws {Error} If the signer is not a member.
+   * @throws {Error} If there is no signer, the multisig does not exist, or the signer is
+   *   not one of its members.
    */
   async validateSignerIsOwner () {
-    throw new NotImplementedError('validateSignerIsOwner()')
+    const signerAddress = await this.getSignerAddress()
+
+    if (!signerAddress) {
+      throw new Error('No signer is associated with this account.')
+    }
+
+    const { address: multisigPda, owners, isCreated } = await this.getMultisigInfo()
+
+    if (!isCreated) {
+      throw new Error(`The multisig account ${multisigPda} does not exist.`)
+    }
+
+    if (!owners.includes(signerAddress)) {
+      throw new Error(
+        `The signer ${signerAddress} is not a member of the multisig ${multisigPda}.`
+      )
+    }
   }
 
   /**

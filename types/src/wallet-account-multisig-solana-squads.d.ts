@@ -70,8 +70,11 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /**
      * Validates that the signer is a member of the multisig.
      *
+     * Checks membership only — not the permission a given operation requires.
+     *
      * @returns {Promise<void>}
-     * @throws {Error} If the signer is not a member.
+     * @throws {Error} If there is no signer, the multisig does not exist, or the signer is
+     *   not one of its members.
      */
     validateSignerIsOwner(): Promise<void>;
     /**
