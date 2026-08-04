@@ -36,6 +36,10 @@ const THIRD_MEMBER = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 
 const MULTISIG_DISCRIMINATOR = [224, 116, 121, 186, 68, 161, 79, 236]
 const PROPOSAL_DISCRIMINATOR = [26, 94, 189, 187, 116, 136, 53, 33]
+const VAULT_TRANSACTION_DISCRIMINATOR = [168, 250, 162, 100, 81, 14, 162, 207]
+const CONFIG_TRANSACTION_DISCRIMINATOR = [94, 8, 4, 35, 113, 139, 139, 112]
+const BATCH_DISCRIMINATOR = [156, 194, 70, 44, 22, 88, 137, 44]
+const SYSTEM_PROGRAM = '11111111111111111111111111111111'
 
 // Program-derived, so identical on every cluster.
 const PROGRAM_CONFIG_PDA = 'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr'
@@ -51,13 +55,15 @@ const PROGRAM_CONFIG_PDA = 'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr'
 function multisigAccountValue (members, {
   threshold = 1,
   transactionIndex = 0n,
-  staleTransactionIndex = 0n
+  staleTransactionIndex = 0n,
+  timeLock = 0
 } = {}) {
   const data = new Uint8Array(95 + 1 + 4 + members.length * 33)
   const view = new DataView(data.buffer)
 
   data.set(MULTISIG_DISCRIMINATOR, 0)
   view.setUint16(72, threshold, true)
+  view.setUint32(74, timeLock, true)
   view.setBigUint64(78, transactionIndex, true)
   view.setBigUint64(86, staleTransactionIndex, true)
 
@@ -90,13 +96,17 @@ function multisigAccountValue (members, {
  * @param {string[]} [options.rejected] - The members who have rejected.
  * @returns {Object} An account value.
  */
-function proposalAccountValue ({ status = 1, approved = [], rejected = [] } = {}) {
+function proposalAccountValue ({ status = 1, approved = [], rejected = [], timestamp = 0n } = {}) {
   const voters = [approved, rejected, []]
   const data = new Uint8Array(58 + voters.reduce((total, list) => total + 4 + list.length * 32, 0))
   const view = new DataView(data.buffer)
 
   data.set(PROPOSAL_DISCRIMINATOR, 0)
   data[48] = status
+
+  if (status !== 4) {
+    view.setBigInt64(49, timestamp, true)
+  }
 
   // The status carries an i64 timestamp for every tag but Executing, then the bump.
   let offset = status === 4 ? 50 : 58
@@ -117,6 +127,131 @@ function proposalAccountValue ({ status = 1, approved = [], rejected = [] } = {}
     executable: false,
     lamports: 2039280n,
     space: BigInt(offset)
+  }
+}
+
+/**
+ * Serves a `VaultTransaction` account holding a message over the given keys.
+ *
+ * @param {Object} [options] - The transaction state.
+ * @param {string[]} [options.accountKeys] - The message's account keys.
+ * @param {number} [options.vaultIndex=0] - The vault the transaction belongs to.
+ * @param {number} [options.ephemeralSignerCount=0] - How many ephemeral signers it needs.
+ * @returns {Object} An account value.
+ */
+function vaultTransactionAccountValue ({
+  accountKeys = [TEST_SIGNER, OTHER_MEMBER, SYSTEM_PROGRAM],
+  vaultIndex = 0,
+  ephemeralSignerCount = 0
+} = {}) {
+  // 87 fixed fields, the ephemeral bumps, then the message: 3 header bytes, the key vec,
+  // and empty instruction and lookup vecs.
+  const size = 87 + ephemeralSignerCount + 3 + 4 + accountKeys.length * 32 + 4 + 4
+  const data = new Uint8Array(size)
+  const view = new DataView(data.buffer)
+
+  data.set(VAULT_TRANSACTION_DISCRIMINATOR, 0)
+  data[81] = vaultIndex
+  view.setUint32(83, ephemeralSignerCount, true)
+
+  let offset = 87 + ephemeralSignerCount
+
+  // One writable signer (the vault), then one writable non-signer, then the program.
+  data[offset] = 1
+  data[offset + 1] = 1
+  data[offset + 2] = 1
+  offset += 3
+
+  view.setUint32(offset, accountKeys.length, true)
+  offset += 4
+
+  for (const key of accountKeys) {
+    data.set(getBase58Encoder().encode(key), offset)
+    offset += 32
+  }
+
+  // Zero instructions, zero lookups.
+  return accountValue(data)
+}
+
+/**
+ * Serves a `ConfigTransaction` account holding the given actions.
+ *
+ * `SetRentCollectorSome` writes the `Some` form of `SetRentCollector`, whose body is 32
+ * bytes longer than the `None` form.
+ *
+ * @param {string[]} kinds - The action kinds, by name.
+ * @returns {Object} An account value.
+ */
+function configTransactionAccountValue (kinds) {
+  const TAGS = [
+    'AddMember',
+    'RemoveMember',
+    'ChangeThreshold',
+    'SetTimeLock',
+    'AddSpendingLimit',
+    'RemoveSpendingLimit',
+    'SetRentCollector'
+  ]
+  const BODIES = {
+    AddMember: 33,
+    RemoveMember: 32,
+    ChangeThreshold: 2,
+    SetTimeLock: 4,
+    AddSpendingLimit: 74 + 4 + 4,
+    RemoveSpendingLimit: 32,
+    SetRentCollector: 1,
+    SetRentCollectorSome: 33
+  }
+  const size = 85 + kinds.reduce((total, kind) => total + 1 + BODIES[kind], 0)
+  const data = new Uint8Array(size)
+  const view = new DataView(data.buffer)
+
+  data.set(CONFIG_TRANSACTION_DISCRIMINATOR, 0)
+  view.setUint32(81, kinds.length, true)
+
+  let offset = 85
+
+  for (const kind of kinds) {
+    data[offset] = TAGS.indexOf(kind.replace(/Some$/, ''))
+
+    if (kind === 'SetRentCollectorSome') {
+      data[offset + 1] = 1
+    }
+
+    offset += 1 + BODIES[kind]
+  }
+
+  return accountValue(data)
+}
+
+/**
+ * Serves the clock sysvar reporting the given Unix timestamp.
+ *
+ * @param {bigint} now - The timestamp.
+ * @returns {Object} An account value.
+ */
+function clockAccountValue (now) {
+  const data = new Uint8Array(40)
+
+  new DataView(data.buffer).setBigInt64(32, now, true)
+
+  return { ...accountValue(data), owner: 'Sysvar1111111111111111111111111111111111111' }
+}
+
+/**
+ * Wraps raw account data in the RPC's account shape.
+ *
+ * @param {Uint8Array} data - The account data.
+ * @returns {Object} An account value.
+ */
+function accountValue (data) {
+  return {
+    owner: SQUADS_PROGRAM_ADDRESS,
+    data: [getBase64Decoder().decode(data), 'base64'],
+    executable: false,
+    lamports: 2039280n,
+    space: BigInt(data.length)
   }
 }
 
@@ -162,8 +297,8 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
   it('throws NotImplementedError for unimplemented write methods', async () => {
     // Only methods that still throw before touching the network belong here.
-    await expect(account.executeTx(1)).rejects.toThrow()
     await expect(account.addOwner(TEST_SIGNER)).rejects.toThrow()
+    await expect(account.updateOwners([TEST_SIGNER], 1)).rejects.toThrow()
   })
 
   it('throws NotSupportedError for message proposals', async () => {
@@ -173,7 +308,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
   })
 
   it('separates unsupported message proposals from unimplemented writes', async () => {
-    await expect(account.executeTx(1)).rejects.not.toThrow(NotSupportedError)
+    await expect(account.addOwner(TEST_SIGNER)).rejects.not.toThrow(NotSupportedError)
   })
 
   describe('deploy', () => {
@@ -705,6 +840,336 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.approveTx(3, 42)).rejects.toThrow(/must be a string/)
       expect(sendTransaction).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('proposal decoding', () => {
+    it('reads the status timestamp every status but Executing carries', async () => {
+      const decoded = account._decodeProposalAccount(
+        TEST_MULTISIG_PDA,
+        proposalAccountValue({ status: 3, timestamp: 1700000000n })
+      )
+
+      expect(decoded.status).toBe(3)
+      expect(decoded.statusTimestamp).toBe(1700000000n)
+    })
+
+    it('reports no timestamp for Executing, whose variant carries none', async () => {
+      // Reading one anyway would return the first bytes of the approved-voter list.
+      const decoded = account._decodeProposalAccount(
+        TEST_MULTISIG_PDA,
+        proposalAccountValue({ status: 4, approved: [TEST_SIGNER, OTHER_MEMBER] })
+      )
+
+      expect(decoded.statusTimestamp).toBeNull()
+      expect(decoded.approved).toEqual([TEST_SIGNER, OTHER_MEMBER])
+    })
+  })
+
+  describe('executeTx', () => {
+    /**
+     * Builds an executing account with a stubbed RPC and send.
+     *
+     * @param {Object} [options] - The scenario.
+     * @param {number} [options.mask=7] - The signer's permission mask.
+     * @param {Object|null} [options.proposal] - The proposal state, or null for absent.
+     * @param {Object|null} [options.transaction] - The backing transaction account.
+     * @param {bigint} [options.staleTransactionIndex=0n] - The multisig's stale index.
+     * @param {number} [options.timeLock=0] - The multisig's time lock, in seconds.
+     * @param {bigint} [options.now=0n] - The cluster's current timestamp.
+     * @param {boolean} [options.deployed=true] - Whether the multisig exists.
+     * @returns {Promise<{ account: Object, sendTransaction: Function, getMultipleAccounts: Function }>}
+     */
+    async function executingAccount ({
+      mask = 7,
+      proposal = { status: 3 },
+      transaction = vaultTransactionAccountValue(),
+      staleTransactionIndex = 0n,
+      timeLock = 0,
+      now = 0n,
+      deployed = true
+    } = {}) {
+      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
+      const account = await wallet.getAccount(0)
+
+      const getMultipleAccounts = jest.fn(() => ({
+        send: async () => ({
+          value: [
+            deployed
+              ? multisigAccountValue([{ address: TEST_SIGNER, mask }], {
+                threshold: 1, transactionIndex: 7n, staleTransactionIndex, timeLock
+              })
+              : null,
+            proposal && proposalAccountValue(proposal),
+            transaction,
+            clockAccountValue(now)
+          ]
+        })
+      }))
+      const sendTransaction = jest.fn(async () => ({ hash: 'c0ffee', fee: 5000n }))
+
+      account._rpc = { getMultipleAccounts }
+      account._signerAccount.sendTransaction = sendTransaction
+
+      return { account, sendTransaction, getMultipleAccounts }
+    }
+
+    it('sends a single vaultTransactionExecute instruction', async () => {
+      const { account, sendTransaction } = await executingAccount()
+
+      await account.executeTx(3)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+
+      expect(instructions).toHaveLength(1)
+      expect(Array.from(instructions[0].data))
+        .toEqual([194, 8, 161, 87, 153, 164, 25, 171])
+    })
+
+    it('puts the four fixed accounts first, with the multisig read-only', async () => {
+      const { account, sendTransaction } = await executingAccount()
+
+      await account.executeTx(3)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+      const roles = instructions[0].accounts.slice(0, 4).map((a) => a.role)
+
+      // multisig readonly, proposal writable, transaction readonly, member readonly signer.
+      expect(roles).toEqual([0, 1, 0, 2])
+      expect(instructions[0].accounts[0].address).toBe(TEST_MULTISIG_PDA)
+    })
+
+    it('appends the message accounts and de-signs the vault', async () => {
+      const { account, sendTransaction } = await executingAccount({
+        transaction: vaultTransactionAccountValue({
+          accountKeys: [TEST_SIGNER, OTHER_MEMBER, SYSTEM_PROGRAM]
+        })
+      })
+
+      await account.executeTx(3)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+      const remaining = instructions[0].accounts.slice(4)
+
+      // The first key is the message's writable signer, and it is not TEST_SIGNER's vault,
+      // so it keeps its signer flag; the second is a writable non-signer; the third readonly.
+      expect(remaining.map((a) => a.address)).toEqual([TEST_SIGNER, OTHER_MEMBER, SYSTEM_PROGRAM])
+      expect(remaining.map((a) => a.role)).toEqual([3, 1, 0])
+    })
+
+    it('strips the signer flag from the vault itself', async () => {
+      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: TEST_RPC_URL, multisigPda: TEST_MULTISIG_PDA
+      })
+      const probe = await wallet.getAccount(0)
+      const vault = await probe.getVaultAddress()
+
+      const { account, sendTransaction } = await executingAccount({
+        transaction: vaultTransactionAccountValue({
+          accountKeys: [vault, OTHER_MEMBER, SYSTEM_PROGRAM]
+        })
+      })
+
+      await account.executeTx(3)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+      const vaultMeta = instructions[0].accounts.slice(4)[0]
+
+      expect(vaultMeta.address).toBe(vault)
+      // Writable, but not a signer: the program signs for it.
+      expect(vaultMeta.role).toBe(1)
+    })
+
+    it('returns only the hash and the fee', async () => {
+      const { account } = await executingAccount()
+
+      expect(await account.executeTx(3)).toEqual({ hash: 'c0ffee', fee: 5000n })
+    })
+
+    it('reads the multisig, proposal, transaction and clock in one request', async () => {
+      const { account, getMultipleAccounts } = await executingAccount()
+
+      await account.executeTx(3)
+
+      expect(getMultipleAccounts).toHaveBeenCalledTimes(1)
+      expect(getMultipleAccounts.mock.calls[0][0]).toHaveLength(4)
+    })
+
+    it('executes a stale but approved vault proposal', async () => {
+      const { account, sendTransaction } = await executingAccount({ staleTransactionIndex: 5n })
+
+      await expect(account.executeTx(3)).resolves.toEqual({ hash: 'c0ffee', fee: 5000n })
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+    })
+
+    it('throws when the signer cannot execute', async () => {
+      // Mask 3 is propose plus vote: a member, but unable to execute.
+      const { account, sendTransaction } = await executingAccount({ mask: 3 })
+
+      await expect(account.executeTx(3)).rejects.toThrow(/permission to execute/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['open for voting', 1],
+      ['a draft', 0],
+      ['rejected', 2],
+      ['executed', 5]
+    ])('throws when the proposal is %s', async (_label, status) => {
+      const { account, sendTransaction } = await executingAccount({ proposal: { status } })
+
+      await expect(account.executeTx(3)).rejects.toThrow(/rather than approved/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws while the time lock has not elapsed', async () => {
+      const { account, sendTransaction } = await executingAccount({
+        timeLock: 3600,
+        proposal: { status: 3, timestamp: 1000n },
+        now: 2800n
+      })
+
+      await expect(account.executeTx(3)).rejects.toThrow(/time lock for another 1800 seconds/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('executes once the time lock has elapsed', async () => {
+      const { account } = await executingAccount({
+        timeLock: 3600,
+        proposal: { status: 3, timestamp: 1000n },
+        now: 4600n
+      })
+
+      await expect(account.executeTx(3)).resolves.toEqual({ hash: 'c0ffee', fee: 5000n })
+    })
+
+    it('throws when the proposal does not exist', async () => {
+      const { account } = await executingAccount({ proposal: null })
+
+      await expect(account.executeTx(3)).rejects.toThrow(/no proposal at index 3/)
+    })
+
+    it('throws when the multisig does not exist', async () => {
+      const { account } = await executingAccount({ deployed: false })
+
+      await expect(account.executeTx(3)).rejects.toThrow(/does not exist/)
+    })
+
+    it('refuses a message needing ephemeral signers', async () => {
+      const { account, sendTransaction } = await executingAccount({
+        transaction: vaultTransactionAccountValue({ ephemeralSignerCount: 2 })
+      })
+
+      await expect(account.executeTx(3)).rejects.toThrow(/ephemeral signers/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('refuses a batch', async () => {
+      const data = new Uint8Array(100)
+      data.set(BATCH_DISCRIMINATOR, 0)
+
+      const { account, sendTransaction } = await executingAccount({ transaction: accountValue(data) })
+
+      await expect(account.executeTx(3)).rejects.toThrow(/batch/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('refuses an unrecognized transaction account', async () => {
+      const { account, sendTransaction } = await executingAccount({
+        transaction: accountValue(new Uint8Array(100))
+      })
+
+      await expect(account.executeTx(3)).rejects.toThrow(/unrecognized kind/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws on an invalid proposal id before any RPC call', async () => {
+      const { account, getMultipleAccounts } = await executingAccount()
+
+      await expect(account.executeTx(-1)).rejects.toThrow(/Invalid proposal id/)
+      expect(getMultipleAccounts).not.toHaveBeenCalled()
+    })
+
+    describe('config proposals', () => {
+      it('sends configTransactionExecute with the multisig writable', async () => {
+        const { account, sendTransaction } = await executingAccount({
+          transaction: configTransactionAccountValue(['ChangeThreshold'])
+        })
+
+        await account.executeTx(3)
+
+        const [{ instructions }] = sendTransaction.mock.calls[0]
+
+        expect(Array.from(instructions[0].data))
+          .toEqual([114, 146, 244, 189, 252, 140, 36, 40])
+        // multisig writable, member readonly signer, proposal writable, transaction
+        // readonly, rent payer writable signer, system program readonly.
+        expect(instructions[0].accounts.map((a) => a.role)).toEqual([1, 2, 1, 0, 3, 0])
+      })
+
+      it('pays rent from the executing member', async () => {
+        const { account, sendTransaction } = await executingAccount({
+          transaction: configTransactionAccountValue(['AddMember'])
+        })
+
+        await account.executeTx(3)
+
+        const [{ instructions }] = sendTransaction.mock.calls[0]
+        const { accounts } = instructions[0]
+
+        expect(accounts[4].address).toBe(TEST_SIGNER)
+        expect(accounts[5].address).toBe(SYSTEM_PROGRAM)
+      })
+
+      it('refuses a stale config proposal even when approved', async () => {
+        const { account, sendTransaction } = await executingAccount({
+          transaction: configTransactionAccountValue(['AddMember']),
+          staleTransactionIndex: 5n
+        })
+
+        await expect(account.executeTx(3)).rejects.toThrow(/invalidated/)
+        expect(sendTransaction).not.toHaveBeenCalled()
+      })
+
+      it.each([
+        ['AddSpendingLimit'],
+        ['RemoveSpendingLimit']
+      ])('refuses a %s action', async (kind) => {
+        const { account, sendTransaction } = await executingAccount({
+          transaction: configTransactionAccountValue(['AddMember', kind])
+        })
+
+        await expect(account.executeTx(3)).rejects.toThrow(new RegExp(kind))
+        expect(sendTransaction).not.toHaveBeenCalled()
+      })
+
+      it('walks past every action body to find a later one', async () => {
+        const { account, sendTransaction } = await executingAccount({
+          transaction: configTransactionAccountValue([
+            'AddMember', 'RemoveMember', 'ChangeThreshold', 'SetTimeLock',
+            'SetRentCollector', 'SetRentCollectorSome', 'RemoveSpendingLimit'
+          ])
+        })
+
+        // The spending-limit action is last, so reaching it proves every prior body was
+        // sized correctly.
+        await expect(account.executeTx(3)).rejects.toThrow(/RemoveSpendingLimit/)
+        expect(sendTransaction).not.toHaveBeenCalled()
+      })
+
+      it('throws on an unknown action tag rather than skipping it', async () => {
+        const data = new Uint8Array(100)
+        data.set(CONFIG_TRANSACTION_DISCRIMINATOR, 0)
+        new DataView(data.buffer).setUint32(81, 1, true)
+        data[85] = 99
+
+        const { account } = await executingAccount({ transaction: accountValue(data) })
+
+        await expect(account.executeTx(3)).rejects.toThrow(/Unknown Squads config action 99/)
+      })
     })
   })
 

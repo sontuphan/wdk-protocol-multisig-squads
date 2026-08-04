@@ -18,13 +18,16 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
 
 import { WalletAccountSolana } from '@tetherto/wdk-wallet-solana'
 
-import WalletAccountReadOnlyMultisigSolanaSquads from './wallet-account-read-only-multisig-solana-squads.js'
+import WalletAccountReadOnlyMultisigSolanaSquads, {
+  TRANSACTION_KIND_CONFIG,
+  TRANSACTION_KIND_VAULT
+} from './wallet-account-read-only-multisig-solana-squads.js'
 
 import { NotSupportedError } from './errors.js'
 
 import { address, getAddressEncoder, getProgramDerivedAddress } from '@solana/addresses'
 
-import { getBase58Encoder } from '@solana/codecs'
+import { getBase58Decoder, getBase58Encoder, getBase64Encoder } from '@solana/codecs'
 
 import { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes } from '@solana/signers'
 
@@ -67,13 +70,21 @@ const SEED_MULTISIG = 'multisig'
 const VAULT_TRANSACTION_CREATE_DISCRIMINATOR = [48, 250, 78, 168, 208, 226, 218, 211]
 const PROPOSAL_CREATE_DISCRIMINATOR = [220, 60, 73, 224, 30, 108, 79, 159]
 const PROPOSAL_APPROVE_DISCRIMINATOR = [144, 37, 164, 136, 188, 216, 42, 248]
+const VAULT_TRANSACTION_EXECUTE_DISCRIMINATOR = [194, 8, 161, 87, 153, 164, 25, 171]
+const CONFIG_TRANSACTION_EXECUTE_DISCRIMINATOR = [114, 146, 244, 189, 252, 140, 36, 40]
 
 const TOKEN_2022_PROGRAM_ADDRESS = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
+const ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS = 'AddressLookupTab1e1111111111111111111111111'
+const LOOKUP_TABLE_ADDRESSES_OFFSET = 56
 
 const PERMISSION_INITIATE = 1
 const PERMISSION_VOTE = 2
+const PERMISSION_EXECUTE = 4
 
 const PROPOSAL_STATUS_ACTIVE = 1
+const PROPOSAL_STATUS_APPROVED = 3
+
+const SPENDING_LIMIT_ACTIONS = ['AddSpendingLimit', 'RemoveSpendingLimit']
 
 const OPTION_SOME = 1
 const OPTION_TAG_SIZE = 1
@@ -509,13 +520,64 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /**
-   * Executes an approved transaction proposal.
+   * Submits an approved proposal for on-chain execution.
    *
-   * @param {number | bigint} proposalId - The proposal (transaction index) id.
-   * @returns {Promise<MultisigExecuteResult>} The execution result.
+   * The wrapped instructions run by CPI inside this one transaction, so a resolved result
+   * means all of them succeeded — there is no partial execution.
+   *
+   * Note this returns `{ hash, fee }` rather than the proposal-shaped result the propose and
+   * vote methods return, matching the interface.
+   *
+   * Rent is not reclaimed: the transaction and proposal accounts survive execution and keep
+   * holding what {@link quoteSendTransaction} quoted.
+   *
+   * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
+   * @returns {Promise<{ hash: string, fee: bigint }>} The execution transaction's result.
+   * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the signer
+   *   cannot execute, the proposal is not approved, its time lock has not elapsed, a config
+   *   proposal has been invalidated, or the RPC request fails.
+   * @throws {NotImplementedError} If the proposal is a batch, wraps a message needing
+   *   ephemeral signers, or changes a spending limit.
+   * @todo Support batches, ephemeral signers and spending-limit actions.
    */
   async executeTx (proposalId) {
-    throw new NotImplementedError('executeTx(proposalId)')
+    const index = this._toProposalIndex(proposalId)
+    const { multisig, proposal, transaction, now } =
+      await this._getMultisigProposalAndTransaction(index)
+
+    if (!multisig.isCreated) {
+      throw new Error(
+        `The multisig account ${multisig.address} does not exist. Deploy it before executing proposals.`
+      )
+    }
+
+    const signerAddress = await this.getSignerAddress()
+
+    this._requirePermission(multisig, signerAddress, PERMISSION_EXECUTE, 'execute proposals')
+
+    if (!proposal.exists) {
+      throw new Error(`The multisig ${multisig.address} has no proposal at index ${index}.`)
+    }
+
+    if (proposal.status !== PROPOSAL_STATUS_APPROVED) {
+      throw new Error(
+        `The proposal ${index} is ${proposal.statusName} rather than approved and ready to execute.`
+      )
+    }
+
+    const remaining = BigInt(multisig.timeLock) - (now - proposal.statusTimestamp)
+
+    if (remaining > 0n) {
+      throw new Error(
+        `The proposal ${index} is under a time lock for another ${remaining} seconds.`
+      )
+    }
+
+    const instruction = transaction.kind === TRANSACTION_KIND_CONFIG
+      ? this._buildConfigExecuteInstruction(multisig, proposal, transaction, signerAddress, index)
+      : await this._buildVaultExecuteInstruction(multisig, proposal, transaction, signerAddress)
+
+    return this._signerAccount.sendTransaction({ instructions: [instruction] })
   }
 
   /**
@@ -881,6 +943,171 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       ],
       data: this._encodeProposalVoteData(discriminator, memo)
     }
+  }
+
+  /** @private */
+  _buildConfigExecuteInstruction (multisig, proposal, transaction, signerAddress, index) {
+    const blocked = transaction.actions.find((action) => SPENDING_LIMIT_ACTIONS.includes(action.kind))
+
+    if (blocked) {
+      throw new NotImplementedError(
+        `executeTx(${index}) for a config proposal with a ${blocked.kind} action`
+      )
+    }
+
+    if (index <= multisig.staleTransactionIndex) {
+      throw new Error(
+        `The config proposal ${index} was invalidated by a later configuration change and can no longer be executed.`
+      )
+    }
+
+    const member = address(signerAddress)
+
+    return {
+      programAddress: this._programId,
+      accounts: [
+        { address: address(multisig.address), role: ACCOUNT_ROLE_WRITABLE },
+        { address: member, role: ACCOUNT_ROLE_READONLY_SIGNER },
+        { address: address(proposal.address), role: ACCOUNT_ROLE_WRITABLE },
+        { address: address(transaction.address), role: ACCOUNT_ROLE_READONLY },
+        { address: member, role: ACCOUNT_ROLE_WRITABLE_SIGNER },
+        { address: address(SYSTEM_PROGRAM_ADDRESS), role: ACCOUNT_ROLE_READONLY }
+      ],
+      data: Uint8Array.from(CONFIG_TRANSACTION_EXECUTE_DISCRIMINATOR)
+    }
+  }
+
+  /** @private */
+  async _buildVaultExecuteInstruction (multisig, proposal, transaction, signerAddress) {
+    if (transaction.kind !== TRANSACTION_KIND_VAULT) {
+      throw new NotImplementedError(
+        `executeTx(proposalId) for a ${transaction.kind ?? 'transaction of an unrecognized kind'}`
+      )
+    }
+
+    if (transaction.ephemeralSignerCount) {
+      throw new NotImplementedError(
+        'executeTx(proposalId) for a transaction whose message needs ephemeral signers'
+      )
+    }
+
+    const vaultPda = await this.getVaultAddress(transaction.vaultIndex)
+
+    return {
+      programAddress: this._programId,
+      accounts: [
+        { address: address(multisig.address), role: ACCOUNT_ROLE_READONLY },
+        { address: address(proposal.address), role: ACCOUNT_ROLE_WRITABLE },
+        { address: address(transaction.address), role: ACCOUNT_ROLE_READONLY },
+        { address: address(signerAddress), role: ACCOUNT_ROLE_READONLY_SIGNER },
+        ...await this._resolveExecutionAccounts(transaction.message, vaultPda)
+      ],
+      data: Uint8Array.from(VAULT_TRANSACTION_EXECUTE_DISCRIMINATOR)
+    }
+  }
+
+  /**
+   * Builds the `remaining_accounts` the program expects for a vault transaction.
+   *
+   * Three groups in a fixed order: the lookup table accounts, the message's own keys with
+   * the flags the message asked for, then the addresses those lookups resolve to. The vault
+   * is de-signed because the program signs for it.
+   *
+   * @private
+   */
+  async _resolveExecutionAccounts (message, vaultPda) {
+    const lookups = message.addressTableLookups
+    const accounts = lookups.map((lookup) => ({
+      address: address(lookup.accountKey),
+      role: ACCOUNT_ROLE_READONLY
+    }))
+
+    message.accountKeys.forEach((key, i) => {
+      const writable = this._isStaticWritableIndex(message, i)
+      const signer = i < message.numSigners && key !== vaultPda
+
+      accounts.push({ address: address(key), role: this._toAccountRole(signer, writable) })
+    })
+
+    if (!lookups.length) {
+      return accounts
+    }
+
+    const tables = await this._getLookupTableAddresses(lookups)
+
+    for (const lookup of lookups) {
+      const addresses = tables.get(lookup.accountKey)
+
+      for (const [indexes, role] of [
+        [lookup.writableIndexes, ACCOUNT_ROLE_WRITABLE],
+        [lookup.readonlyIndexes, ACCOUNT_ROLE_READONLY]
+      ]) {
+        for (const i of indexes) {
+          if (!addresses[i]) {
+            throw new Error(
+              `The address lookup table ${lookup.accountKey} holds no address at index ${i}, so the proposal cannot be executed.`
+            )
+          }
+
+          accounts.push({ address: addresses[i], role })
+        }
+      }
+    }
+
+    return accounts
+  }
+
+  /** @private */
+  async _getLookupTableAddresses (lookups) {
+    const keys = lookups.map((lookup) => address(lookup.accountKey))
+
+    const { value } = await this._rpc
+      .getMultipleAccounts(keys, { commitment: this._commitment, encoding: 'base64' })
+      .send()
+
+    const addressDecoder = getBase58Decoder()
+    const tables = new Map()
+
+    value.forEach((account, i) => {
+      if (!account || account.owner !== ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS) {
+        throw new Error(
+          `The address lookup table ${keys[i]} does not exist, so the proposal can no longer be executed.`
+        )
+      }
+
+      const data = getBase64Encoder().encode(account.data[0])
+      const addresses = []
+
+      for (let offset = LOOKUP_TABLE_ADDRESSES_OFFSET; offset < data.length; offset += ADDRESS_SIZE) {
+        addresses.push(addressDecoder.decode(data.subarray(offset, offset + ADDRESS_SIZE)))
+      }
+
+      tables.set(keys[i], addresses)
+    })
+
+    return tables
+  }
+
+  /** @private */
+  _isStaticWritableIndex (message, index) {
+    if (index < message.numWritableSigners) {
+      return true
+    }
+
+    if (index >= message.numSigners) {
+      return index - message.numSigners < message.numWritableNonSigners
+    }
+
+    return false
+  }
+
+  /** @private */
+  _toAccountRole (signer, writable) {
+    if (signer) {
+      return writable ? ACCOUNT_ROLE_WRITABLE_SIGNER : ACCOUNT_ROLE_READONLY_SIGNER
+    }
+
+    return writable ? ACCOUNT_ROLE_WRITABLE : ACCOUNT_ROLE_READONLY
   }
 
   /** @private */

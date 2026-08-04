@@ -31,16 +31,38 @@ import {
   TOKEN_PROGRAM_ADDRESS
 } from '@solana-program/token'
 
-import WalletManagerMultisigSolanaSquads from '@tetherto/wdk-protocol-multisig-squads'
+import WalletManagerMultisigSolanaSquads, {
+  SQUADS_PROGRAM_ADDRESS
+} from '@tetherto/wdk-protocol-multisig-squads'
 
 const TEST_SEED_PHRASE =
   'test walk nut penalty hip pave soap entry language right filter choice'
+
+const TEST_MULTISIG = '11111111111111111111111111111111'
 
 const OWNERS = [
   '3uXqWpwgqKVdiHAwF6Vmu4G4vdQzpR66xjPkz1G7zMKE',
   '2JvLzXomThTBMSj2YQY3wE21kiaSpwGyJ17nm9xiLMsE',
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 ]
+
+/**
+ * Converts a kit instruction to the web3.js shape the SDK helpers expect.
+ *
+ * @param {Object} instruction - The kit instruction.
+ * @returns {Object} The web3.js instruction.
+ */
+function toWeb3 (instruction) {
+  return {
+    programId: new PublicKey(instruction.programAddress),
+    keys: instruction.accounts.map((account) => ({
+      pubkey: new PublicKey(account.address),
+      isSigner: account.role === 2 || account.role === 3,
+      isWritable: account.role === 1 || account.role === 3
+    })),
+    data: Buffer.from(instruction.data)
+  }
+}
 
 describe('wire format', () => {
   let account
@@ -117,6 +139,328 @@ describe('wire format', () => {
     })
   })
 
+  describe('vault transaction execution accounts', () => {
+    // The program checks `remaining_accounts` positionally and by flag, so the only
+    // meaningful guard is a diff against the SDK's own resolver. The stored account is
+    // built with the SDK, decoded by this package, then resolved — which exercises the
+    // decoder and the resolver together.
+    const RECIPIENT = '2JvLzXomThTBMSj2YQY3wE21kiaSpwGyJ17nm9xiLMsE'
+    const MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+
+    /**
+     * Serializes a stored `VaultTransaction` holding the given message.
+     *
+     * @param {Object} message - A web3.js `TransactionMessage`.
+     * @param {string} vault - The vault address.
+     * @param {Object[]} [lookups] - Address table lookups to attach.
+     * @returns {{ account: Object, message: Object }} The account value and the stored message.
+     */
+    function storedTransaction (message, vault, lookups = []) {
+      const compiled = message.compileToV0Message(lookups.map((l) => l.account))
+      const { header, staticAccountKeys } = compiled
+
+      const stored = {
+        numSigners: header.numRequiredSignatures,
+        numWritableSigners: header.numRequiredSignatures - header.numReadonlySignedAccounts,
+        numWritableNonSigners:
+          staticAccountKeys.length - header.numRequiredSignatures - header.numReadonlyUnsignedAccounts,
+        accountKeys: staticAccountKeys,
+        instructions: compiled.compiledInstructions.map((ix) => ({
+          programIdIndex: ix.programIdIndex,
+          accountIndexes: Uint8Array.from(ix.accountKeyIndexes),
+          data: Uint8Array.from(ix.data)
+        })),
+        addressTableLookups: compiled.addressTableLookups.map((l) => ({
+          accountKey: l.accountKey,
+          writableIndexes: Uint8Array.from(l.writableIndexes),
+          readonlyIndexes: Uint8Array.from(l.readonlyIndexes)
+        }))
+      }
+
+      const data = generated.VaultTransaction.fromArgs({
+        multisig: new PublicKey(TEST_MULTISIG),
+        creator: new PublicKey(OWNERS[0]),
+        index: 1,
+        bump: 255,
+        vaultIndex: 0,
+        vaultBump: 255,
+        ephemeralSignerBumps: Uint8Array.from([]),
+        message: stored
+      }).serialize()[0]
+
+      return {
+        account: {
+          owner: SQUADS_PROGRAM_ADDRESS,
+          data: [data.toString('base64'), 'base64'],
+          executable: false,
+          lamports: 2039280n,
+          space: BigInt(data.length)
+        },
+        message: stored
+      }
+    }
+
+    /**
+     * Builds a web3.js message carrying an SPL transfer out of the vault.
+     *
+     * @param {string} vault - The vault address.
+     * @param {boolean} createAta - Whether to prepend an ATA creation.
+     * @returns {Promise<Object>} The web3.js TransactionMessage.
+     */
+    async function splMessage (vault, createAta) {
+      const mint = address(MINT)
+      const [source] = await findAssociatedTokenPda({ mint, owner: address(vault), tokenProgram: TOKEN_PROGRAM_ADDRESS })
+      const [destination] = await findAssociatedTokenPda({ mint, owner: address(RECIPIENT), tokenProgram: TOKEN_PROGRAM_ADDRESS })
+
+      const instructions = []
+
+      if (createAta) {
+        instructions.push(getCreateAssociatedTokenIdempotentInstruction({
+          ata: destination, mint, owner: address(RECIPIENT), payer: address(vault)
+        }))
+      }
+
+      instructions.push(getTransferInstruction({
+        source, destination, authority: address(vault), amount: 1000n
+      }))
+
+      return new TransactionMessage({
+        payerKey: new PublicKey(vault),
+        recentBlockhash: '11111111111111111111111111111111',
+        instructions: instructions.map(toWeb3)
+      })
+    }
+
+    /**
+     * Resolves the SDK's reference account metas for a stored message.
+     *
+     * @param {Object} stored - The stored message.
+     * @param {string} vault - The vault address.
+     * @param {Object[]} lookups - The lookup table accounts, if any.
+     * @returns {Promise<Array>} The reference metas.
+     */
+    async function reference (stored, vault, lookups) {
+      const { accountMetas } = await utils.accountsForTransactionExecute({
+        connection: null,
+        transactionPda: new PublicKey(TEST_MULTISIG),
+        vaultPda: new PublicKey(vault),
+        message: stored,
+        ephemeralSignerBumps: [],
+        addressLookupTableAccounts: lookups.map((l) => l.account)
+      })
+
+      return accountMetas.map((m) => ({
+        address: m.pubkey.toBase58(),
+        signer: m.isSigner,
+        writable: m.isWritable
+      }))
+    }
+
+    /**
+     * Flattens this package's roles into the SDK's flag shape.
+     *
+     * @param {Array} accounts - The kit account metas.
+     * @returns {Array} The comparable shape.
+     */
+    function flatten (accounts) {
+      return accounts.map(({ address: a, role }) => ({
+        address: a,
+        signer: role === 2 || role === 3,
+        writable: role === 1 || role === 3
+      }))
+    }
+
+    it.each([
+      ['a SOL transfer', null],
+      ['an SPL transfer', false],
+      ['an SPL transfer creating the recipient account', true]
+    ])('matches the SDK for %s', async (_label, createAta) => {
+      const vault = await account.getVaultAddress()
+      const message = createAta === null
+        ? new TransactionMessage({
+          payerKey: new PublicKey(vault),
+          recentBlockhash: '11111111111111111111111111111111',
+          instructions: [SystemProgram.transfer({
+            fromPubkey: new PublicKey(vault),
+            toPubkey: new PublicKey(RECIPIENT),
+            lamports: 1000
+          })]
+        })
+        : await splMessage(vault, createAta)
+
+      const { account: stored, message: storedMessage } = storedTransaction(message, vault)
+      const decoded = account._decodeTransactionAccount('11111111111111111111111111111111', stored)
+
+      expect(decoded.kind).toBe('vault')
+      expect(decoded.vaultIndex).toBe(0)
+      expect(decoded.ephemeralSignerCount).toBe(0)
+
+      const mine = flatten(await account._resolveExecutionAccounts(decoded.message, vault))
+
+      expect(mine).toEqual(await reference(storedMessage, vault, []))
+    })
+
+    it('marks the vault writable but not a signer', async () => {
+      const vault = await account.getVaultAddress()
+      const message = new TransactionMessage({
+        payerKey: new PublicKey(vault),
+        recentBlockhash: '11111111111111111111111111111111',
+        instructions: [SystemProgram.transfer({
+          fromPubkey: new PublicKey(vault),
+          toPubkey: new PublicKey(RECIPIENT),
+          lamports: 1000
+        })]
+      })
+      const { account: stored } = storedTransaction(message, vault)
+      const decoded = account._decodeTransactionAccount('11111111111111111111111111111111', stored)
+      const resolved = await account._resolveExecutionAccounts(decoded.message, vault)
+      const vaultMeta = resolved.find((a) => a.address === vault)
+
+      // Role 1 is writable non-signer. The program signs for the vault itself.
+      expect(vaultMeta.role).toBe(1)
+    })
+
+    it('decodes the message account keys the SDK stored', async () => {
+      const vault = await account.getVaultAddress()
+      const message = await splMessage(vault, true)
+      const { account: stored, message: storedMessage } = storedTransaction(message, vault)
+      const decoded = account._decodeTransactionAccount('11111111111111111111111111111111', stored)
+
+      expect(decoded.message.accountKeys)
+        .toEqual(storedMessage.accountKeys.map((k) => k.toBase58()))
+      expect(decoded.message.numSigners).toBe(storedMessage.numSigners)
+      expect(decoded.message.numWritableSigners).toBe(storedMessage.numWritableSigners)
+      expect(decoded.message.numWritableNonSigners).toBe(storedMessage.numWritableNonSigners)
+      expect(decoded.message.addressTableLookups).toEqual([])
+    })
+
+    it('matches the SDK when the message uses an address lookup table', async () => {
+      const vault = await account.getVaultAddress()
+      const extra = OWNERS.map((o) => new PublicKey(o))
+      const tableKey = new PublicKey('7Np41oeYqPefeNQEHSv1UDhYrehxin3NStELsSKCT4K2')
+      const table = {
+        key: tableKey,
+        state: {
+          deactivationSlot: 2n ** 64n - 1n,
+          lastExtendedSlot: 0,
+          lastExtendedSlotStartIndex: 0,
+          addresses: extra
+        },
+        isActive: () => true
+      }
+
+      // The transfer recipient lives only in the table, so it must be resolved from it.
+      const message = new TransactionMessage({
+        payerKey: new PublicKey(vault),
+        recentBlockhash: '11111111111111111111111111111111',
+        instructions: [SystemProgram.transfer({
+          fromPubkey: new PublicKey(vault),
+          toPubkey: extra[1],
+          lamports: 1000
+        })]
+      })
+
+      const { account: stored, message: storedMessage } =
+        storedTransaction(message, vault, [{ account: table }])
+      const decoded = account._decodeTransactionAccount('11111111111111111111111111111111', stored)
+
+      expect(decoded.message.addressTableLookups).toHaveLength(1)
+      expect(decoded.message.addressTableLookups[0].accountKey).toBe(tableKey.toBase58())
+
+      // Serve the table the way the chain does: 56 bytes of metadata, then the addresses.
+      const raw = new Uint8Array(56 + extra.length * 32)
+      extra.forEach((key, i) => raw.set(key.toBytes(), 56 + i * 32))
+
+      account._rpc = {
+        getMultipleAccounts: () => ({
+          send: async () => ({
+            value: [{
+              owner: 'AddressLookupTab1e1111111111111111111111111',
+              data: [Buffer.from(raw).toString('base64'), 'base64'],
+              executable: false,
+              lamports: 2039280n,
+              space: BigInt(raw.length)
+            }]
+          })
+        })
+      }
+
+      const mine = flatten(await account._resolveExecutionAccounts(decoded.message, vault))
+
+      expect(mine).toEqual(await reference(storedMessage, vault, [{ account: table }]))
+
+      // Group 1 first, group 3 last.
+      expect(mine[0].address).toBe(tableKey.toBase58())
+      expect(mine[mine.length - 1].address).toBe(extra[1].toBase58())
+    })
+
+    it('refuses a lookup table that no longer exists', async () => {
+      const vault = await account.getVaultAddress()
+      const extra = OWNERS.map((o) => new PublicKey(o))
+      const table = {
+        key: new PublicKey('7Np41oeYqPefeNQEHSv1UDhYrehxin3NStELsSKCT4K2'),
+        state: { deactivationSlot: 2n ** 64n - 1n, lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0, addresses: extra },
+        isActive: () => true
+      }
+      const message = new TransactionMessage({
+        payerKey: new PublicKey(vault),
+        recentBlockhash: '11111111111111111111111111111111',
+        instructions: [SystemProgram.transfer({
+          fromPubkey: new PublicKey(vault), toPubkey: extra[1], lamports: 1000
+        })]
+      })
+      const { account: stored } = storedTransaction(message, vault, [{ account: table }])
+      const decoded = account._decodeTransactionAccount('11111111111111111111111111111111', stored)
+
+      account._rpc = {
+        getMultipleAccounts: () => ({ send: async () => ({ value: [null] }) })
+      }
+
+      await expect(account._resolveExecutionAccounts(decoded.message, vault))
+        .rejects.toThrow(/no longer be executed/)
+    })
+
+    it('refuses an account at the lookup table address that is not a lookup table', async () => {
+      const vault = await account.getVaultAddress()
+      const extra = OWNERS.map((o) => new PublicKey(o))
+      const table = {
+        key: new PublicKey('7Np41oeYqPefeNQEHSv1UDhYrehxin3NStELsSKCT4K2'),
+        state: { deactivationSlot: 2n ** 64n - 1n, lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0, addresses: extra },
+        isActive: () => true
+      }
+      const message = new TransactionMessage({
+        payerKey: new PublicKey(vault),
+        recentBlockhash: '11111111111111111111111111111111',
+        instructions: [SystemProgram.transfer({
+          fromPubkey: new PublicKey(vault), toPubkey: extra[1], lamports: 1000
+        })]
+      })
+      const { account: stored } = storedTransaction(message, vault, [{ account: table }])
+      const decoded = account._decodeTransactionAccount('11111111111111111111111111111111', stored)
+
+      const raw = new Uint8Array(56 + extra.length * 32)
+      extra.forEach((key, i) => raw.set(key.toBytes(), 56 + i * 32))
+
+      account._rpc = {
+        getMultipleAccounts: () => ({
+          send: async () => ({
+            value: [{
+              owner: SQUADS_PROGRAM_ADDRESS,
+              data: [Buffer.from(raw).toString('base64'), 'base64'],
+              executable: false,
+              lamports: 2039280n,
+              space: BigInt(raw.length)
+            }]
+          })
+        })
+      }
+
+      await expect(account._resolveExecutionAccounts(decoded.message, vault))
+        .rejects.toThrow(/does not exist/)
+    })
+
+  })
+
   describe('vault transaction message', () => {
     // The instruction argument uses one-byte length prefixes; the message the program
     // stores from it uses four-byte ones. Getting the two confused yields an unparseable
@@ -178,24 +522,6 @@ describe('wire format', () => {
   describe('spl transfer message', () => {
     const RECIPIENT = '2JvLzXomThTBMSj2YQY3wE21kiaSpwGyJ17nm9xiLMsE'
     const MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
-
-    /**
-     * Converts a kit instruction to the web3.js shape the SDK helper expects.
-     *
-     * @param {Object} instruction - The kit instruction.
-     * @returns {Object} The web3.js instruction.
-     */
-    function toWeb3 (instruction) {
-      return {
-        programId: new PublicKey(instruction.programAddress),
-        keys: instruction.accounts.map((account) => ({
-          pubkey: new PublicKey(account.address),
-          isSigner: account.role === 2 || account.role === 3,
-          isWritable: account.role === 1 || account.role === 3
-        })),
-        data: Buffer.from(instruction.data)
-      }
-    }
 
     /**
      * Builds the transfer instructions, optionally preceded by an ATA creation.

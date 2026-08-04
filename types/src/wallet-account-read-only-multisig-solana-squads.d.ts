@@ -26,6 +26,9 @@
 /** @typedef {SolanaMultisigSquadsCommonConfig & SolanaMultisigSquadsSigningConfig} SolanaMultisigSquadsConfig */
 /** @typedef {SolanaMultisigSquadsCommonConfig} SolanaMultisigSquadsReadOnlyConfig */
 export const SQUADS_PROGRAM_ADDRESS: "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf";
+export const TRANSACTION_KIND_VAULT: "vault";
+export const TRANSACTION_KIND_CONFIG: "config";
+export const TRANSACTION_KIND_BATCH: "batch";
 /**
  * Read-only Solana Squads multisig wallet account.
  * Provides query-only operations for Squads multisig wallets.
@@ -420,6 +423,26 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
         };
     }>;
     /**
+     * Reads everything execution depends on in a single request.
+     *
+     * Adds the backing transaction and the clock to {@link _getMultisigAndProposal}'s pair:
+     * the transaction says which instruction executes it and which accounts it needs, and the
+     * clock is what the multisig's time lock is measured against.
+     *
+     * @protected
+     * @param {bigint} index - The proposal (transaction index) id.
+     * @returns {Promise<{ multisig: Object, proposal: Object, transaction: Object, now: bigint }>}
+     *   The decoded accounts and the cluster's current Unix timestamp.
+     * @throws {Error} If the multisig address holds a non-Squads account, the clock cannot be
+     *   read, or the RPC request fails.
+     */
+    protected _getMultisigProposalAndTransaction(index: bigint): Promise<{
+        multisig: any;
+        proposal: any;
+        transaction: any;
+        now: bigint;
+    }>;
+    /**
      * Reads the Squads program config account.
      *
      * @protected
@@ -456,6 +479,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     private _decodeMultisigAccount;
     /** @private */
     private _decodeProposalAccount;
+    /** @private */
+    private _decodeTransactionAccount;
+    /** @private */
+    private _decodeVaultTransactionMessage;
+    /** @private */
+    private _decodeConfigActions;
     /** @private */
     private _toProposal;
     /** @private */

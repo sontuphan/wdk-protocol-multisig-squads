@@ -162,12 +162,30 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     rejectTx(proposalId: number | bigint): Promise<MultisigTransactionResult>;
     /**
-     * Executes an approved transaction proposal.
+     * Submits an approved proposal for on-chain execution.
      *
-     * @param {number | bigint} proposalId - The proposal (transaction index) id.
-     * @returns {Promise<MultisigExecuteResult>} The execution result.
+     * The wrapped instructions run by CPI inside this one transaction, so a resolved result
+     * means all of them succeeded — there is no partial execution.
+     *
+     * Note this returns `{ hash, fee }` rather than the proposal-shaped result the propose and
+     * vote methods return, matching the interface.
+     *
+     * Rent is not reclaimed: the transaction and proposal accounts survive execution and keep
+     * holding what {@link quoteSendTransaction} quoted.
+     *
+     * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
+     * @returns {Promise<{ hash: string, fee: bigint }>} The execution transaction's result.
+     * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the signer
+     *   cannot execute, the proposal is not approved, its time lock has not elapsed, a config
+     *   proposal has been invalidated, or the RPC request fails.
+     * @throws {NotImplementedError} If the proposal is a batch, wraps a message needing
+     *   ephemeral signers, or changes a spending limit.
+     * @todo Support batches, ephemeral signers and spending-limit actions.
      */
-    executeTx(proposalId: number | bigint): Promise<MultisigExecuteResult>;
+    executeTx(proposalId: number | bigint | string): Promise<{
+        hash: string;
+        fee: bigint;
+    }>;
     /**
      * Proposes adding a new member to the multisig.
      *
@@ -254,6 +272,26 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @private
      */
     private _buildProposalVoteInstruction;
+    /** @private */
+    private _buildConfigExecuteInstruction;
+    /** @private */
+    private _buildVaultExecuteInstruction;
+    /**
+     * Builds the `remaining_accounts` the program expects for a vault transaction.
+     *
+     * Three groups in a fixed order: the lookup table accounts, the message's own keys with
+     * the flags the message asked for, then the addresses those lookups resolve to. The vault
+     * is de-signed because the program signs for it.
+     *
+     * @private
+     */
+    private _resolveExecutionAccounts;
+    /** @private */
+    private _getLookupTableAddresses;
+    /** @private */
+    private _isStaticWritableIndex;
+    /** @private */
+    private _toAccountRole;
     /** @private */
     private _encodeProposalVoteData;
     /** @private */

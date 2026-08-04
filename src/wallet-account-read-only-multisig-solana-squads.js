@@ -66,8 +66,32 @@ export const SQUADS_PROGRAM_ADDRESS = 'SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52p
 
 const MULTISIG_DISCRIMINATOR = Uint8Array.from([224, 116, 121, 186, 68, 161, 79, 236])
 const PROPOSAL_DISCRIMINATOR = Uint8Array.from([26, 94, 189, 187, 116, 136, 53, 33])
+const VAULT_TRANSACTION_DISCRIMINATOR = Uint8Array.from([168, 250, 162, 100, 81, 14, 162, 207])
 const CONFIG_TRANSACTION_DISCRIMINATOR = Uint8Array.from([94, 8, 4, 35, 113, 139, 139, 112])
+const BATCH_DISCRIMINATOR = Uint8Array.from([156, 194, 70, 44, 22, 88, 137, 44])
 const PROGRAM_CONFIG_DISCRIMINATOR = Uint8Array.from([196, 210, 90, 231, 144, 149, 140, 63])
+
+export const TRANSACTION_KIND_VAULT = 'vault'
+export const TRANSACTION_KIND_CONFIG = 'config'
+export const TRANSACTION_KIND_BATCH = 'batch'
+
+const VAULT_TRANSACTION_VAULT_INDEX_OFFSET = 81
+const VAULT_TRANSACTION_EPHEMERAL_BUMPS_OFFSET = 83
+const CONFIG_TRANSACTION_ACTIONS_OFFSET = 81
+
+const CONFIG_ACTION_NAMES = [
+  'AddMember',
+  'RemoveMember',
+  'ChangeThreshold',
+  'SetTimeLock',
+  'AddSpendingLimit',
+  'RemoveSpendingLimit',
+  'SetRentCollector'
+]
+const CONFIG_ACTION_ADD_SPENDING_LIMIT = 4
+const CONFIG_ACTION_SET_RENT_COLLECTOR = 6
+const CONFIG_ACTION_BODY_SIZES = [33, 32, 2, 4, 0, 32, 0]
+const ADD_SPENDING_LIMIT_FIXED_SIZE = 74
 
 const CLOCK_SYSVAR_ADDRESS = 'SysvarC1ock11111111111111111111111111111111'
 const CLOCK_UNIX_TIMESTAMP_OFFSET = 32
@@ -903,6 +927,51 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
+   * Reads everything execution depends on in a single request.
+   *
+   * Adds the backing transaction and the clock to {@link _getMultisigAndProposal}'s pair:
+   * the transaction says which instruction executes it and which accounts it needs, and the
+   * clock is what the multisig's time lock is measured against.
+   *
+   * @protected
+   * @param {bigint} index - The proposal (transaction index) id.
+   * @returns {Promise<{ multisig: Object, proposal: Object, transaction: Object, now: bigint }>}
+   *   The decoded accounts and the cluster's current Unix timestamp.
+   * @throws {Error} If the multisig address holds a non-Squads account, the clock cannot be
+   *   read, or the RPC request fails.
+   */
+  async _getMultisigProposalAndTransaction (index) {
+    const multisigPda = await this.getAddress()
+    const [proposalPda, transactionPda] = await Promise.all([
+      this._getProposalPda(multisigPda, index),
+      this._getTransactionPda(multisigPda, index)
+    ])
+
+    const { value } = await this._rpc
+      .getMultipleAccounts(
+        [address(multisigPda), proposalPda, transactionPda, address(CLOCK_SYSVAR_ADDRESS)],
+        { commitment: this._commitment, encoding: 'base64' }
+      )
+      .send()
+
+    const [multisig, proposal, transaction, clock] = value
+
+    if (!clock) {
+      throw new Error(`The clock sysvar ${CLOCK_SYSVAR_ADDRESS} could not be read.`)
+    }
+
+    const clockData = getBase64Encoder().encode(clock.data[0])
+    const clockView = new DataView(clockData.buffer, clockData.byteOffset, clockData.byteLength)
+
+    return {
+      multisig: this._decodeMultisigAccount(multisigPda, multisig),
+      proposal: this._decodeProposalAccount(proposalPda, proposal),
+      transaction: this._decodeTransactionAccount(transactionPda, transaction),
+      now: clockView.getBigInt64(CLOCK_UNIX_TIMESTAMP_OFFSET, true)
+    }
+  }
+
+  /**
    * Reads the Squads program config account.
    *
    * @protected
@@ -1148,6 +1217,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       exists: false,
       status: -1,
       statusName: null,
+      statusTimestamp: null,
       approved: [],
       rejected: [],
       cancelled: []
@@ -1192,10 +1262,173 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       exists: true,
       status,
       statusName: PROPOSAL_STATUS_NAMES[status] ?? `in an unknown status (${status})`,
+      statusTimestamp: status === PROPOSAL_STATUS_EXECUTING
+        ? null
+        : view.getBigInt64(PROPOSAL_STATUS_TIMESTAMP_OFFSET, true),
       approved: readVoters(),
       rejected: readVoters(),
       cancelled: readVoters()
     }
+  }
+
+  /** @private */
+  _decodeTransactionAccount (transactionPda, account) {
+    const absent = {
+      address: transactionPda,
+      exists: false,
+      kind: null,
+      vaultIndex: 0,
+      ephemeralSignerCount: 0,
+      message: null,
+      actions: []
+    }
+
+    if (!account || account.owner !== this._programId) {
+      return absent
+    }
+
+    const data = getBase64Encoder().encode(account.data[0])
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+
+    if (this._hasDiscriminator(data, VAULT_TRANSACTION_DISCRIMINATOR)) {
+      const ephemeralSignerCount = view.getUint32(VAULT_TRANSACTION_EPHEMERAL_BUMPS_OFFSET, true)
+
+      return {
+        ...absent,
+        exists: true,
+        kind: TRANSACTION_KIND_VAULT,
+        vaultIndex: data[VAULT_TRANSACTION_VAULT_INDEX_OFFSET],
+        ephemeralSignerCount,
+        message: this._decodeVaultTransactionMessage(
+          data,
+          view,
+          VAULT_TRANSACTION_EPHEMERAL_BUMPS_OFFSET + VEC_PREFIX_SIZE + ephemeralSignerCount
+        )
+      }
+    }
+
+    if (this._hasDiscriminator(data, CONFIG_TRANSACTION_DISCRIMINATOR)) {
+      return {
+        ...absent,
+        exists: true,
+        kind: TRANSACTION_KIND_CONFIG,
+        actions: this._decodeConfigActions(data, view, CONFIG_TRANSACTION_ACTIONS_OFFSET)
+      }
+    }
+
+    if (this._hasDiscriminator(data, BATCH_DISCRIMINATOR)) {
+      return { ...absent, exists: true, kind: TRANSACTION_KIND_BATCH }
+    }
+
+    return { ...absent, exists: true }
+  }
+
+  /** @private */
+  _decodeVaultTransactionMessage (data, view, start) {
+    const addressDecoder = getBase58Decoder()
+
+    let offset = start + MESSAGE_HEADER_SIZE
+
+    const readAddress = () => {
+      const value = addressDecoder.decode(data.subarray(offset, offset + ADDRESS_SIZE))
+      offset += ADDRESS_SIZE
+
+      return value
+    }
+
+    const readLength = () => {
+      const length = view.getUint32(offset, true)
+      offset += VEC_PREFIX_SIZE
+
+      return length
+    }
+
+    const keyCount = readLength()
+    const accountKeys = []
+
+    for (let i = 0; i < keyCount; i++) {
+      accountKeys.push(readAddress())
+    }
+
+    // The instructions carry nothing execution needs, but the lookups sit past them.
+    const instructionCount = readLength()
+
+    for (let i = 0; i < instructionCount; i++) {
+      offset += PROGRAM_ID_INDEX_SIZE
+
+      const accountIndexCount = readLength()
+      offset += accountIndexCount
+
+      const dataLength = readLength()
+      offset += dataLength
+    }
+
+    const lookupCount = readLength()
+    const addressTableLookups = []
+
+    for (let i = 0; i < lookupCount; i++) {
+      const accountKey = readAddress()
+      const writableCount = readLength()
+      const writableIndexes = Array.from(data.subarray(offset, offset + writableCount))
+
+      offset += writableCount
+
+      const readonlyCount = readLength()
+      const readonlyIndexes = Array.from(data.subarray(offset, offset + readonlyCount))
+
+      offset += readonlyCount
+
+      addressTableLookups.push({ accountKey, writableIndexes, readonlyIndexes })
+    }
+
+    return {
+      numSigners: data[start],
+      numWritableSigners: data[start + 1],
+      numWritableNonSigners: data[start + 2],
+      accountKeys,
+      addressTableLookups
+    }
+  }
+
+  /** @private */
+  _decodeConfigActions (data, view, start) {
+    let offset = start
+
+    const count = view.getUint32(offset, true)
+    offset += VEC_PREFIX_SIZE
+
+    const actions = []
+
+    for (let i = 0; i < count; i++) {
+      const tag = data[offset]
+      const kind = CONFIG_ACTION_NAMES[tag]
+
+      if (kind === undefined) {
+        throw new Error(
+          `Unknown Squads config action ${tag}. This package cannot read config transactions created by a newer program version.`
+        )
+      }
+
+      offset += ENUM_TAG_SIZE
+
+      if (tag === CONFIG_ACTION_ADD_SPENDING_LIMIT) {
+        offset += ADD_SPENDING_LIMIT_FIXED_SIZE
+
+        const memberCount = view.getUint32(offset, true)
+        offset += VEC_PREFIX_SIZE + ADDRESS_SIZE * memberCount
+
+        const destinationCount = view.getUint32(offset, true)
+        offset += VEC_PREFIX_SIZE + ADDRESS_SIZE * destinationCount
+      } else if (tag === CONFIG_ACTION_SET_RENT_COLLECTOR) {
+        offset += OPTION_TAG_SIZE + (data[offset] === 1 ? ADDRESS_SIZE : 0)
+      } else {
+        offset += CONFIG_ACTION_BODY_SIZES[tag]
+      }
+
+      actions.push({ kind })
+    }
+
+    return actions
   }
 
   /** @private */
