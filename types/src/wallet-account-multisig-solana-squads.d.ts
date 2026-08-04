@@ -2,11 +2,11 @@
 /** @typedef {import('@tetherto/wdk-wallet').MultisigResult} MultisigResult */
 /** @typedef {import('@tetherto/wdk-wallet').MultisigTransactionResult} MultisigTransactionResult */
 /** @typedef {import('@tetherto/wdk-wallet').MultisigExecuteResult} MultisigExecuteResult */
-/** @typedef {import('@tetherto/wdk-wallet').MultisigSendOptions} MultisigSendOptions */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
 /** @typedef {import('@tetherto/wdk-wallet').MultisigOptions} MultisigOptions */
 /** @typedef {import('@tetherto/wdk-wallet').MessageProposal} MessageProposal */
 /** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
-/** @typedef {import('@tetherto/wdk-wallet-solana').SimpleSolanaTransaction} SimpleSolanaTransaction */
+/** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('./wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsConfig} SolanaMultisigSquadsConfig */
 /**
  * Solana Squads multisig wallet account with signing capabilities.
@@ -98,21 +98,31 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         hash: string;
     }>;
     /**
-     * Proposes a transaction to the multisig (and optionally executes it once approved).
+     * Proposes a transaction to the multisig.
      *
-     * @param {SimpleSolanaTransaction} tx - The transaction to propose.
-     * @param {MultisigSendOptions} [options] - The send options.
+     * The proposal is created open for voting, with no approvals of its own — creating a
+     * proposal is not a vote, so `confirmations` is 0 even for the proposer.
+     *
+     * The proposal takes the multisig's next transaction index. If another member proposes
+     * first, that index is taken and this call fails; the error is surfaced rather than
+     * retried, because retrying would sign and send a second transaction.
+     *
+     * @param {SolanaTransaction} tx - The transaction to propose.
+     * @param {MultisigTransactionOptions} [options] - The send options.
      * @returns {Promise<MultisigTransactionResult>} The proposal result.
+     * @throws {Error} If the multisig does not exist, the signer cannot propose, or the RPC
+     *   request fails.
+     * @todo Support `autoExecute`, and transaction messages beyond a native transfer.
      */
-    sendTransaction(tx: SimpleSolanaTransaction, options?: MultisigSendOptions): Promise<MultisigTransactionResult>;
+    sendTransaction(tx: SolanaTransaction, options?: MultisigTransactionOptions): Promise<MultisigTransactionResult>;
     /**
      * Proposes a native SOL / SPL token transfer to the multisig.
      *
      * @param {TransferOptions} transferOptions - The transfer options.
-     * @param {MultisigSendOptions} [options] - The send options.
+     * @param {MultisigTransactionOptions} [options] - The send options.
      * @returns {Promise<MultisigTransactionResult>} The transfer proposal result.
      */
-    transfer(transferOptions: TransferOptions, options?: MultisigSendOptions): Promise<MultisigTransactionResult>;
+    transfer(transferOptions: TransferOptions, options?: MultisigTransactionOptions): Promise<MultisigTransactionResult>;
     /**
      * Approves a pending transaction proposal.
      *
@@ -193,17 +203,23 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /** @private */
     private _validateOwners;
     /** @private */
+    private _encodeTransactionMessage;
+    /** @private */
+    private _encodeVaultTransactionCreateData;
+    /** @private */
+    private _encodeProposalCreateData;
+    /** @private */
     private _encodeMultisigCreateV2Data;
 }
 export type IWalletAccountMultisig = any;
 export type MultisigResult = import("@tetherto/wdk-wallet").MultisigResult;
 export type MultisigTransactionResult = import("@tetherto/wdk-wallet").MultisigTransactionResult;
 export type MultisigExecuteResult = import("@tetherto/wdk-wallet").MultisigExecuteResult;
-export type MultisigSendOptions = import("@tetherto/wdk-wallet").MultisigSendOptions;
+export type MultisigTransactionOptions = import("@tetherto/wdk-wallet/multisig").MultisigTransactionOptions;
 export type MultisigOptions = import("@tetherto/wdk-wallet").MultisigOptions;
 export type MessageProposal = import("@tetherto/wdk-wallet").MessageProposal;
 export type TransferOptions = import("@tetherto/wdk-wallet").TransferOptions;
-export type SimpleSolanaTransaction = import("@tetherto/wdk-wallet-solana").SimpleSolanaTransaction;
+export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
 export type SolanaMultisigSquadsConfig = import("./wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsConfig;
 import WalletAccountReadOnlyMultisigSolanaSquads from './wallet-account-read-only-multisig-solana-squads.js';
 import { WalletAccountSolana } from '@tetherto/wdk-wallet-solana';

@@ -37,7 +37,7 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
 /** @typedef {import('@tetherto/wdk-wallet').MessageInfo} MessageInfo */
 /** @typedef {import('@tetherto/wdk-wallet').MultisigProposal} MultisigProposal */
 
-/** @typedef {import('@tetherto/wdk-wallet-solana').SimpleSolanaTransaction} SimpleSolanaTransaction */
+/** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
 
 /**
@@ -345,48 +345,14 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If the address holds a non-Squads account, or if the RPC request fails.
    */
   async getMultisigInfo () {
-    const multisigPda = await this.getAddress()
+    const { address: multisigPda, isCreated, threshold, members } = await this._getMultisigAccount()
 
-    const { value } = await this._rpc
-      .getAccountInfo(address(multisigPda), {
-        commitment: this._commitment,
-        encoding: 'base64'
-      })
-      .send()
-
-    if (!value) {
-      return { address: multisigPda, owners: [], threshold: 0, isCreated: false }
+    return {
+      address: multisigPda,
+      owners: members.map((member) => member.address),
+      threshold,
+      isCreated
     }
-
-    const data = getBase64Encoder().encode(value.data[0])
-
-    if (value.owner !== this._programId || !this._hasDiscriminator(data, MULTISIG_DISCRIMINATOR)) {
-      throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
-    }
-
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-    const addressDecoder = getBase58Decoder()
-
-    const threshold = view.getUint16(MULTISIG_THRESHOLD_OFFSET, true)
-
-    let offset = MULTISIG_RENT_COLLECTOR_OFFSET + OPTION_TAG_SIZE
-    if (data[MULTISIG_RENT_COLLECTOR_OFFSET] === 1) {
-      offset += ADDRESS_SIZE
-    }
-
-    offset += BUMP_SIZE
-
-    const count = view.getUint32(offset, true)
-    offset += VEC_PREFIX_SIZE
-
-    const owners = []
-
-    for (let i = 0; i < count; i++) {
-      owners.push(addressDecoder.decode(data.subarray(offset, offset + ADDRESS_SIZE)))
-      offset += MEMBER_SIZE
-    }
-
-    return { address: multisigPda, owners, threshold, isCreated: true }
   }
 
   /**
@@ -794,7 +760,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * collector when one is configured. Proposal rent scales with the number of members,
    * so it usually dominates.
    *
-   * @param {SimpleSolanaTransaction} tx - The transaction to quote.
+   * @param {SolanaTransaction} tx - The transaction to quote.
    * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged
    *   over this account's configuration.
    * @returns {Promise<{ fee: bigint }>} The transaction quote, in lamports.
@@ -868,6 +834,88 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     ])
 
     return { fee: transactionRent + proposalRent + SIGNATURE_BASE_FEE }
+  }
+
+  /**
+   * Reads and decodes the multisig account, keeping every field it holds.
+   *
+   * This is the single decode the account-level accessors project from, so callers that
+   * need several fields — a threshold together with a transaction index, say — get them
+   * from one consistent snapshot.
+   *
+   * @protected
+   * @returns {Promise<{ address: string, isCreated: boolean, threshold: number, timeLock: number, transactionIndex: bigint, staleTransactionIndex: bigint, rentCollector: string | null, members: Array<{ address: string, mask: number }> }>}
+   *   The decoded account. When `isCreated` is false every other field is a placeholder.
+   * @throws {Error} If the address holds a non-Squads account, or if the RPC request fails.
+   */
+  async _getMultisigAccount () {
+    const multisigPda = await this.getAddress()
+
+    const { value } = await this._rpc
+      .getAccountInfo(address(multisigPda), {
+        commitment: this._commitment,
+        encoding: 'base64'
+      })
+      .send()
+
+    if (!value) {
+      return {
+        address: multisigPda,
+        isCreated: false,
+        threshold: 0,
+        timeLock: 0,
+        transactionIndex: 0n,
+        staleTransactionIndex: 0n,
+        rentCollector: null,
+        members: []
+      }
+    }
+
+    const data = getBase64Encoder().encode(value.data[0])
+
+    if (value.owner !== this._programId || !this._hasDiscriminator(data, MULTISIG_DISCRIMINATOR)) {
+      throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
+    }
+
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    const addressDecoder = getBase58Decoder()
+
+    const hasRentCollector = data[MULTISIG_RENT_COLLECTOR_OFFSET] === 1
+
+    let offset = MULTISIG_RENT_COLLECTOR_OFFSET + OPTION_TAG_SIZE
+    const rentCollector = hasRentCollector
+      ? addressDecoder.decode(data.subarray(offset, offset + ADDRESS_SIZE))
+      : null
+
+    if (hasRentCollector) {
+      offset += ADDRESS_SIZE
+    }
+
+    offset += BUMP_SIZE
+
+    const count = view.getUint32(offset, true)
+    offset += VEC_PREFIX_SIZE
+
+    const members = []
+
+    for (let i = 0; i < count; i++) {
+      members.push({
+        address: addressDecoder.decode(data.subarray(offset, offset + ADDRESS_SIZE)),
+        mask: data[offset + ADDRESS_SIZE]
+      })
+      offset += MEMBER_SIZE
+    }
+
+    return {
+      address: multisigPda,
+      isCreated: true,
+      threshold: view.getUint16(MULTISIG_THRESHOLD_OFFSET, true),
+      timeLock: view.getUint32(MULTISIG_TIME_LOCK_OFFSET, true),
+      transactionIndex: view.getBigUint64(MULTISIG_TRANSACTION_INDEX_OFFSET, true),
+      staleTransactionIndex: view.getBigUint64(MULTISIG_STALE_TRANSACTION_INDEX_OFFSET, true),
+      rentCollector,
+      members
+    }
   }
 
   /**

@@ -57,16 +57,35 @@ const VEC_PREFIX_SIZE = 4
 const SEED_PREFIX = 'multisig'
 const SEED_MULTISIG = 'multisig'
 
+const VAULT_TRANSACTION_CREATE_DISCRIMINATOR = [48, 250, 78, 168, 208, 226, 218, 211]
+const PROPOSAL_CREATE_DISCRIMINATOR = [220, 60, 73, 224, 30, 108, 79, 159]
+
+const PERMISSION_INITIATE = 1
+
+const SYSTEM_TRANSFER_INSTRUCTION = 2
+const SYSTEM_TRANSFER_DATA_SIZE = 12
+const SOL_TRANSFER_ACCOUNT_KEY_COUNT = 3
+const SOL_TRANSFER_PROGRAM_ID_INDEX = 2
+const SOL_TRANSFER_ACCOUNT_INDEXES = [0, 1]
+
+const DEFAULT_VAULT_INDEX = 0
+const NO_EPHEMERAL_SIGNERS = 0
+
+const MESSAGE_HEADER_SIZE = 3
+const PROGRAM_ID_INDEX_SIZE = 1
+const SMALL_PREFIX_SIZE = 1
+const DATA_PREFIX_SIZE = 2
+
 /** @typedef {import('@tetherto/wdk-wallet').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet').MultisigResult} MultisigResult */
 /** @typedef {import('@tetherto/wdk-wallet').MultisigTransactionResult} MultisigTransactionResult */
 /** @typedef {import('@tetherto/wdk-wallet').MultisigExecuteResult} MultisigExecuteResult */
-/** @typedef {import('@tetherto/wdk-wallet').MultisigSendOptions} MultisigSendOptions */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
 /** @typedef {import('@tetherto/wdk-wallet').MultisigOptions} MultisigOptions */
 /** @typedef {import('@tetherto/wdk-wallet').MessageProposal} MessageProposal */
 /** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
 
-/** @typedef {import('@tetherto/wdk-wallet-solana').SimpleSolanaTransaction} SimpleSolanaTransaction */
+/** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 
 /** @typedef {import('./wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsConfig} SolanaMultisigSquadsConfig */
 
@@ -277,21 +296,110 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /**
-   * Proposes a transaction to the multisig (and optionally executes it once approved).
+   * Proposes a transaction to the multisig.
    *
-   * @param {SimpleSolanaTransaction} tx - The transaction to propose.
-   * @param {MultisigSendOptions} [options] - The send options.
+   * The proposal is created open for voting, with no approvals of its own — creating a
+   * proposal is not a vote, so `confirmations` is 0 even for the proposer.
+   *
+   * The proposal takes the multisig's next transaction index. If another member proposes
+   * first, that index is taken and this call fails; the error is surfaced rather than
+   * retried, because retrying would sign and send a second transaction.
+   *
+   * @param {SolanaTransaction} tx - The transaction to propose.
+   * @param {MultisigTransactionOptions} [options] - The send options.
    * @returns {Promise<MultisigTransactionResult>} The proposal result.
+   * @throws {Error} If the multisig does not exist, the signer cannot propose, or the RPC
+   *   request fails.
+   * @todo Support `autoExecute`, and transaction messages beyond a native transfer.
    */
   async sendTransaction (tx, options = {}) {
-    throw new NotImplementedError('sendTransaction(tx, options)')
+    if (options.autoExecute) {
+      throw new NotImplementedError('sendTransaction(tx, { autoExecute: true })')
+    }
+
+    const {
+      address: multisigPda,
+      isCreated,
+      threshold,
+      transactionIndex,
+      members
+    } = await this._getMultisigAccount()
+
+    if (!isCreated) {
+      throw new Error(
+        `The multisig account ${multisigPda} does not exist. Deploy it before proposing transactions.`
+      )
+    }
+
+    const signerAddress = await this.getSignerAddress()
+    const member = members.find((candidate) => candidate.address === signerAddress)
+
+    if (!member) {
+      throw new Error(
+        `The signer ${signerAddress} is not a member of the multisig ${multisigPda}.`
+      )
+    }
+
+    if (!(member.mask & PERMISSION_INITIATE)) {
+      throw new Error(
+        `The signer ${signerAddress} does not hold the permission to propose transactions.`
+      )
+    }
+
+    const index = transactionIndex + 1n
+    const [transactionPda, proposalPda, vaultPda] = await Promise.all([
+      this._getTransactionPda(multisigPda, index),
+      this._getProposalPda(multisigPda, index),
+      this.getVaultAddress(DEFAULT_VAULT_INDEX)
+    ])
+
+    const creator = { address: address(signerAddress), role: ACCOUNT_ROLE_WRITABLE_SIGNER }
+    const systemProgram = { address: address(SYSTEM_PROGRAM_ADDRESS), role: ACCOUNT_ROLE_READONLY }
+
+    const instructions = [
+      {
+        programAddress: this._programId,
+        accounts: [
+          { address: address(multisigPda), role: ACCOUNT_ROLE_WRITABLE },
+          { address: transactionPda, role: ACCOUNT_ROLE_WRITABLE },
+          creator,
+          creator,
+          systemProgram
+        ],
+        data: this._encodeVaultTransactionCreateData(
+          this._encodeTransactionMessage(vaultPda, tx)
+        )
+      },
+      {
+        programAddress: this._programId,
+        accounts: [
+          { address: address(multisigPda), role: ACCOUNT_ROLE_READONLY },
+          { address: proposalPda, role: ACCOUNT_ROLE_WRITABLE },
+          creator,
+          creator,
+          systemProgram
+        ],
+        data: this._encodeProposalCreateData(index)
+      }
+    ]
+
+    const { hash, fee } = await this._signerAccount.sendTransaction({ instructions })
+
+    return {
+      proposalId: index.toString(),
+      hash,
+      fee,
+      confirmations: 0,
+      threshold,
+      executed: false
+    }
   }
 
   /**
    * Proposes a native SOL / SPL token transfer to the multisig.
    *
    * @param {TransferOptions} transferOptions - The transfer options.
-   * @param {MultisigSendOptions} [options] - The send options.
+   * @param {MultisigTransactionOptions} [options] - The send options.
    * @returns {Promise<MultisigTransactionResult>} The transfer proposal result.
    */
   async transfer (transferOptions, options = {}) {
@@ -447,6 +555,98 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         `Invalid threshold ${threshold}. It must be an integer between 1 and the number of owners (${owners.length}).`
       )
     }
+  }
+
+  /** @private */
+  _encodeTransactionMessage (vaultPda, tx) {
+    if (!tx || tx.to === undefined || tx.value === undefined) {
+      throw new NotImplementedError('sendTransaction(tx) for anything but a native transfer')
+    }
+
+    const addressEncoder = getAddressEncoder()
+    const keys = [address(vaultPda), address(tx.to), address(SYSTEM_PROGRAM_ADDRESS)]
+
+    // The instruction argument uses one-byte length prefixes, unlike the four-byte
+    // prefixes of the message the program then stores.
+    const size =
+      MESSAGE_HEADER_SIZE +
+      SMALL_PREFIX_SIZE + ADDRESS_SIZE * SOL_TRANSFER_ACCOUNT_KEY_COUNT +
+      SMALL_PREFIX_SIZE +
+      PROGRAM_ID_INDEX_SIZE +
+      SMALL_PREFIX_SIZE + SOL_TRANSFER_ACCOUNT_INDEXES.length +
+      DATA_PREFIX_SIZE + SYSTEM_TRANSFER_DATA_SIZE +
+      SMALL_PREFIX_SIZE
+
+    const data = new Uint8Array(size)
+    const view = new DataView(data.buffer)
+
+    data[0] = 1
+    data[1] = 1
+    data[2] = 1
+
+    let offset = MESSAGE_HEADER_SIZE
+
+    data[offset] = keys.length
+    offset += SMALL_PREFIX_SIZE
+
+    for (const key of keys) {
+      data.set(addressEncoder.encode(key), offset)
+      offset += ADDRESS_SIZE
+    }
+
+    data[offset] = 1
+    offset += SMALL_PREFIX_SIZE
+
+    data[offset] = SOL_TRANSFER_PROGRAM_ID_INDEX
+    offset += PROGRAM_ID_INDEX_SIZE
+
+    data[offset] = SOL_TRANSFER_ACCOUNT_INDEXES.length
+    offset += SMALL_PREFIX_SIZE
+    data.set(SOL_TRANSFER_ACCOUNT_INDEXES, offset)
+    offset += SOL_TRANSFER_ACCOUNT_INDEXES.length
+
+    view.setUint16(offset, SYSTEM_TRANSFER_DATA_SIZE, true)
+    offset += DATA_PREFIX_SIZE
+
+    view.setUint32(offset, SYSTEM_TRANSFER_INSTRUCTION, true)
+    view.setBigUint64(offset + 4, BigInt(tx.value), true)
+
+    return data
+  }
+
+  /** @private */
+  _encodeVaultTransactionCreateData (message) {
+    const data = new Uint8Array(
+      VAULT_TRANSACTION_CREATE_DISCRIMINATOR.length + 2 + VEC_PREFIX_SIZE + message.length + 1
+    )
+    const view = new DataView(data.buffer)
+
+    data.set(VAULT_TRANSACTION_CREATE_DISCRIMINATOR, 0)
+
+    let offset = VAULT_TRANSACTION_CREATE_DISCRIMINATOR.length
+
+    data[offset] = DEFAULT_VAULT_INDEX
+    data[offset + 1] = NO_EPHEMERAL_SIGNERS
+    offset += 2
+
+    view.setUint32(offset, message.length, true)
+    offset += VEC_PREFIX_SIZE
+
+    data.set(message, offset)
+    data[offset + message.length] = OPTION_NONE
+
+    return data
+  }
+
+  /** @private */
+  _encodeProposalCreateData (index) {
+    const data = new Uint8Array(PROPOSAL_CREATE_DISCRIMINATOR.length + 8 + 1)
+    const view = new DataView(data.buffer)
+
+    data.set(PROPOSAL_CREATE_DISCRIMINATOR, 0)
+    view.setBigUint64(PROPOSAL_CREATE_DISCRIMINATOR.length, index, true)
+
+    return data
   }
 
   /** @private */

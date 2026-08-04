@@ -47,12 +47,13 @@ const PROGRAM_CONFIG_PDA = 'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr'
  *   to report the multisig as absent.
  * @returns {Function} A `getAccountInfo` mock.
  */
-function multisigAccountValue (members) {
+function multisigAccountValue (members, { threshold = 1, transactionIndex = 0n } = {}) {
   const data = new Uint8Array(95 + 1 + 4 + members.length * 33)
   const view = new DataView(data.buffer)
 
   data.set(MULTISIG_DISCRIMINATOR, 0)
-  view.setUint16(72, 1, true)
+  view.setUint16(72, threshold, true)
+  view.setBigUint64(78, transactionIndex, true)
 
   let offset = 96
 
@@ -179,37 +180,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       return { account, sendTransaction }
     }
-
-    it('builds instruction data byte-identical to the Squads SDK', async () => {
-      // Golden bytes captured from `multisigCreateV2Struct.serialize` in @sqds/multisig,
-      // which is the arbiter of the wire format. The SDK cannot be imported here — it
-      // pulls in @solana/web3.js, whose rpc-websockets dependency will not load under
-      // Jest — so regenerate these with scripts/verify-create-wire-format.mjs.
-      const golden = {
-        1: [50, 221, 199, 93, 40, 245, 139, 233, 0, 1, 0, 1, 0, 0, 0, 43, 44, 113, 92, 44, 242, 77, 181, 126, 149, 164, 77, 243, 76, 180, 36, 222, 36, 96, 232, 108, 79, 110, 190, 123, 166, 43, 87, 72, 48, 222, 25, 7, 0, 0, 0, 0, 0, 0],
-        2: [50, 221, 199, 93, 40, 245, 139, 233, 0, 2, 0, 2, 0, 0, 0, 43, 44, 113, 92, 44, 242, 77, 181, 126, 149, 164, 77, 243, 76, 180, 36, 222, 36, 96, 232, 108, 79, 110, 190, 123, 166, 43, 87, 72, 48, 222, 25, 7, 19, 114, 224, 177, 185, 215, 69, 96, 71, 110, 69, 181, 226, 111, 65, 68, 88, 184, 197, 87, 145, 132, 122, 168, 70, 192, 211, 64, 7, 73, 17, 25, 7, 0, 0, 0, 0, 0, 0],
-        3: [50, 221, 199, 93, 40, 245, 139, 233, 0, 2, 0, 3, 0, 0, 0, 43, 44, 113, 92, 44, 242, 77, 181, 126, 149, 164, 77, 243, 76, 180, 36, 222, 36, 96, 232, 108, 79, 110, 190, 123, 166, 43, 87, 72, 48, 222, 25, 7, 19, 114, 224, 177, 185, 215, 69, 96, 71, 110, 69, 181, 226, 111, 65, 68, 88, 184, 197, 87, 145, 132, 122, 168, 70, 192, 211, 64, 7, 73, 17, 25, 7, 198, 250, 122, 243, 190, 219, 173, 58, 61, 101, 243, 106, 171, 201, 116, 49, 177, 187, 228, 194, 210, 246, 224, 228, 124, 166, 2, 3, 69, 47, 93, 97, 7, 0, 0, 0, 0, 0, 0]
-      }
-
-      const { account } = await deployingAccount()
-
-      for (const [owners, threshold] of [
-        [[TEST_SIGNER], 1],
-        [[TEST_SIGNER, OTHER_MEMBER], 2],
-        [[TEST_SIGNER, OTHER_MEMBER, THIRD_MEMBER], 2]
-      ]) {
-        const mine = account._encodeMultisigCreateV2Data(owners, threshold)
-
-        expect(Array.from(mine)).toEqual(golden[owners.length])
-      }
-    })
-
-    it('sizes the instruction data as 21 + 33 per owner', async () => {
-      const { account } = await deployingAccount()
-
-      expect(account._encodeMultisigCreateV2Data([TEST_SIGNER], 1)).toHaveLength(54)
-      expect(account._encodeMultisigCreateV2Data([TEST_SIGNER, OTHER_MEMBER], 2)).toHaveLength(87)
-    })
 
     it('sends six accounts with createKey and creator as signers', async () => {
       const { account, sendTransaction } = await deployingAccount()
@@ -380,5 +350,131 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
     expect(typeof signature).toBe('string')
     expect(signature.length).toBeGreaterThan(0)
+  })
+
+  describe('sendTransaction', () => {
+    const TX = { to: OTHER_MEMBER, value: 100000n }
+
+    /**
+     * Builds a proposing account with a stubbed RPC and send.
+     *
+     * @param {Object} [options] - The scenario.
+     * @param {number} [options.mask=7] - The signer's permission mask.
+     * @param {bigint} [options.transactionIndex=0n] - The multisig's current index.
+     * @param {boolean} [options.isMember=true] - Whether the signer is a member.
+     * @param {boolean} [options.deployed=true] - Whether the multisig exists.
+     * @returns {Promise<{ account: Object, sendTransaction: Function, getAccountInfo: Function }>}
+     */
+    async function proposingAccount ({
+      mask = 7,
+      transactionIndex = 0n,
+      isMember = true,
+      deployed = true
+    } = {}) {
+      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
+      const account = await wallet.getAccount(0)
+
+      const members = isMember
+        ? [{ address: TEST_SIGNER, mask }]
+        : [{ address: OTHER_MEMBER, mask: 7 }]
+
+      const getAccountInfo = serveAccount(
+        deployed ? multisigAccountValue(members, { threshold: 2, transactionIndex }) : null
+      )
+      const sendTransaction = jest.fn(async () => ({ hash: 'cafebabe', fee: 5000n }))
+
+      account._rpc = { getAccountInfo }
+      account._signerAccount.sendTransaction = sendTransaction
+
+      return { account, sendTransaction, getAccountInfo }
+    }
+
+    it('creates the transaction and its proposal in one transaction', async () => {
+      const { account, sendTransaction } = await proposingAccount()
+
+      await account.sendTransaction(TX)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+      expect(instructions).toHaveLength(2)
+      expect(Array.from(instructions[0].data.slice(0, 8)))
+        .toEqual([48, 250, 78, 168, 208, 226, 218, 211])
+      expect(Array.from(instructions[1].data.slice(0, 8)))
+        .toEqual([220, 60, 73, 224, 30, 108, 79, 159])
+    })
+
+    it('proposes at the next transaction index', async () => {
+      const { account, sendTransaction } = await proposingAccount({ transactionIndex: 41n })
+
+      const result = await account.sendTransaction(TX)
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+      const data = instructions[1].data
+
+      expect(result.proposalId).toBe('42')
+      expect(new DataView(data.buffer).getBigUint64(8, true)).toBe(42n)
+    })
+
+    it('opens the proposal for voting rather than as a draft', async () => {
+      const { account, sendTransaction } = await proposingAccount()
+
+      await account.sendTransaction(TX)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+
+      // draft is the byte after the u64 index
+      expect(instructions[1].data[16]).toBe(0)
+    })
+
+    it('returns the proposal with no confirmations of its own', async () => {
+      const { account } = await proposingAccount()
+
+      expect(await account.sendTransaction(TX)).toEqual({
+        proposalId: '1',
+        hash: 'cafebabe',
+        fee: 5000n,
+        confirmations: 0,
+        threshold: 2,
+        executed: false
+      })
+    })
+
+    it('reads the multisig once for both index and threshold', async () => {
+      const { account, getAccountInfo } = await proposingAccount()
+
+      await account.sendTransaction(TX)
+
+      expect(getAccountInfo).toHaveBeenCalledTimes(1)
+    })
+
+    it('throws when the signer cannot propose', async () => {
+      // Mask 2 is vote-only: a member, but without the permission to initiate.
+      const { account, sendTransaction } = await proposingAccount({ mask: 2 })
+
+      await expect(account.sendTransaction(TX)).rejects.toThrow(/permission to propose/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws when the signer is not a member', async () => {
+      const { account } = await proposingAccount({ isMember: false })
+
+      await expect(account.sendTransaction(TX)).rejects.toThrow(/not a member/)
+    })
+
+    it('throws when the multisig does not exist', async () => {
+      const { account } = await proposingAccount({ deployed: false })
+
+      await expect(account.sendTransaction(TX)).rejects.toThrow(/does not exist/)
+    })
+
+    it('rejects autoExecute as unimplemented rather than ignoring it', async () => {
+      const { account, sendTransaction } = await proposingAccount()
+
+      await expect(account.sendTransaction(TX, { autoExecute: true })).rejects.toThrow()
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
   })
 })

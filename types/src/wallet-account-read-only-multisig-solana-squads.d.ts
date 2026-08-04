@@ -5,7 +5,7 @@
 /** @typedef {import('@tetherto/wdk-wallet').MultisigInfo} MultisigInfo */
 /** @typedef {import('@tetherto/wdk-wallet').MessageInfo} MessageInfo */
 /** @typedef {import('@tetherto/wdk-wallet').MultisigProposal} MultisigProposal */
-/** @typedef {import('@tetherto/wdk-wallet-solana').SimpleSolanaTransaction} SimpleSolanaTransaction */
+/** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
 /**
  * @typedef {Object} SolanaMultisigSquadsCommonConfig
@@ -332,14 +332,14 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * collector when one is configured. Proposal rent scales with the number of members,
      * so it usually dominates.
      *
-     * @param {SimpleSolanaTransaction} tx - The transaction to quote.
+     * @param {SolanaTransaction} tx - The transaction to quote.
      * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged
      *   over this account's configuration.
      * @returns {Promise<{ fee: bigint }>} The transaction quote, in lamports.
      * @throws {Error} If the multisig does not exist, the transaction is malformed, or the
      *   RPC request fails.
      */
-    quoteSendTransaction(tx: SimpleSolanaTransaction, config?: SolanaMultisigSquadsConfig): Promise<{
+    quoteSendTransaction(tx: SolanaTransaction, config?: SolanaMultisigSquadsConfig): Promise<{
         fee: bigint;
     }>;
     /**
@@ -366,6 +366,31 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     quoteTransfer(transferOptions: import("@tetherto/wdk-wallet").TransferOptions, config?: SolanaMultisigSquadsConfig): Promise<{
         fee: bigint;
+    }>;
+    /**
+     * Reads and decodes the multisig account, keeping every field it holds.
+     *
+     * This is the single decode the account-level accessors project from, so callers that
+     * need several fields — a threshold together with a transaction index, say — get them
+     * from one consistent snapshot.
+     *
+     * @protected
+     * @returns {Promise<{ address: string, isCreated: boolean, threshold: number, timeLock: number, transactionIndex: bigint, staleTransactionIndex: bigint, rentCollector: string | null, members: Array<{ address: string, mask: number }> }>}
+     *   The decoded account. When `isCreated` is false every other field is a placeholder.
+     * @throws {Error} If the address holds a non-Squads account, or if the RPC request fails.
+     */
+    protected _getMultisigAccount(): Promise<{
+        address: string;
+        isCreated: boolean;
+        threshold: number;
+        timeLock: number;
+        transactionIndex: bigint;
+        staleTransactionIndex: bigint;
+        rentCollector: string | null;
+        members: Array<{
+            address: string;
+            mask: number;
+        }>;
     }>;
     /**
      * Reads the Squads program config account.
@@ -412,7 +437,7 @@ export type IWalletAccountReadOnlyMultisig = any;
 export type MultisigInfo = import("@tetherto/wdk-wallet").MultisigInfo;
 export type MessageInfo = import("@tetherto/wdk-wallet").MessageInfo;
 export type MultisigProposal = import("@tetherto/wdk-wallet").MultisigProposal;
-export type SimpleSolanaTransaction = import("@tetherto/wdk-wallet-solana").SimpleSolanaTransaction;
+export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
 export type SolanaTransactionReceipt = import("@tetherto/wdk-wallet-solana").SolanaTransactionReceipt;
 export type SolanaMultisigSquadsCommonConfig = {
     /**
