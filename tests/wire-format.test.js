@@ -75,25 +75,42 @@ describe('wire format', () => {
     account = await wallet.getAccount(0)
   })
 
-  describe('proposalApprove instruction data', () => {
-    const DISCRIMINATOR = [144, 37, 164, 136, 188, 216, 42, 248]
-
-    it.each([
+  describe('proposal vote instruction data', () => {
+    // Approve and reject share `ProposalVoteArgs`, so one encoder serves both and the diff
+    // has to cover both discriminators.
+    const VOTES = [
+      ['proposalApprove', [144, 37, 164, 136, 188, 216, 42, 248], 'proposalApproveStruct', 'proposalApproveInstructionDiscriminator'],
+      ['proposalReject', [243, 62, 134, 156, 230, 106, 246, 135], 'proposalRejectStruct', 'proposalRejectInstructionDiscriminator']
+    ]
+    const MEMOS = [
       ['no memo', undefined, 9],
       ['an empty memo', '', 13],
       ['a short memo', 'ok', 15],
       ['a longer memo', 'looks good to me', 29],
       ['a multi-byte memo', 'schön 👍', 24]
-    ])('matches the SDK with %s', (_label, memo, size) => {
-      const [bytes] = generated.proposalApproveStruct.serialize({
-        instructionDiscriminator: generated.proposalApproveInstructionDiscriminator,
+    ]
+
+    const CASES = VOTES.flatMap(([name, discriminator, struct, tag]) =>
+      MEMOS.map(([label, memo, size]) => [name, label, discriminator, struct, tag, memo, size])
+    )
+
+    it.each(CASES)('matches the SDK for %s with %s', (_name, _label, discriminator, struct, tag, memo, size) => {
+      const [bytes] = generated[struct].serialize({
+        instructionDiscriminator: generated[tag],
         args: { memo: memo ?? null }
       })
 
-      const mine = account._encodeProposalVoteData(DISCRIMINATOR, memo)
+      const mine = account._encodeProposalVoteData(discriminator, memo)
 
       expect(mine).toHaveLength(size)
       expect(Array.from(mine)).toEqual(Array.from(bytes))
+    })
+
+    it('agrees with the SDK on both discriminators', () => {
+      expect(Array.from(generated.proposalApproveInstructionDiscriminator))
+        .toEqual([144, 37, 164, 136, 188, 216, 42, 248])
+      expect(Array.from(generated.proposalRejectInstructionDiscriminator))
+        .toEqual([243, 62, 134, 156, 230, 106, 246, 135])
     })
   })
 

@@ -1,13 +1,3 @@
-/** @typedef {import('@tetherto/wdk-wallet').IWalletAccountMultisig} IWalletAccountMultisig */
-/** @typedef {import('@tetherto/wdk-wallet').MultisigResult} MultisigResult */
-/** @typedef {import('@tetherto/wdk-wallet').MultisigTransactionResult} MultisigTransactionResult */
-/** @typedef {import('@tetherto/wdk-wallet').MultisigExecuteResult} MultisigExecuteResult */
-/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
-/** @typedef {import('@tetherto/wdk-wallet').MultisigOptions} MultisigOptions */
-/** @typedef {import('@tetherto/wdk-wallet').MessageProposal} MessageProposal */
-/** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
-/** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
-/** @typedef {import('./wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsConfig} SolanaMultisigSquadsConfig */
 /**
  * Solana Squads multisig wallet account with signing capabilities.
  * Provides full transaction and message signing operations.
@@ -51,10 +41,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * one member's consent rather than the multisig's.
      *
      * @param {string | Uint8Array} message - The message to propose.
-     * @returns {Promise<MessageProposal>} The message proposal.
+     * @returns {Promise<MultisigMessageProposal>} The message proposal.
      * @throws {NotSupportedError} Always, for the reasons above.
      */
-    proposeMessage(message: string | Uint8Array): Promise<MessageProposal>;
+    proposeMessage(message: string | Uint8Array): Promise<MultisigMessageProposal>;
     /**
      * Approves a pending message proposal.
      *
@@ -63,10 +53,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * account, which are keyed by sequential transaction index.
      *
      * @param {string} messageHash - The hash of the proposed message.
-     * @returns {Promise<MessageProposal>} The updated message proposal.
+     * @returns {Promise<MultisigMessageProposal>} The updated message proposal.
      * @throws {NotSupportedError} Always, for the reasons above.
      */
-    approveMessage(messageHash: string): Promise<MessageProposal>;
+    approveMessage(messageHash: string): Promise<MultisigMessageProposal>;
     /**
      * Validates that the signer is a member of the multisig.
      *
@@ -157,10 +147,25 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /**
      * Rejects a pending transaction proposal.
      *
-     * @param {number | bigint} proposalId - The proposal (transaction index) id.
+     * A previous approval does not block a rejection: Squads withdraws the approval, so a
+     * member can change their vote. Rejecting twice is refused.
+     *
+     * Note the returned `confirmations` counts approvals, so it **decreases** when the signer
+     * had previously approved.
+     *
+     * Squads ends a proposal once enough members have rejected that the threshold can no longer
+     * be reached, which in a multisig requiring unanimity is a single rejection. This does not
+     * report whether that happened — use {@link getProposals} for the resulting status.
+     *
+     * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
+     * @param {string} [memo] - An optional note recorded on chain with the vote. It costs
+     *   rent, and an empty string is stored as a present-but-empty memo rather than none.
      * @returns {Promise<MultisigTransactionResult>} The rejection result.
+     * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the
+     *   signer cannot vote, the proposal is not open for voting, the signer has already
+     *   rejected it, or the RPC request fails.
      */
-    rejectTx(proposalId: number | bigint): Promise<MultisigTransactionResult>;
+    rejectTx(proposalId: number | bigint | string, memo?: string): Promise<MultisigTransactionResult>;
     /**
      * Submits an approved proposal for on-chain execution.
      *
@@ -174,7 +179,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * holding what {@link quoteSendTransaction} quoted.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
-     * @returns {Promise<{ hash: string, fee: bigint }>} The execution transaction's result.
+     * @returns {Promise<TransactionResult>} The execution transaction's result.
      * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the signer
      *   cannot execute, the proposal is not approved, its time lock has not elapsed, a config
      *   proposal has been invalidated, or the RPC request fails.
@@ -182,10 +187,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *   ephemeral signers, or changes a spending limit.
      * @todo Support batches, ephemeral signers and spending-limit actions.
      */
-    executeTx(proposalId: number | bigint | string): Promise<{
-        hash: string;
-        fee: bigint;
-    }>;
+    executeTx(proposalId: number | bigint | string): Promise<TransactionResult>;
     /**
      * Proposes adding a new member to the multisig.
      *
@@ -264,6 +266,15 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /** @private */
     private _requirePermission;
     /**
+     * Validates everything Squads requires of a vote, and returns the signer's address.
+     *
+     * The program applies the same four conditions to approvals and rejections, so both share
+     * this. Note staleness always blocks a vote, unlike execution.
+     *
+     * @private
+     */
+    private _requireVotableProposal;
+    /**
      * Builds a `proposalApprove` or `proposalReject` instruction.
      *
      * Kept separate from the methods that send it so a future `autoExecute` can pack a vote
@@ -301,13 +312,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /** @private */
     private _encodeMultisigCreateV2Data;
 }
-export type IWalletAccountMultisig = any;
-export type MultisigResult = import("@tetherto/wdk-wallet").MultisigResult;
-export type MultisigTransactionResult = import("@tetherto/wdk-wallet").MultisigTransactionResult;
-export type MultisigExecuteResult = import("@tetherto/wdk-wallet").MultisigExecuteResult;
+export type IWalletAccountMultisig = import("@tetherto/wdk-wallet/multisig").IWalletAccountMultisig;
+export type MultisigTransactionResult = import("@tetherto/wdk-wallet/multisig").MultisigTransactionResult;
 export type MultisigTransactionOptions = import("@tetherto/wdk-wallet/multisig").MultisigTransactionOptions;
-export type MultisigOptions = import("@tetherto/wdk-wallet").MultisigOptions;
-export type MessageProposal = import("@tetherto/wdk-wallet").MessageProposal;
+export type MultisigOptions = import("@tetherto/wdk-wallet/multisig").MultisigOptions;
+export type MultisigMessageProposal = import("@tetherto/wdk-wallet/multisig").MultisigMessageProposal;
+export type TransactionResult = import("@tetherto/wdk-wallet").TransactionResult;
 export type TransferOptions = import("@tetherto/wdk-wallet").TransferOptions;
 export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
 export type SolanaMultisigSquadsConfig = import("./wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsConfig;

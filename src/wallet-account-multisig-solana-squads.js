@@ -38,6 +38,21 @@ import {
   TOKEN_PROGRAM_ADDRESS
 } from '@solana-program/token'
 
+// The multisig types resolve only through the `/multisig` subpath: the package root
+// re-exports them from a path that does not exist, so importing them from there silently
+// yields `any`.
+/** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionResult} MultisigTransactionResult */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigOptions} MultisigOptions */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessageProposal} MultisigMessageProposal */
+/** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
+/** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
+
+/** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
+
+/** @typedef {import('./wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsConfig} SolanaMultisigSquadsConfig */
+
 const SYSTEM_PROGRAM_ADDRESS = '11111111111111111111111111111111'
 
 const MULTISIG_CREATE_V2_DISCRIMINATOR = [50, 221, 199, 93, 40, 245, 139, 233]
@@ -70,6 +85,7 @@ const SEED_MULTISIG = 'multisig'
 const VAULT_TRANSACTION_CREATE_DISCRIMINATOR = [48, 250, 78, 168, 208, 226, 218, 211]
 const PROPOSAL_CREATE_DISCRIMINATOR = [220, 60, 73, 224, 30, 108, 79, 159]
 const PROPOSAL_APPROVE_DISCRIMINATOR = [144, 37, 164, 136, 188, 216, 42, 248]
+const PROPOSAL_REJECT_DISCRIMINATOR = [243, 62, 134, 156, 230, 106, 246, 135]
 const VAULT_TRANSACTION_EXECUTE_DISCRIMINATOR = [194, 8, 161, 87, 153, 164, 25, 171]
 const CONFIG_TRANSACTION_EXECUTE_DISCRIMINATOR = [114, 146, 244, 189, 252, 140, 36, 40]
 
@@ -99,19 +115,6 @@ const MESSAGE_HEADER_SIZE = 3
 const PROGRAM_ID_INDEX_SIZE = 1
 const SMALL_PREFIX_SIZE = 1
 const DATA_PREFIX_SIZE = 2
-
-/** @typedef {import('@tetherto/wdk-wallet').IWalletAccountMultisig} IWalletAccountMultisig */
-/** @typedef {import('@tetherto/wdk-wallet').MultisigResult} MultisigResult */
-/** @typedef {import('@tetherto/wdk-wallet').MultisigTransactionResult} MultisigTransactionResult */
-/** @typedef {import('@tetherto/wdk-wallet').MultisigExecuteResult} MultisigExecuteResult */
-/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
-/** @typedef {import('@tetherto/wdk-wallet').MultisigOptions} MultisigOptions */
-/** @typedef {import('@tetherto/wdk-wallet').MessageProposal} MessageProposal */
-/** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
-
-/** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
-
-/** @typedef {import('./wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsConfig} SolanaMultisigSquadsConfig */
 
 /**
  * Solana Squads multisig wallet account with signing capabilities.
@@ -190,7 +193,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * one member's consent rather than the multisig's.
    *
    * @param {string | Uint8Array} message - The message to propose.
-   * @returns {Promise<MessageProposal>} The message proposal.
+   * @returns {Promise<MultisigMessageProposal>} The message proposal.
    * @throws {NotSupportedError} Always, for the reasons above.
    */
   async proposeMessage (message) {
@@ -208,7 +211,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * account, which are keyed by sequential transaction index.
    *
    * @param {string} messageHash - The hash of the proposed message.
-   * @returns {Promise<MessageProposal>} The updated message proposal.
+   * @returns {Promise<MultisigMessageProposal>} The updated message proposal.
    * @throws {NotSupportedError} Always, for the reasons above.
    */
   async approveMessage (messageHash) {
@@ -454,34 +457,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   async approveTx (proposalId, memo) {
     const index = this._toProposalIndex(proposalId)
     const { multisig, proposal } = await this._getMultisigAndProposal(index)
-
-    if (!multisig.isCreated) {
-      throw new Error(
-        `The multisig account ${multisig.address} does not exist. Deploy it before voting on proposals.`
-      )
-    }
-
-    const signerAddress = await this.getSignerAddress()
-
-    this._requirePermission(multisig, signerAddress, PERMISSION_VOTE, 'vote on proposals')
-
-    if (!proposal.exists) {
-      throw new Error(
-        `The multisig ${multisig.address} has no proposal at index ${index}.`
-      )
-    }
-
-    if (proposal.status !== PROPOSAL_STATUS_ACTIVE) {
-      throw new Error(
-        `The proposal ${index} is ${proposal.statusName} rather than open for voting.`
-      )
-    }
-
-    if (index <= multisig.staleTransactionIndex) {
-      throw new Error(
-        `The proposal ${index} was invalidated by a later configuration change and can no longer be voted on.`
-      )
-    }
+    const signerAddress = await this._requireVotableProposal(multisig, proposal, index)
 
     if (proposal.approved.includes(signerAddress)) {
       throw new Error(`The signer ${signerAddress} has already approved the proposal ${index}.`)
@@ -512,11 +488,54 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /**
    * Rejects a pending transaction proposal.
    *
-   * @param {number | bigint} proposalId - The proposal (transaction index) id.
+   * A previous approval does not block a rejection: Squads withdraws the approval, so a
+   * member can change their vote. Rejecting twice is refused.
+   *
+   * Note the returned `confirmations` counts approvals, so it **decreases** when the signer
+   * had previously approved.
+   *
+   * Squads ends a proposal once enough members have rejected that the threshold can no longer
+   * be reached, which in a multisig requiring unanimity is a single rejection. This does not
+   * report whether that happened — use {@link getProposals} for the resulting status.
+   *
+   * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
+   * @param {string} [memo] - An optional note recorded on chain with the vote. It costs
+   *   rent, and an empty string is stored as a present-but-empty memo rather than none.
    * @returns {Promise<MultisigTransactionResult>} The rejection result.
+   * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the
+   *   signer cannot vote, the proposal is not open for voting, the signer has already
+   *   rejected it, or the RPC request fails.
    */
-  async rejectTx (proposalId) {
-    throw new NotImplementedError('rejectTx(proposalId)')
+  async rejectTx (proposalId, memo) {
+    const index = this._toProposalIndex(proposalId)
+    const { multisig, proposal } = await this._getMultisigAndProposal(index)
+    const signerAddress = await this._requireVotableProposal(multisig, proposal, index)
+
+    if (proposal.rejected.includes(signerAddress)) {
+      throw new Error(`The signer ${signerAddress} has already rejected the proposal ${index}.`)
+    }
+
+    const instruction = this._buildProposalVoteInstruction(
+      PROPOSAL_REJECT_DISCRIMINATOR,
+      multisig.address,
+      signerAddress,
+      proposal.address,
+      memo
+    )
+
+    const { hash, fee } = await this._signerAccount.sendTransaction({
+      instructions: [instruction]
+    })
+
+    return {
+      proposalId: index.toString(),
+      hash,
+      fee,
+      // The rejection withdraws this member's approval, so the count can go down.
+      confirmations: proposal.approved.length - (proposal.approved.includes(signerAddress) ? 1 : 0),
+      threshold: multisig.threshold,
+      executed: false
+    }
   }
 
   /**
@@ -532,7 +551,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * holding what {@link quoteSendTransaction} quoted.
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
-   * @returns {Promise<{ hash: string, fee: bigint }>} The execution transaction's result.
+   * @returns {Promise<TransactionResult>} The execution transaction's result.
    * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the signer
    *   cannot execute, the proposal is not approved, its time lock has not elapsed, a config
    *   proposal has been invalidated, or the RPC request fails.
@@ -923,6 +942,44 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
 
     return member
+  }
+
+  /**
+   * Validates everything Squads requires of a vote, and returns the signer's address.
+   *
+   * The program applies the same four conditions to approvals and rejections, so both share
+   * this. Note staleness always blocks a vote, unlike execution.
+   *
+   * @private
+   */
+  async _requireVotableProposal (multisig, proposal, index) {
+    if (!multisig.isCreated) {
+      throw new Error(
+        `The multisig account ${multisig.address} does not exist. Deploy it before voting on proposals.`
+      )
+    }
+
+    const signerAddress = await this.getSignerAddress()
+
+    this._requirePermission(multisig, signerAddress, PERMISSION_VOTE, 'vote on proposals')
+
+    if (!proposal.exists) {
+      throw new Error(`The multisig ${multisig.address} has no proposal at index ${index}.`)
+    }
+
+    if (proposal.status !== PROPOSAL_STATUS_ACTIVE) {
+      throw new Error(
+        `The proposal ${index} is ${proposal.statusName} rather than open for voting.`
+      )
+    }
+
+    if (index <= multisig.staleTransactionIndex) {
+      throw new Error(
+        `The proposal ${index} was invalidated by a later configuration change and can no longer be voted on.`
+      )
+    }
+
+    return signerAddress
   }
 
   /**

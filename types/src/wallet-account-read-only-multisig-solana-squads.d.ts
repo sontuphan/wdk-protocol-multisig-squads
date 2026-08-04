@@ -1,10 +1,10 @@
 /** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
 /** @typedef {import('@solana/rpc-types').Commitment} Commitment */
 /** @typedef {import('@solana/addresses').Address} Address */
-/** @typedef {import('@tetherto/wdk-wallet').IWalletAccountReadOnlyMultisig} IWalletAccountReadOnlyMultisig */
-/** @typedef {import('@tetherto/wdk-wallet').MultisigInfo} MultisigInfo */
-/** @typedef {import('@tetherto/wdk-wallet').MessageInfo} MessageInfo */
-/** @typedef {import('@tetherto/wdk-wallet').MultisigProposal} MultisigProposal */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountReadOnlyMultisig} IWalletAccountReadOnlyMultisig */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInfo} MultisigInfo */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessage} MultisigMessage */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
 /**
@@ -295,11 +295,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * index rather than by message hash, so a hash cannot be resolved to an account.
      *
      * @param {string[]} messageHashes - The message hashes.
-     * @returns {Promise<Array<MessageInfo | null>>} For each hash, the message proposal,
+     * @returns {Promise<Array<MultisigMessage | null>>} For each hash, the message proposal,
      *   or null if it has not been found.
      * @throws {NotSupportedError} Always, for the reasons above.
      */
-    getMessages(messageHashes: string[]): Promise<Array<MessageInfo | null>>;
+    getMessages(messageHashes: string[]): Promise<Array<MultisigMessage | null>>;
     /**
      * Quotes the cost of deploying (creating) the multisig.
      *
@@ -493,10 +493,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 export type SolanaRpc = ReturnType<typeof import("@solana/rpc").createSolanaRpc>;
 export type Commitment = import("@solana/rpc-types").Commitment;
 export type Address = import("@solana/addresses").Address;
-export type IWalletAccountReadOnlyMultisig = any;
-export type MultisigInfo = import("@tetherto/wdk-wallet").MultisigInfo;
-export type MessageInfo = import("@tetherto/wdk-wallet").MessageInfo;
-export type MultisigProposal = import("@tetherto/wdk-wallet").MultisigProposal;
+export type IWalletAccountReadOnlyMultisig = import("@tetherto/wdk-wallet/multisig").IWalletAccountReadOnlyMultisig;
+export type MultisigInfo = import("@tetherto/wdk-wallet/multisig").MultisigInfo;
+export type MultisigMessage = import("@tetherto/wdk-wallet/multisig").MultisigMessage;
+export type MultisigProposal = import("@tetherto/wdk-wallet/multisig").MultisigProposal;
 export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
 export type SolanaTransactionReceipt = import("@tetherto/wdk-wallet-solana").SolanaTransactionReceipt;
 export type SolanaMultisigSquadsCommonConfig = {
