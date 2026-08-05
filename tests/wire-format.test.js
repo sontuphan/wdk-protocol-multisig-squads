@@ -19,6 +19,7 @@
 
 import { describe, it, expect, beforeEach } from '@jest/globals'
 
+import * as multisig from '@sqds/multisig'
 import { generated, utils } from '@sqds/multisig'
 import { PublicKey, TransactionMessage, SystemProgram } from '@solana/web3.js'
 import { getBase58Decoder } from '@solana/codecs'
@@ -73,6 +74,23 @@ describe('wire format', () => {
       createKeySecret: getBase58Decoder().decode(new Uint8Array(32).fill(9))
     })
     account = await wallet.getAccount(0)
+  })
+
+  describe('spending limit address', () => {
+    // executeTx derives this to pass through as a remaining account, so a wrong seed fails
+    // only on chain. The SDK is the oracle.
+    it.each([
+      ['11111111111111111111111111111111', '2JvLzXomThTBMSj2YQY3wE21kiaSpwGyJ17nm9xiLMsE'],
+      ['11111111111111111111111111111111', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'],
+      ['EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', '3uXqWpwgqKVdiHAwF6Vmu4G4vdQzpR66xjPkz1G7zMKE']
+    ])('matches the SDK for multisig %s and create key %s', async (multisigPda, createKey) => {
+      const [expected] = multisig.getSpendingLimitPda({
+        multisigPda: new PublicKey(multisigPda),
+        createKey: new PublicKey(createKey)
+      })
+
+      expect(await account._getSpendingLimitPda(multisigPda, createKey)).toBe(expected.toBase58())
+    })
   })
 
   describe('configTransactionCreate instruction data', () => {
@@ -304,7 +322,7 @@ describe('wire format', () => {
      * @param {Object[]} [lookups] - Address table lookups to attach.
      * @returns {{ account: Object, message: Object }} The account value and the stored message.
      */
-    function storedTransaction (message, vault, lookups = []) {
+    function storedTransaction (message, vault, lookups = [], ephemeralSignerBumps = []) {
       const compiled = message.compileToV0Message(lookups.map((l) => l.account))
       const { header, staticAccountKeys } = compiled
 
@@ -333,7 +351,7 @@ describe('wire format', () => {
         bump: 255,
         vaultIndex: 0,
         vaultBump: 255,
-        ephemeralSignerBumps: Uint8Array.from([]),
+        ephemeralSignerBumps: Uint8Array.from(ephemeralSignerBumps),
         message: stored
       }).serialize()[0]
 
@@ -388,13 +406,13 @@ describe('wire format', () => {
      * @param {Object[]} lookups - The lookup table accounts, if any.
      * @returns {Promise<Array>} The reference metas.
      */
-    async function reference (stored, vault, lookups) {
+    async function reference (stored, vault, lookups, ephemeralSignerBumps = []) {
       const { accountMetas } = await utils.accountsForTransactionExecute({
         connection: null,
         transactionPda: new PublicKey(TEST_MULTISIG),
         vaultPda: new PublicKey(vault),
         message: stored,
-        ephemeralSignerBumps: [],
+        ephemeralSignerBumps,
         addressLookupTableAccounts: lookups.map((l) => l.account)
       })
 
@@ -438,13 +456,13 @@ describe('wire format', () => {
         : await splMessage(vault, createAta)
 
       const { account: stored, message: storedMessage } = storedTransaction(message, vault)
-      const decoded = account._decodeTransactionAccount('11111111111111111111111111111111', stored)
+      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
 
       expect(decoded.kind).toBe('vault')
       expect(decoded.vaultIndex).toBe(0)
       expect(decoded.ephemeralSignerCount).toBe(0)
 
-      const mine = flatten(await account._resolveExecutionAccounts(decoded.message, vault))
+      const mine = flatten(await account._resolveExecutionAccounts(decoded, vault))
 
       expect(mine).toEqual(await reference(storedMessage, vault, []))
     })
@@ -461,8 +479,8 @@ describe('wire format', () => {
         })]
       })
       const { account: stored } = storedTransaction(message, vault)
-      const decoded = account._decodeTransactionAccount('11111111111111111111111111111111', stored)
-      const resolved = await account._resolveExecutionAccounts(decoded.message, vault)
+      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
+      const resolved = await account._resolveExecutionAccounts(decoded, vault)
       const vaultMeta = resolved.find((a) => a.address === vault)
 
       // Role 1 is writable non-signer. The program signs for the vault itself.
@@ -473,7 +491,7 @@ describe('wire format', () => {
       const vault = await account.getVaultAddress()
       const message = await splMessage(vault, true)
       const { account: stored, message: storedMessage } = storedTransaction(message, vault)
-      const decoded = account._decodeTransactionAccount('11111111111111111111111111111111', stored)
+      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
 
       expect(decoded.message.accountKeys)
         .toEqual(storedMessage.accountKeys.map((k) => k.toBase58()))
@@ -511,7 +529,7 @@ describe('wire format', () => {
 
       const { account: stored, message: storedMessage } =
         storedTransaction(message, vault, [{ account: table }])
-      const decoded = account._decodeTransactionAccount('11111111111111111111111111111111', stored)
+      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
 
       expect(decoded.message.addressTableLookups).toHaveLength(1)
       expect(decoded.message.addressTableLookups[0].accountKey).toBe(tableKey.toBase58())
@@ -534,13 +552,53 @@ describe('wire format', () => {
         })
       }
 
-      const mine = flatten(await account._resolveExecutionAccounts(decoded.message, vault))
+      const mine = flatten(await account._resolveExecutionAccounts(decoded, vault))
 
       expect(mine).toEqual(await reference(storedMessage, vault, [{ account: table }]))
 
       // Group 1 first, group 3 last.
       expect(mine[0].address).toBe(tableKey.toBase58())
       expect(mine[mine.length - 1].address).toBe(extra[1].toBase58())
+    })
+
+    it('matches the SDK when the message needs ephemeral signers', async () => {
+      const vault = await account.getVaultAddress()
+      const [ephemeral] = multisig.getEphemeralSignerPda({
+        transactionPda: new PublicKey(TEST_MULTISIG),
+        ephemeralSignerIndex: 0
+      })
+
+      // A transfer *from* the ephemeral signer, so the message marks it a writable signer.
+      const message = new TransactionMessage({
+        payerKey: new PublicKey(vault),
+        recentBlockhash: '11111111111111111111111111111111',
+        instructions: [SystemProgram.transfer({
+          fromPubkey: ephemeral,
+          toPubkey: new PublicKey(RECIPIENT),
+          lamports: 1000
+        })]
+      })
+
+      const { account: stored, message: storedMessage } =
+        storedTransaction(message, vault, [], [255])
+      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
+
+      expect(decoded.ephemeralSignerCount).toBe(1)
+
+      const mine = flatten(await account._resolveExecutionAccounts(decoded, vault))
+
+      expect(mine).toEqual(await reference(storedMessage, vault, [], [255]))
+      expect(mine.find((a) => a.address === ephemeral.toBase58()))
+        .toEqual({ address: ephemeral.toBase58(), signer: false, writable: true })
+    })
+
+    it('derives ephemeral signer addresses the SDK agrees with', async () => {
+      const mine = await account._getEphemeralSignerPdas(TEST_MULTISIG, 3)
+
+      expect(mine).toEqual([0, 1, 2].map((i) => multisig.getEphemeralSignerPda({
+        transactionPda: new PublicKey(TEST_MULTISIG),
+        ephemeralSignerIndex: i
+      })[0].toBase58()))
     })
 
     it('refuses a lookup table that no longer exists', async () => {
@@ -559,13 +617,13 @@ describe('wire format', () => {
         })]
       })
       const { account: stored } = storedTransaction(message, vault, [{ account: table }])
-      const decoded = account._decodeTransactionAccount('11111111111111111111111111111111', stored)
+      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
 
       account._rpc = {
         getMultipleAccounts: () => ({ send: async () => ({ value: [null] }) })
       }
 
-      await expect(account._resolveExecutionAccounts(decoded.message, vault))
+      await expect(account._resolveExecutionAccounts(decoded, vault))
         .rejects.toThrow(/no longer be executed/)
     })
 
@@ -585,7 +643,7 @@ describe('wire format', () => {
         })]
       })
       const { account: stored } = storedTransaction(message, vault, [{ account: table }])
-      const decoded = account._decodeTransactionAccount('11111111111111111111111111111111', stored)
+      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
 
       const raw = new Uint8Array(56 + extra.length * 32)
       extra.forEach((key, i) => raw.set(key.toBytes(), 56 + i * 32))
@@ -604,7 +662,7 @@ describe('wire format', () => {
         })
       }
 
-      await expect(account._resolveExecutionAccounts(decoded.message, vault))
+      await expect(account._resolveExecutionAccounts(decoded, vault))
         .rejects.toThrow(/does not exist/)
     })
 

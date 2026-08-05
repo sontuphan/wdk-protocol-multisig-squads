@@ -103,6 +103,7 @@ const CONFIG_ACTION_NAMES = [
   'SetRentCollector'
 ]
 const CONFIG_ACTION_ADD_SPENDING_LIMIT = 4
+const CONFIG_ACTION_REMOVE_SPENDING_LIMIT = 5
 const CONFIG_ACTION_SET_RENT_COLLECTOR = 6
 const CONFIG_ACTION_BODY_SIZES = [33, 32, 2, 4, 0, 32, 0]
 const ADD_SPENDING_LIMIT_FIXED_SIZE = 74
@@ -179,6 +180,8 @@ const SEED_VAULT = 'vault'
 const SEED_TRANSACTION = 'transaction'
 const SEED_PROPOSAL = 'proposal'
 const SEED_PROGRAM_CONFIG = 'program_config'
+const SEED_SPENDING_LIMIT = 'spending_limit'
+const SEED_EPHEMERAL_SIGNER = 'ephemeral_signer'
 
 const DEFAULT_VAULT_INDEX = 0
 const MAX_VAULT_INDEX = 255
@@ -1175,6 +1178,60 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     return transactionPda
   }
 
+  /**
+   * Derives the ephemeral signer addresses a stored transaction's message expects.
+   *
+   * Squads substitutes these program-derived addresses for the throwaway keypairs a
+   * transaction would otherwise need — an account cannot be created at an address that does
+   * not sign for itself, and no keypair can be held across a proposal's lifetime.
+   *
+   * @protected
+   * @param {string} transactionPda - The transaction address the signers are derived from.
+   * @param {number} count - How many the message needs.
+   * @returns {Promise<Address[]>} The ephemeral signer addresses, in index order.
+   */
+  async _getEphemeralSignerPdas (transactionPda, count) {
+    const encoder = getAddressEncoder()
+
+    return Promise.all(
+      Array.from({ length: count }, async (_unused, index) => {
+        const [pda] = await getProgramDerivedAddress({
+          programAddress: this._programId,
+          seeds: [
+            SEED_PREFIX,
+            encoder.encode(address(transactionPda)),
+            SEED_EPHEMERAL_SIGNER,
+            Uint8Array.of(index)
+          ]
+        })
+
+        return pda
+      })
+    )
+  }
+
+  /**
+   * Derives a spending limit's address from the create key its action carries.
+   *
+   * @protected
+   * @param {string} multisigPda - The multisig address.
+   * @param {string} createKey - The action's `createKey`.
+   * @returns {Promise<Address>} The spending limit address.
+   */
+  async _getSpendingLimitPda (multisigPda, createKey) {
+    const [spendingLimitPda] = await getProgramDerivedAddress({
+      programAddress: this._programId,
+      seeds: [
+        SEED_PREFIX,
+        getAddressEncoder().encode(address(multisigPda)),
+        SEED_SPENDING_LIMIT,
+        getAddressEncoder().encode(address(createKey))
+      ]
+    })
+
+    return spendingLimitPda
+  }
+
   /** @private */
   async _getProposalPda (multisigPda, index) {
     const [proposalPda] = await getProgramDerivedAddress({
@@ -1440,6 +1497,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
   /** @private */
   _decodeConfigActions (data, view, start) {
+    const addressDecoder = getBase58Decoder()
+
     let offset = start
 
     const count = view.getUint32(offset, true)
@@ -1459,7 +1518,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
       offset += ENUM_TAG_SIZE
 
+      // Spending-limit actions name an account the executor has to pass through: the one to
+      // create, keyed by `createKey`, or the one to close, given outright.
+      let createKey = null
+      let spendingLimit = null
+
       if (tag === CONFIG_ACTION_ADD_SPENDING_LIMIT) {
+        createKey = addressDecoder.decode(data.subarray(offset, offset + ADDRESS_SIZE))
         offset += ADD_SPENDING_LIMIT_FIXED_SIZE
 
         const memberCount = view.getUint32(offset, true)
@@ -1467,13 +1532,16 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
         const destinationCount = view.getUint32(offset, true)
         offset += VEC_PREFIX_SIZE + ADDRESS_SIZE * destinationCount
+      } else if (tag === CONFIG_ACTION_REMOVE_SPENDING_LIMIT) {
+        spendingLimit = addressDecoder.decode(data.subarray(offset, offset + ADDRESS_SIZE))
+        offset += CONFIG_ACTION_BODY_SIZES[tag]
       } else if (tag === CONFIG_ACTION_SET_RENT_COLLECTOR) {
         offset += OPTION_TAG_SIZE + (data[offset] === 1 ? ADDRESS_SIZE : 0)
       } else {
         offset += CONFIG_ACTION_BODY_SIZES[tag]
       }
 
-      actions.push({ kind })
+      actions.push({ kind, createKey, spendingLimit })
     }
 
     return actions

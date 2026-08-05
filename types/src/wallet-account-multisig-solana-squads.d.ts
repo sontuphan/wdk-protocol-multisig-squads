@@ -183,9 +183,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the signer
      *   cannot execute, the proposal is not approved, its time lock has not elapsed, a config
      *   proposal has been invalidated, or the RPC request fails.
-     * @throws {NotImplementedError} If the proposal is a batch, wraps a message needing
-     *   ephemeral signers, or changes a spending limit.
-     * @todo Support batches, ephemeral signers and spending-limit actions.
+     * @throws {NotImplementedError} If the proposal is a batch.
+     * @todo Support batches.
      */
     executeTx(proposalId: number | bigint | string): Promise<TransactionResult>;
     /**
@@ -350,16 +349,36 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @private
      */
     private _buildProposalVoteInstruction;
-    /** @private */
+    /**
+     * Builds a `configTransactionExecute` instruction.
+     *
+     * Spending-limit actions name an account the program looks for among the remaining
+     * accounts — one to create, one to close — so those are resolved and appended.
+     *
+     * @private
+     */
     private _buildConfigExecuteInstruction;
+    /**
+     * Resolves the spending limit accounts a config transaction's actions refer to.
+     *
+     * `AddSpendingLimit` names a create key the account is derived from; `RemoveSpendingLimit`
+     * names the account outright. The program finds each by key rather than by position, so
+     * order does not matter — only that every one is present and writable.
+     *
+     * @private
+     */
+    private _resolveSpendingLimitAccounts;
     /** @private */
     private _buildVaultExecuteInstruction;
     /**
      * Builds the `remaining_accounts` the program expects for a vault transaction.
      *
      * Three groups in a fixed order: the lookup table accounts, the message's own keys with
-     * the flags the message asked for, then the addresses those lookups resolve to. The vault
-     * is de-signed because the program signs for it.
+     * the flags the message asked for, then the addresses those lookups resolve to.
+     *
+     * The vault and any ephemeral signers are de-signed: the message marks them as signers, but
+     * they are program-derived addresses that the program signs for at execution, so the outer
+     * transaction must not ask them for a signature it cannot produce.
      *
      * @private
      */

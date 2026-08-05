@@ -494,6 +494,28 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     private _getTransactionSeeds;
     /** @private */
     private _getTransactionPda;
+    /**
+     * Derives the ephemeral signer addresses a stored transaction's message expects.
+     *
+     * Squads substitutes these program-derived addresses for the throwaway keypairs a
+     * transaction would otherwise need — an account cannot be created at an address that does
+     * not sign for itself, and no keypair can be held across a proposal's lifetime.
+     *
+     * @protected
+     * @param {string} transactionPda - The transaction address the signers are derived from.
+     * @param {number} count - How many the message needs.
+     * @returns {Promise<Address[]>} The ephemeral signer addresses, in index order.
+     */
+    protected _getEphemeralSignerPdas(transactionPda: string, count: number): Promise<Address[]>;
+    /**
+     * Derives a spending limit's address from the create key its action carries.
+     *
+     * @protected
+     * @param {string} multisigPda - The multisig address.
+     * @param {string} createKey - The action's `createKey`.
+     * @returns {Promise<Address>} The spending limit address.
+     */
+    protected _getSpendingLimitPda(multisigPda: string, createKey: string): Promise<Address>;
     /** @private */
     private _getProposalPda;
     /** @private */

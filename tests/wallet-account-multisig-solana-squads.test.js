@@ -188,7 +188,8 @@ function vaultTransactionAccountValue ({
  * `SetRentCollectorSome` writes the `Some` form of `SetRentCollector`, whose body is 32
  * bytes longer than the `None` form.
  *
- * @param {string[]} kinds - The action kinds, by name.
+ * @param {Array<string | { kind: string, key?: string }>} kinds - The action kinds, optionally
+ *   with the address their body leads with.
  * @returns {Object} An account value.
  */
 function configTransactionAccountValue (kinds) {
@@ -211,7 +212,8 @@ function configTransactionAccountValue (kinds) {
     SetRentCollector: 1,
     SetRentCollectorSome: 33
   }
-  const size = 85 + kinds.reduce((total, kind) => total + 1 + BODIES[kind], 0)
+  const nameOf = (entry) => typeof entry === 'string' ? entry : entry.kind
+  const size = 85 + kinds.reduce((total, entry) => total + 1 + BODIES[nameOf(entry)], 0)
   const data = new Uint8Array(size)
   const view = new DataView(data.buffer)
 
@@ -220,11 +222,18 @@ function configTransactionAccountValue (kinds) {
 
   let offset = 85
 
-  for (const kind of kinds) {
+  for (const entry of kinds) {
+    const kind = nameOf(entry)
+
     data[offset] = TAGS.indexOf(kind.replace(/Some$/, ''))
 
     if (kind === 'SetRentCollectorSome') {
       data[offset + 1] = 1
+    }
+
+    // AddSpendingLimit leads with its create key; RemoveSpendingLimit with the account itself.
+    if (entry.key) {
+      data.set(getBase58Encoder().encode(entry.key), offset + 1)
     }
 
     offset += 1 + BODIES[kind]
@@ -1861,13 +1870,29 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(account.executeTx(3)).rejects.toThrow(/does not exist/)
     })
 
-    it('refuses a message needing ephemeral signers', async () => {
+    it('de-signs the ephemeral signers a message declares', async () => {
+      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: TEST_RPC_URL, multisigPda: TEST_MULTISIG_PDA
+      })
+      const probe = await wallet.getAccount(0)
+      const transactionPda = await probe._getTransactionPda(TEST_MULTISIG_PDA, 3n)
+      const [ephemeral] = await probe._getEphemeralSignerPdas(transactionPda, 1)
+
+      // The message marks the ephemeral signer as a writable signer; the program signs for it.
       const { account, sendTransaction } = await executingAccount({
-        transaction: vaultTransactionAccountValue({ ephemeralSignerCount: 2 })
+        transaction: vaultTransactionAccountValue({
+          accountKeys: [ephemeral, OTHER_MEMBER, SYSTEM_PROGRAM],
+          ephemeralSignerCount: 1
+        })
       })
 
-      await expect(account.executeTx(3)).rejects.toThrow(/ephemeral signers/)
-      expect(sendTransaction).not.toHaveBeenCalled()
+      await account.executeTx(3)
+
+      const remaining = sendTransaction.mock.calls[0][0].instructions[0].accounts.slice(4)
+
+      expect(remaining[0].address).toBe(ephemeral)
+      // Writable, not a signer.
+      expect(remaining[0].role).toBe(1)
     })
 
     it('refuses a batch', async () => {
@@ -1937,30 +1962,82 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         expect(sendTransaction).not.toHaveBeenCalled()
       })
 
-      it.each([
-        ['AddSpendingLimit'],
-        ['RemoveSpendingLimit']
-      ])('refuses a %s action', async (kind) => {
+      it('appends the derived account for AddSpendingLimit', async () => {
         const { account, sendTransaction } = await executingAccount({
-          transaction: configTransactionAccountValue(['AddMember', kind])
+          transaction: configTransactionAccountValue([
+            'AddMember',
+            { kind: 'AddSpendingLimit', key: THIRD_MEMBER }
+          ])
         })
 
-        await expect(account.executeTx(3)).rejects.toThrow(new RegExp(kind))
-        expect(sendTransaction).not.toHaveBeenCalled()
+        await account.executeTx(3)
+
+        const [{ instructions }] = sendTransaction.mock.calls[0]
+        const { accounts } = instructions[0]
+        const expected = await account._getSpendingLimitPda(TEST_MULTISIG_PDA, THIRD_MEMBER)
+
+        // Six fixed accounts, then the spending limit, writable.
+        expect(accounts).toHaveLength(7)
+        expect(accounts[6]).toEqual({ address: expected, role: 1 })
+      })
+
+      it('appends the named account for RemoveSpendingLimit', async () => {
+        const { account, sendTransaction } = await executingAccount({
+          transaction: configTransactionAccountValue([
+            { kind: 'RemoveSpendingLimit', key: THIRD_MEMBER }
+          ])
+        })
+
+        await account.executeTx(3)
+
+        const { accounts } = sendTransaction.mock.calls[0][0].instructions[0]
+
+        // Given outright by the action, not derived.
+        expect(accounts).toHaveLength(7)
+        expect(accounts[6]).toEqual({ address: THIRD_MEMBER, role: 1 })
+      })
+
+      it('appends one account per spending-limit action', async () => {
+        const { account, sendTransaction } = await executingAccount({
+          transaction: configTransactionAccountValue([
+            { kind: 'RemoveSpendingLimit', key: THIRD_MEMBER },
+            { kind: 'RemoveSpendingLimit', key: OTHER_MEMBER }
+          ])
+        })
+
+        await account.executeTx(3)
+
+        const { accounts } = sendTransaction.mock.calls[0][0].instructions[0]
+
+        expect(accounts.slice(6).map((a) => a.address)).toEqual([THIRD_MEMBER, OTHER_MEMBER])
+      })
+
+      it('adds no remaining accounts when no action needs one', async () => {
+        const { account, sendTransaction } = await executingAccount({
+          transaction: configTransactionAccountValue(['AddMember', 'ChangeThreshold'])
+        })
+
+        await account.executeTx(3)
+
+        expect(sendTransaction.mock.calls[0][0].instructions[0].accounts).toHaveLength(6)
       })
 
       it('walks past every action body to find a later one', async () => {
         const { account, sendTransaction } = await executingAccount({
           transaction: configTransactionAccountValue([
             'AddMember', 'RemoveMember', 'ChangeThreshold', 'SetTimeLock',
-            'SetRentCollector', 'SetRentCollectorSome', 'RemoveSpendingLimit'
+            'SetRentCollector', 'SetRentCollectorSome',
+            { kind: 'RemoveSpendingLimit', key: THIRD_MEMBER }
           ])
         })
 
-        // The spending-limit action is last, so reaching it proves every prior body was
-        // sized correctly.
-        await expect(account.executeTx(3)).rejects.toThrow(/RemoveSpendingLimit/)
-        expect(sendTransaction).not.toHaveBeenCalled()
+        await account.executeTx(3)
+
+        // The spending-limit action is last, so resolving its address proves every prior
+        // body was sized correctly.
+        const { accounts } = sendTransaction.mock.calls[0][0].instructions[0]
+
+        expect(accounts[6].address).toBe(THIRD_MEMBER)
       })
 
       it('throws on an unknown action tag rather than skipping it', async () => {

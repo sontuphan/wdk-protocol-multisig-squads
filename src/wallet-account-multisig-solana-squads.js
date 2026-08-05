@@ -101,8 +101,6 @@ const PERMISSION_EXECUTE = 4
 const PROPOSAL_STATUS_ACTIVE = 1
 const PROPOSAL_STATUS_APPROVED = 3
 
-const SPENDING_LIMIT_ACTIONS = ['AddSpendingLimit', 'RemoveSpendingLimit']
-
 const CONFIG_ACTION_ADD_MEMBER = 0
 const CONFIG_ACTION_REMOVE_MEMBER = 1
 const CONFIG_ACTION_CHANGE_THRESHOLD = 2
@@ -563,9 +561,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the signer
    *   cannot execute, the proposal is not approved, its time lock has not elapsed, a config
    *   proposal has been invalidated, or the RPC request fails.
-   * @throws {NotImplementedError} If the proposal is a batch, wraps a message needing
-   *   ephemeral signers, or changes a spending limit.
-   * @todo Support batches, ephemeral signers and spending-limit actions.
+   * @throws {NotImplementedError} If the proposal is a batch.
+   * @todo Support batches.
    */
   async executeTx (proposalId) {
     const index = this._toProposalIndex(proposalId)
@@ -601,7 +598,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
 
     const instruction = transaction.kind === TRANSACTION_KIND_CONFIG
-      ? this._buildConfigExecuteInstruction(multisig, proposal, transaction, signerAddress, index)
+      ? await this._buildConfigExecuteInstruction(multisig, proposal, transaction, signerAddress, index)
       : await this._buildVaultExecuteInstruction(multisig, proposal, transaction, signerAddress)
 
     return this._signerAccount.sendTransaction({ instructions: [instruction] })
@@ -1181,16 +1178,15 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
   }
 
-  /** @private */
-  _buildConfigExecuteInstruction (multisig, proposal, transaction, signerAddress, index) {
-    const blocked = transaction.actions.find((action) => SPENDING_LIMIT_ACTIONS.includes(action.kind))
-
-    if (blocked) {
-      throw new NotImplementedError(
-        `executeTx(${index}) for a config proposal with a ${blocked.kind} action`
-      )
-    }
-
+  /**
+   * Builds a `configTransactionExecute` instruction.
+   *
+   * Spending-limit actions name an account the program looks for among the remaining
+   * accounts — one to create, one to close — so those are resolved and appended.
+   *
+   * @private
+   */
+  async _buildConfigExecuteInstruction (multisig, proposal, transaction, signerAddress, index) {
     if (index <= multisig.staleTransactionIndex) {
       throw new Error(
         `The config proposal ${index} was invalidated by a later configuration change and can no longer be executed.`
@@ -1207,10 +1203,35 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         { address: address(proposal.address), role: ACCOUNT_ROLE_WRITABLE },
         { address: address(transaction.address), role: ACCOUNT_ROLE_READONLY },
         { address: member, role: ACCOUNT_ROLE_WRITABLE_SIGNER },
-        { address: address(SYSTEM_PROGRAM_ADDRESS), role: ACCOUNT_ROLE_READONLY }
+        { address: address(SYSTEM_PROGRAM_ADDRESS), role: ACCOUNT_ROLE_READONLY },
+        ...await this._resolveSpendingLimitAccounts(multisig.address, transaction.actions)
       ],
       data: Uint8Array.from(CONFIG_TRANSACTION_EXECUTE_DISCRIMINATOR)
     }
+  }
+
+  /**
+   * Resolves the spending limit accounts a config transaction's actions refer to.
+   *
+   * `AddSpendingLimit` names a create key the account is derived from; `RemoveSpendingLimit`
+   * names the account outright. The program finds each by key rather than by position, so
+   * order does not matter — only that every one is present and writable.
+   *
+   * @private
+   */
+  async _resolveSpendingLimitAccounts (multisigPda, actions) {
+    const addresses = await Promise.all(
+      actions
+        .filter((action) => action.createKey || action.spendingLimit)
+        .map((action) => action.spendingLimit
+          ? address(action.spendingLimit)
+          : this._getSpendingLimitPda(multisigPda, action.createKey))
+    )
+
+    return addresses.map((spendingLimit) => ({
+      address: spendingLimit,
+      role: ACCOUNT_ROLE_WRITABLE
+    }))
   }
 
   /** @private */
@@ -1218,12 +1239,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     if (transaction.kind !== TRANSACTION_KIND_VAULT) {
       throw new NotImplementedError(
         `executeTx(proposalId) for a ${transaction.kind ?? 'transaction of an unrecognized kind'}`
-      )
-    }
-
-    if (transaction.ephemeralSignerCount) {
-      throw new NotImplementedError(
-        'executeTx(proposalId) for a transaction whose message needs ephemeral signers'
       )
     }
 
@@ -1236,7 +1251,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         { address: address(proposal.address), role: ACCOUNT_ROLE_WRITABLE },
         { address: address(transaction.address), role: ACCOUNT_ROLE_READONLY },
         { address: address(signerAddress), role: ACCOUNT_ROLE_READONLY_SIGNER },
-        ...await this._resolveExecutionAccounts(transaction.message, vaultPda)
+        ...await this._resolveExecutionAccounts(transaction, vaultPda)
       ],
       data: Uint8Array.from(VAULT_TRANSACTION_EXECUTE_DISCRIMINATOR)
     }
@@ -1246,12 +1261,20 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * Builds the `remaining_accounts` the program expects for a vault transaction.
    *
    * Three groups in a fixed order: the lookup table accounts, the message's own keys with
-   * the flags the message asked for, then the addresses those lookups resolve to. The vault
-   * is de-signed because the program signs for it.
+   * the flags the message asked for, then the addresses those lookups resolve to.
+   *
+   * The vault and any ephemeral signers are de-signed: the message marks them as signers, but
+   * they are program-derived addresses that the program signs for at execution, so the outer
+   * transaction must not ask them for a signature it cannot produce.
    *
    * @private
    */
-  async _resolveExecutionAccounts (message, vaultPda) {
+  async _resolveExecutionAccounts (transaction, vaultPda) {
+    const { message } = transaction
+    const signedForByProgram = new Set([
+      vaultPda,
+      ...await this._getEphemeralSignerPdas(transaction.address, transaction.ephemeralSignerCount)
+    ])
     const lookups = message.addressTableLookups
     const accounts = lookups.map((lookup) => ({
       address: address(lookup.accountKey),
@@ -1260,7 +1283,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     message.accountKeys.forEach((key, i) => {
       const writable = this._isStaticWritableIndex(message, i)
-      const signer = i < message.numSigners && key !== vaultPda
+      const signer = i < message.numSigners && !signedForByProgram.has(key)
 
       accounts.push({ address: address(key), role: this._toAccountRole(signer, writable) })
     })
