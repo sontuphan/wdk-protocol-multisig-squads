@@ -691,7 +691,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
   })
 
   describe('getMultisigInfo', () => {
-    it('returns address, owners, threshold and isCreated from one read', async () => {
+    it('returns address, owners, masks, threshold and isCreated from one read', async () => {
       const { account, getAccountInfo } = mockAccount(multisigAccountValue({
         members: [{ address: MEMBER_A }, { address: MEMBER_B }],
         threshold: 2
@@ -700,6 +700,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       expect(await account.getMultisigInfo()).toEqual({
         address: TEST_MULTISIG_PDA,
         owners: [MEMBER_A, MEMBER_B],
+        masks: [7, 7],
         threshold: 2,
         isCreated: true
       })
@@ -716,6 +717,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       expect(await account.getMultisigInfo()).toEqual({
         address: TEST_MULTISIG_PDA,
         owners: [MEMBER_A, MEMBER_B],
+        masks: [7, 7],
         threshold: 2,
         isCreated: true
       })
@@ -730,11 +732,27 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         threshold: 1
       }))
 
-      const { owners, threshold } = await account.getMultisigInfo()
+      const { owners, masks, threshold } = await account.getMultisigInfo()
 
       expect(owners).toEqual([MEMBER_A, MEMBER_B])
       // 2 owners but only 1 voter, so this is a 1-of-1 despite owners.length === 2.
       expect(threshold).toBe(1)
+      // The masks are the only way a caller can tell: mask 6 votes, mask 5 does not.
+      expect(masks).toEqual([6, 5])
+      expect(masks.filter((mask) => mask & 2)).toHaveLength(1)
+    })
+
+    it('keeps masks positionally aligned with owners', async () => {
+      const { account } = mockAccount(multisigAccountValue({
+        members: [{ address: MEMBER_A, mask: 3 }, { address: MEMBER_B, mask: 7 }],
+        threshold: 1
+      }))
+
+      const { owners, masks } = await account.getMultisigInfo()
+
+      expect(masks).toHaveLength(owners.length)
+      expect(masks[owners.indexOf(MEMBER_A)]).toBe(3)
+      expect(masks[owners.indexOf(MEMBER_B)]).toBe(7)
     })
 
     it('ignores pre-allocated slack', async () => {
@@ -752,6 +770,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       expect(await account.getMultisigInfo()).toEqual({
         address: TEST_MULTISIG_PDA,
         owners: [],
+        masks: [],
         threshold: 0,
         isCreated: false
       })
@@ -1033,9 +1052,31 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         proposalAccountValue({ approved: [MEMBER_A, MEMBER_B] })
       ])
 
-      expect(await account.getProposals([1])).toEqual([
+      expect(await account.getProposals([1])).toMatchObject([
         { proposalId: '1', confirmations: 2, threshold: 2 }
       ])
+    })
+
+    it('reports the Squads status name', async () => {
+      for (const [name, status] of Object.entries(PROPOSAL_STATUS)) {
+        const { account } = mockProposals([proposalAccountValue({ status, approved: [MEMBER_A] })])
+        const [proposal] = await account.getProposals([1])
+
+        expect(proposal.status).toBe(name)
+      }
+    })
+
+    it('lists who voted, each way', async () => {
+      const { account } = mockProposals([
+        proposalAccountValue({ approved: [MEMBER_A], rejected: [MEMBER_B] })
+      ])
+      const [proposal] = await account.getProposals([1])
+
+      expect(proposal.approved).toEqual([MEMBER_A])
+      expect(proposal.rejected).toEqual([MEMBER_B])
+      expect(proposal.cancelled).toEqual([])
+      // confirmations counts approvals only, not votes cast.
+      expect(proposal.confirmations).toBe(1)
     })
 
     it('derives the proposal address from the transaction index', async () => {
@@ -1061,7 +1102,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
 
       const proposals = await account.getProposals([1, 2, 3])
 
-      expect(proposals).toEqual([
+      expect(proposals).toMatchObject([
         { proposalId: '1', confirmations: 1, threshold: 2 },
         null,
         { proposalId: '3', confirmations: 2, threshold: 2 }
@@ -1078,8 +1119,8 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         })
       ])
 
-      expect(await account.getProposals([1])).toEqual([
-        { proposalId: '1', confirmations: 2, threshold: 2 }
+      expect(await account.getProposals([1])).toMatchObject([
+        { proposalId: '1', confirmations: 2, threshold: 2, status: 'Executing' }
       ])
     })
 
@@ -1091,8 +1132,8 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
           proposalAccountValue({ status, approved: [MEMBER_A] })
         ])
 
-        expect(await account.getProposals([1])).toEqual([
-          { proposalId: '1', confirmations: 1, threshold: 2 }
+        expect(await account.getProposals([1])).toMatchObject([
+          { proposalId: '1', confirmations: 1, threshold: 2, status: name }
         ])
         expect(name).toBeTruthy()
       }
@@ -1104,7 +1145,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         proposalAccountValue({ approved: [], rejected: [MEMBER_A] })
       ])
 
-      expect(await account.getProposals([1])).toEqual([
+      expect(await account.getProposals([1])).toMatchObject([
         { proposalId: '1', confirmations: 0, threshold: 2 }
       ])
     })
@@ -1114,7 +1155,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         proposalAccountValue({ approved: [MEMBER_A], slack: 320 })
       ])
 
-      expect(await account.getProposals([1])).toEqual([
+      expect(await account.getProposals([1])).toMatchObject([
         { proposalId: '1', confirmations: 1, threshold: 2 }
       ])
     })

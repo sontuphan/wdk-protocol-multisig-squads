@@ -37,8 +37,19 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
 // yields `any`.
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountReadOnlyMultisig} IWalletAccountReadOnlyMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInfo} MultisigInfo */
+/**
+ * @typedef {MultisigInfo & { masks: number[] }} SolanaMultisigInfo
+ *   `MultisigInfo` widened with each owner's Squads permission mask, positionally aligned with
+ *   `owners`. The interface pins `owners` to `string[]`, so the masks travel alongside rather
+ *   than inside it, and as bare numbers rather than repeating the addresses.
+ */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessage} MultisigMessage */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
+/**
+ * @typedef {MultisigProposal & { status: string, approved: string[], rejected: string[], cancelled: string[] }} SolanaMultisigProposal
+ *   `MultisigProposal` widened with the proposal's Squads status and its vote lists. Without
+ *   `status` a caller cannot tell an approved proposal from an executed or rejected one.
+ */
 
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
@@ -115,6 +126,15 @@ const PROPOSAL_STATUS_TIMESTAMP_OFFSET = 49
 const PROPOSAL_STATUS_APPROVED = 3
 const PROPOSAL_STATUS_EXECUTING = 4
 const PROPOSAL_STATUS_NAMES = [
+  'Draft',
+  'Active',
+  'Rejected',
+  'Approved',
+  'Executing',
+  'Executed',
+  'Cancelled'
+]
+const PROPOSAL_STATUS_PHRASES = [
   'a draft',
   'open for voting',
   'rejected',
@@ -379,7 +399,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * `owners` and `threshold` are placeholders that must not be read — they are `[]`
    * and `0` regardless of what a future multisig at this address would hold.
    *
-   * @returns {Promise<MultisigInfo>} The multisig info.
+   * `masks` gives each owner's Squads permissions — proposer (1), voter (2), executor (4) —
+   * at the same index as `owners`. It is the only way to learn how many owners can actually
+   * vote, which is the denominator {@link getThreshold} is measured against and the bound
+   * every threshold change is validated by.
+   *
+   * @returns {Promise<SolanaMultisigInfo>} The multisig info.
    * @throws {Error} If the address holds a non-Squads account, or if the RPC request fails.
    */
   async getMultisigInfo () {
@@ -388,6 +413,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     return {
       address: multisigPda,
       owners: members.map((member) => member.address),
+      masks: members.map((member) => member.mask),
       threshold,
       isCreated
     }
@@ -608,8 +634,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * executed: it must also be in the approved status, not invalidated by a later
    * configuration change, and past any time lock. Use {@link isReadyToExecute}.
    *
+   * `status` is the Squads status name — `Draft`, `Active`, `Rejected`, `Approved`,
+   * `Executing`, `Executed` or `Cancelled` — and `approved`, `rejected` and `cancelled` list
+   * the members who cast each kind of vote. `confirmations` is `approved.length`.
+   *
    * @param {Array<number | bigint | string>} proposalIds - The proposal (transaction index) ids.
-   * @returns {Promise<Array<MultisigProposal | null>>} For each id, the proposal, or
+   * @returns {Promise<Array<SolanaMultisigProposal | null>>} For each id, the proposal, or
    *   null if no proposal exists at that id.
    * @throws {Error} If an id is not a non-negative integer, or if the RPC request fails.
    */
@@ -642,7 +672,9 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
         .send()
 
       value.forEach((account, i) => {
-        proposals.push(this._toProposal(account, indices[offset + i], threshold))
+        proposals.push(
+          this._toProposal(proposalPdas[offset + i], account, indices[offset + i], threshold)
+        )
       })
     }
 
@@ -1231,6 +1263,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       exists: false,
       status: -1,
       statusName: null,
+      statusPhrase: null,
       statusTimestamp: null,
       approved: [],
       rejected: [],
@@ -1275,7 +1308,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       address: proposalPda,
       exists: true,
       status,
-      statusName: PROPOSAL_STATUS_NAMES[status] ?? `in an unknown status (${status})`,
+      statusName: PROPOSAL_STATUS_NAMES[status] ?? `Unknown(${status})`,
+      statusPhrase: PROPOSAL_STATUS_PHRASES[status] ?? `in an unknown status (${status})`,
       statusTimestamp: status === PROPOSAL_STATUS_EXECUTING
         ? null
         : view.getBigInt64(PROPOSAL_STATUS_TIMESTAMP_OFFSET, true),
@@ -1446,32 +1480,21 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /** @private */
-  _toProposal (account, index, threshold) {
-    if (!account) {
-      return null
-    }
+  _toProposal (proposalPda, account, index, threshold) {
+    const proposal = this._decodeProposalAccount(proposalPda, account)
 
-    const data = getBase64Encoder().encode(account.data[0])
-
-    if (account.owner !== this._programId || !this._hasDiscriminator(data, PROPOSAL_DISCRIMINATOR)) {
+    if (!proposal.exists) {
       return null
     }
 
     return {
       proposalId: index.toString(),
-      confirmations: this._countApprovals(data),
-      threshold
+      confirmations: proposal.approved.length,
+      threshold,
+      status: proposal.statusName,
+      approved: proposal.approved,
+      rejected: proposal.rejected,
+      cancelled: proposal.cancelled
     }
-  }
-
-  /** @private */
-  _countApprovals (data) {
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-
-    const statusSize = data[PROPOSAL_STATUS_OFFSET] === PROPOSAL_STATUS_EXECUTING
-      ? ENUM_TAG_SIZE
-      : ENUM_TAG_SIZE + TIMESTAMP_SIZE
-
-    return view.getUint32(PROPOSAL_STATUS_OFFSET + statusSize + BUMP_SIZE, true)
   }
 }

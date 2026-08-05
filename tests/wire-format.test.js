@@ -187,6 +187,16 @@ describe('wire format', () => {
       ]))
     })
 
+    it('matches the SDK for a lone ChangeThreshold', () => {
+      const mine = account._encodeConfigTransactionCreateData([
+        account._encodeChangeThresholdAction(2)
+      ])
+
+      // The smallest config transaction this package can build.
+      expect(mine).toHaveLength(16)
+      expect(Array.from(mine)).toEqual(reference([{ __kind: 'ChangeThreshold', newThreshold: 2 }]))
+    })
+
     it('agrees with the SDK on the discriminator and the action tags', () => {
       expect(Array.from(generated.configTransactionCreateInstructionDiscriminator))
         .toEqual([155, 236, 87, 228, 137, 75, 81, 39])

@@ -266,11 +266,26 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /**
      * Proposes changing the approval threshold of the multisig.
      *
+     * **This does not change the threshold.** It creates a proposal; the threshold changes only
+     * once enough owners approve it and one of them calls {@link executeTx}.
+     *
+     * The ceiling is the number of owners able to **vote**, not the number of owners — read
+     * `masks` from {@link getMultisigInfo} to count them.
+     *
+     * Setting the threshold to the value it already holds is refused: it would change nothing
+     * yet still cost a full approval round and invalidate every other pending proposal.
+     *
+     * Note that raising the threshold to the voter count is a larger change than it looks. It
+     * makes a single rejection enough to end any proposal, and means removing any voter
+     * afterwards requires lowering the threshold in the same operation.
+     *
      * @param {number} newThreshold - The new threshold.
-     * @param {MultisigOptions} [options] - The operation options.
-     * @returns {Promise<MultisigTransactionResult>} The operation result.
+     * @returns {Promise<MultisigTransactionResult>} The proposal result.
+     * @throws {Error} If the threshold is not an integer between 1 and the number of owners able
+     *   to vote, is the threshold already in force, the multisig does not exist or is controlled
+     *   by a configuration authority, the signer cannot propose, or the RPC request fails.
      */
-    changeThreshold(newThreshold: number, options?: MultisigOptions): Promise<MultisigTransactionResult>;
+    changeThreshold(newThreshold: number): Promise<MultisigTransactionResult>;
     /**
      * Proposes replacing the full member set and threshold in a single operation.
      *

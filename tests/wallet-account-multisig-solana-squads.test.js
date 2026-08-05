@@ -386,7 +386,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
   it('throws NotImplementedError for unimplemented write methods', async () => {
     // Only methods that still throw before touching the network belong here.
     await expect(account.updateOwners([TEST_SIGNER], 1)).rejects.toThrow()
-    await expect(account.changeThreshold(2)).rejects.toThrow()
   })
 
   it('throws NotSupportedError for message proposals', async () => {
@@ -1532,6 +1531,110 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.swapOwner(oldOwner, newOwner)).rejects.toThrow()
       expect(sendTransaction).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('changeThreshold', () => {
+    const TWO_OWNERS = [
+      { address: TEST_SIGNER, mask: 7 },
+      { address: OTHER_MEMBER, mask: 7 }
+    ]
+
+    it('sends one ChangeThreshold action', async () => {
+      const { account, sendTransaction } = await configuringAccount({ members: TWO_OWNERS })
+
+      await account.changeThreshold(2)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+      const { data } = instructions[0]
+
+      expect(instructions).toHaveLength(2)
+      expect(data).toHaveLength(16)
+      expect(Array.from(data.slice(0, 8))).toEqual([155, 236, 87, 228, 137, 75, 81, 39])
+      expect(new DataView(data.buffer).getUint32(8, true)).toBe(1)
+      expect(data[12]).toBe(2)
+      expect(new DataView(data.buffer).getUint16(13, true)).toBe(2)
+    })
+
+    it('returns the proposal at the next index with no confirmations', async () => {
+      const { account } = await configuringAccount({ members: TWO_OWNERS })
+
+      expect(await account.changeThreshold(2)).toEqual({
+        proposalId: '5',
+        hash: 'facade',
+        fee: 5000n,
+        confirmations: 0,
+        threshold: 1,
+        executed: false
+      })
+    })
+
+    it('refuses the threshold already in force', async () => {
+      // A no-op that would still invalidate every pending proposal.
+      const { account, sendTransaction } = await configuringAccount({
+        members: TWO_OWNERS,
+        threshold: 2
+      })
+
+      await expect(account.changeThreshold(2)).rejects.toThrow(/already requires 2 approvals/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('bounds the threshold by voters, not owners', async () => {
+      // Three owners, one voter: a threshold of 2 is impossible.
+      const { account, sendTransaction } = await configuringAccount({
+        members: [
+          { address: TEST_SIGNER, mask: 7 },
+          { address: OTHER_MEMBER, mask: 5 },
+          { address: THIRD_MEMBER, mask: 5 }
+        ]
+      })
+
+      await expect(account.changeThreshold(2))
+        .rejects.toThrow(/number of owners able to vote \(1\)/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('accepts a threshold equal to the voter count', async () => {
+      const { account, sendTransaction } = await configuringAccount({ members: TWO_OWNERS })
+
+      await expect(account.changeThreshold(2)).resolves.toBeDefined()
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+    })
+
+    it.each([[0], [-1], [1.5], [3]])('refuses a threshold of %s', async (threshold) => {
+      const { account, sendTransaction } = await configuringAccount({ members: TWO_OWNERS })
+
+      await expect(account.changeThreshold(threshold)).rejects.toThrow(/Invalid threshold/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('refuses a controlled multisig', async () => {
+      const { account, sendTransaction } = await configuringAccount({
+        members: TWO_OWNERS,
+        configAuthority: THIRD_MEMBER
+      })
+
+      await expect(account.changeThreshold(2))
+        .rejects.toThrow(/controlled by the configuration authority/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws when the signer cannot propose, before the no-op check', async () => {
+      const { account, sendTransaction } = await configuringAccount({
+        members: [{ address: TEST_SIGNER, mask: 6 }, { address: OTHER_MEMBER, mask: 7 }],
+        threshold: 1
+      })
+
+      // Threshold 1 is also the current value, so the ordering decides which error surfaces.
+      await expect(account.changeThreshold(1)).rejects.toThrow(/permission to propose/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws when the multisig does not exist', async () => {
+      const { account } = await configuringAccount({ deployed: false })
+
+      await expect(account.changeThreshold(2)).rejects.toThrow(/does not exist/)
     })
   })
 
