@@ -104,6 +104,31 @@ describe('wire format', () => {
       ]))
     })
 
+    it('matches the SDK for a lone RemoveMember', () => {
+      const mine = account._encodeConfigTransactionCreateData([
+        account._encodeRemoveMemberAction(address(NEW_OWNER))
+      ])
+
+      // One byte shorter than AddMember, which also carries a permissions mask.
+      expect(mine).toHaveLength(46)
+      expect(Array.from(mine)).toEqual(reference([
+        { __kind: 'RemoveMember', oldMember: new PublicKey(NEW_OWNER) }
+      ]))
+    })
+
+    it('matches the SDK for RemoveMember plus ChangeThreshold', () => {
+      const mine = account._encodeConfigTransactionCreateData([
+        account._encodeRemoveMemberAction(address(NEW_OWNER)),
+        account._encodeChangeThresholdAction(1)
+      ])
+
+      expect(mine).toHaveLength(49)
+      expect(Array.from(mine)).toEqual(reference([
+        { __kind: 'RemoveMember', oldMember: new PublicKey(NEW_OWNER) },
+        { __kind: 'ChangeThreshold', newThreshold: 1 }
+      ]))
+    })
+
     it('matches the SDK for AddMember plus ChangeThreshold', () => {
       const mine = account._encodeConfigTransactionCreateData([
         account._encodeAddMemberAction(address(NEW_OWNER), 7),
@@ -132,8 +157,9 @@ describe('wire format', () => {
     it('agrees with the SDK on the discriminator and the action tags', () => {
       expect(Array.from(generated.configTransactionCreateInstructionDiscriminator))
         .toEqual([155, 236, 87, 228, 137, 75, 81, 39])
-      // Tag 0 is AddMember, tag 2 is ChangeThreshold.
+      // Tag 0 is AddMember, 1 RemoveMember, 2 ChangeThreshold.
       expect(account._encodeAddMemberAction(address(NEW_OWNER), 7)[0]).toBe(0)
+      expect(account._encodeRemoveMemberAction(address(NEW_OWNER))[0]).toBe(1)
       expect(account._encodeChangeThresholdAction(1)[0]).toBe(2)
     })
   })

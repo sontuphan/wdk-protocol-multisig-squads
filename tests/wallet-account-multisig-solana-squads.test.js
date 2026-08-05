@@ -307,6 +307,42 @@ function accountValue (data) {
     return { account, sendTransaction, getMultipleAccounts }
   }
 
+  /**
+   * Builds a configuring account with a stubbed RPC and send.
+   *
+   * @param {Object} [options] - The scenario.
+   * @param {Array} [options.members] - The current members.
+   * @param {number} [options.threshold=1] - The current threshold.
+   * @param {string|null} [options.configAuthority] - A configuration authority, if controlled.
+   * @param {boolean} [options.deployed=true] - Whether the multisig exists.
+   * @returns {Promise<{ account: Object, sendTransaction: Function }>}
+   */
+  async function configuringAccount ({
+    members = [{ address: TEST_SIGNER, mask: 7 }],
+    threshold = 1,
+    configAuthority = null,
+    deployed = true
+  } = {}) {
+    const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+      provider: TEST_RPC_URL,
+      multisigPda: TEST_MULTISIG_PDA
+    })
+    const account = await wallet.getAccount(0)
+
+    account._rpc = {
+      getAccountInfo: serveAccount(
+        deployed
+          ? multisigAccountValue(members, { threshold, transactionIndex: 4n, configAuthority })
+          : null
+      )
+    }
+
+    const sendTransaction = jest.fn(async () => ({ hash: 'facade', fee: 5000n }))
+    account._signerAccount.sendTransaction = sendTransaction
+
+    return { account, sendTransaction }
+  }
+
 /**
  * Wraps account values in a `getAccountInfo` mock.
  *
@@ -1000,42 +1036,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
   })
 
   describe('addOwner', () => {
-    /**
-     * Builds a configuring account with a stubbed RPC and send.
-     *
-     * @param {Object} [options] - The scenario.
-     * @param {Array} [options.members] - The current members.
-     * @param {number} [options.threshold=1] - The current threshold.
-     * @param {string|null} [options.configAuthority] - A configuration authority, if controlled.
-     * @param {boolean} [options.deployed=true] - Whether the multisig exists.
-     * @returns {Promise<{ account: Object, sendTransaction: Function }>}
-     */
-    async function configuringAccount ({
-      members = [{ address: TEST_SIGNER, mask: 7 }],
-      threshold = 1,
-      configAuthority = null,
-      deployed = true
-    } = {}) {
-      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
-        provider: TEST_RPC_URL,
-        multisigPda: TEST_MULTISIG_PDA
-      })
-      const account = await wallet.getAccount(0)
-
-      account._rpc = {
-        getAccountInfo: serveAccount(
-          deployed
-            ? multisigAccountValue(members, { threshold, transactionIndex: 4n, configAuthority })
-            : null
-        )
-      }
-
-      const sendTransaction = jest.fn(async () => ({ hash: 'facade', fee: 5000n }))
-      account._signerAccount.sendTransaction = sendTransaction
-
-      return { account, sendTransaction }
-    }
-
     it('creates the config transaction and its proposal in one transaction', async () => {
       const { account, sendTransaction } = await configuringAccount()
 
@@ -1177,6 +1177,188 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.addOwner('nope')).rejects.toThrow()
       expect(sendTransaction).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('removeOwner', () => {
+    const THREE_OWNERS = [
+      { address: TEST_SIGNER, mask: 7 },
+      { address: OTHER_MEMBER, mask: 7 },
+      { address: THIRD_MEMBER, mask: 7 }
+    ]
+
+    it('sends one RemoveMember action', async () => {
+      const { account, sendTransaction } = await configuringAccount({ members: THREE_OWNERS })
+
+      await account.removeOwner(OTHER_MEMBER)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+      const { data } = instructions[0]
+
+      expect(instructions).toHaveLength(2)
+      expect(Array.from(data.slice(0, 8))).toEqual([155, 236, 87, 228, 137, 75, 81, 39])
+      expect(data).toHaveLength(46)
+      expect(new DataView(data.buffer).getUint32(8, true)).toBe(1)
+      expect(data[12]).toBe(1)
+      expect(getBase58Decoder().decode(data.subarray(13, 45))).toBe(OTHER_MEMBER)
+    })
+
+    it('adds a ChangeThreshold action in the same proposal', async () => {
+      const { account, sendTransaction } = await configuringAccount({
+        members: [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+        threshold: 2
+      })
+
+      await account.removeOwner(OTHER_MEMBER, { threshold: 1 })
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+      const { data } = instructions[0]
+
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+      expect(new DataView(data.buffer).getUint32(8, true)).toBe(2)
+      expect(data).toHaveLength(49)
+      expect(data[45]).toBe(2)
+      expect(new DataView(data.buffer).getUint16(46, true)).toBe(1)
+    })
+
+    it('returns the proposal at the next index with no confirmations', async () => {
+      const { account } = await configuringAccount({ members: THREE_OWNERS })
+
+      expect(await account.removeOwner(OTHER_MEMBER)).toEqual({
+        proposalId: '5',
+        hash: 'facade',
+        fee: 5000n,
+        confirmations: 0,
+        threshold: 1,
+        executed: false
+      })
+    })
+
+    it('refuses removing a voter from a multisig at its threshold', async () => {
+      // The common case: 52% of real multisigs have threshold === voter count.
+      const { account, sendTransaction } = await configuringAccount({
+        members: [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+        threshold: 2
+      })
+
+      await expect(account.removeOwner(OTHER_MEMBER)).rejects.toThrow(/Invalid threshold 2/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('names the voter count rather than the member count', async () => {
+      // Two members remain, but only one can vote.
+      const { account } = await configuringAccount({
+        members: [
+          { address: TEST_SIGNER, mask: 7 },
+          { address: OTHER_MEMBER, mask: 5 },
+          { address: THIRD_MEMBER, mask: 7 }
+        ],
+        threshold: 2
+      })
+
+      await expect(account.removeOwner(THIRD_MEMBER))
+        .rejects.toThrow(/number of owners able to vote \(1\)/)
+    })
+
+    it('refuses removing the only member', async () => {
+      const { account, sendTransaction } = await configuringAccount()
+
+      await expect(account.removeOwner(TEST_SIGNER)).rejects.toThrow(/no members/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['vote on proposals', 2],
+      ['propose transactions', 1],
+      ['execute proposals', 4]
+    ])('refuses removing the last member able to %s', async (permission, bit) => {
+      // The signer is almighty; the other member holds everything except this permission.
+      const { account, sendTransaction } = await configuringAccount({
+        members: [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 & ~bit }]
+      })
+
+      await expect(account.removeOwner(TEST_SIGNER))
+        .rejects.toThrow(new RegExp(`no member able to ${permission}`))
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('refuses an address that is not a member', async () => {
+      const { account, sendTransaction } = await configuringAccount({ members: THREE_OWNERS })
+
+      await expect(account.removeOwner('CfGcujEkPVDx7yGyn1PUjxn2e353MXbLk8ixzwuJUktK'))
+        .rejects.toThrow(/is not a member/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('lets a member propose their own removal', async () => {
+      const { account, sendTransaction } = await configuringAccount({ members: THREE_OWNERS })
+
+      await expect(account.removeOwner(TEST_SIGNER)).resolves.toBeDefined()
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+    })
+
+    it('refuses a controlled multisig', async () => {
+      const { account, sendTransaction } = await configuringAccount({
+        members: THREE_OWNERS,
+        configAuthority: THIRD_MEMBER
+      })
+
+      await expect(account.removeOwner(OTHER_MEMBER))
+        .rejects.toThrow(/controlled by the configuration authority/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws when the signer cannot propose', async () => {
+      const { account, sendTransaction } = await configuringAccount({
+        members: [{ address: TEST_SIGNER, mask: 6 }, { address: OTHER_MEMBER, mask: 7 }]
+      })
+
+      await expect(account.removeOwner(OTHER_MEMBER)).rejects.toThrow(/permission to propose/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws when the multisig does not exist', async () => {
+      const { account } = await configuringAccount({ deployed: false })
+
+      await expect(account.removeOwner(OTHER_MEMBER)).rejects.toThrow(/does not exist/)
+    })
+
+    it('throws on a malformed address before any RPC call', async () => {
+      const { account, sendTransaction } = await configuringAccount({ members: THREE_OWNERS })
+
+      await expect(account.removeOwner('nope')).rejects.toThrow()
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('addOwner threshold bound', () => {
+    it('counts voters, not members', async () => {
+      // Masks 7, 5, 5: one voter. Adding an almighty member makes two, so 3 is invalid even
+      // though four members would exist.
+      const { account, sendTransaction } = await configuringAccount({
+        members: [
+          { address: TEST_SIGNER, mask: 7 },
+          { address: OTHER_MEMBER, mask: 5 },
+          { address: THIRD_MEMBER, mask: 5 }
+        ]
+      })
+
+      await expect(account.addOwner('CfGcujEkPVDx7yGyn1PUjxn2e353MXbLk8ixzwuJUktK', { threshold: 3 }))
+        .rejects.toThrow(/number of owners able to vote \(2\)/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('accepts a threshold equal to the resulting voter count', async () => {
+      const { account } = await configuringAccount({
+        members: [
+          { address: TEST_SIGNER, mask: 7 },
+          { address: OTHER_MEMBER, mask: 5 },
+          { address: THIRD_MEMBER, mask: 5 }
+        ]
+      })
+
+      await expect(account.addOwner('CfGcujEkPVDx7yGyn1PUjxn2e353MXbLk8ixzwuJUktK', { threshold: 2 }))
+        .resolves.toBeDefined()
     })
   })
 

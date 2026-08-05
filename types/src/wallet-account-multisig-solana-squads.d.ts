@@ -215,9 +215,27 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /**
      * Proposes removing a member from the multisig.
      *
+     * **This does not remove the member.** It creates a proposal; the member set changes only
+     * once enough owners approve it and one of them calls {@link executeTx}.
+     *
+     * A multisig whose threshold equals its number of voting members — the majority of them —
+     * cannot remove a voter without lowering the threshold too, since the result would need more
+     * approvals than it has voters. Pass `options.threshold` to do both in the one proposal; the
+     * error says which value is needed.
+     *
+     * Members can propose their own removal. Executing the resulting proposal invalidates every
+     * other pending proposal, as {@link addOwner} describes.
+     *
+     * Note the multisig account never shrinks, so nothing is refunded, and removal does **not**
+     * revoke any spending limit the member was listed on.
+     *
      * @param {string} ownerAddress - The address of the member to remove.
      * @param {MultisigOptions} [options] - The operation options.
-     * @returns {Promise<MultisigTransactionResult>} The operation result.
+     * @returns {Promise<MultisigTransactionResult>} The proposal result.
+     * @throws {Error} If the address is malformed or not a member, the removal would leave the
+     *   multisig with no members or nobody able to vote, propose or execute, the threshold would
+     *   exceed the remaining voters, the multisig does not exist or is controlled by a
+     *   configuration authority, the signer cannot propose, or the RPC request fails.
      */
     removeOwner(ownerAddress: string, options?: MultisigOptions): Promise<MultisigTransactionResult>;
     /**
@@ -336,6 +354,29 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     private _requireAutonomous;
     /** @private */
     private _validateThreshold;
+    /**
+     * Checks the signer may propose, ahead of anything about what is being proposed.
+     *
+     * The program validates the creator before it looks at the actions, so a signer who cannot
+     * propose at all should hear that rather than a complaint about their proposal's contents.
+     *
+     * @private
+     */
+    private _requireCanPropose;
+    /** @private */
+    private _countVoters;
+    /**
+     * Validates the member set a configuration change would leave behind.
+     *
+     * These are the rules the program checks in `invariant()` — after applying every action, so
+     * a proposal breaking one is only refused at execution, once its rent is spent and the votes
+     * are cast. Every one is decidable from the member list already in hand.
+     *
+     * @private
+     */
+    private _requireViableMembers;
+    /** @private */
+    private _encodeRemoveMemberAction;
     /** @private */
     private _encodeAddMemberAction;
     /** @private */

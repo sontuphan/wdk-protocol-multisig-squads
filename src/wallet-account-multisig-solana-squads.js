@@ -104,6 +104,7 @@ const PROPOSAL_STATUS_APPROVED = 3
 const SPENDING_LIMIT_ACTIONS = ['AddSpendingLimit', 'RemoveSpendingLimit']
 
 const CONFIG_ACTION_ADD_MEMBER = 0
+const CONFIG_ACTION_REMOVE_MEMBER = 1
 const CONFIG_ACTION_CHANGE_THRESHOLD = 2
 
 const OPTION_SOME = 1
@@ -635,6 +636,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     this._requireDeployed(multisig, 'proposing configuration changes')
     this._requireAutonomous(multisig)
+    await this._requireCanPropose(multisig)
 
     if (multisig.members.some((member) => member.address === newOwner)) {
       throw new Error(
@@ -642,11 +644,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       )
     }
 
+    const resulting = [...multisig.members, { address: newOwner, mask: ALMIGHTY_PERMISSIONS }]
+
+    this._requireViableMembers(resulting, options.threshold ?? multisig.threshold, multisig.address)
+
     const actions = [this._encodeAddMemberAction(newOwner, ALMIGHTY_PERMISSIONS)]
 
     if (options.threshold !== undefined) {
-      // The threshold is checked against the member set this proposal would produce.
-      this._validateThreshold(options.threshold, multisig.members.length + 1)
       actions.push(this._encodeChangeThresholdAction(options.threshold))
     }
 
@@ -656,12 +660,53 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /**
    * Proposes removing a member from the multisig.
    *
+   * **This does not remove the member.** It creates a proposal; the member set changes only
+   * once enough owners approve it and one of them calls {@link executeTx}.
+   *
+   * A multisig whose threshold equals its number of voting members — the majority of them —
+   * cannot remove a voter without lowering the threshold too, since the result would need more
+   * approvals than it has voters. Pass `options.threshold` to do both in the one proposal; the
+   * error says which value is needed.
+   *
+   * Members can propose their own removal. Executing the resulting proposal invalidates every
+   * other pending proposal, as {@link addOwner} describes.
+   *
+   * Note the multisig account never shrinks, so nothing is refunded, and removal does **not**
+   * revoke any spending limit the member was listed on.
+   *
    * @param {string} ownerAddress - The address of the member to remove.
    * @param {MultisigOptions} [options] - The operation options.
-   * @returns {Promise<MultisigTransactionResult>} The operation result.
+   * @returns {Promise<MultisigTransactionResult>} The proposal result.
+   * @throws {Error} If the address is malformed or not a member, the removal would leave the
+   *   multisig with no members or nobody able to vote, propose or execute, the threshold would
+   *   exceed the remaining voters, the multisig does not exist or is controlled by a
+   *   configuration authority, the signer cannot propose, or the RPC request fails.
    */
   async removeOwner (ownerAddress, options = {}) {
-    throw new NotImplementedError('removeOwner(ownerAddress, options)')
+    const owner = address(ownerAddress)
+    const multisig = await this._getMultisigAccount()
+
+    this._requireDeployed(multisig, 'proposing configuration changes')
+    this._requireAutonomous(multisig)
+    await this._requireCanPropose(multisig)
+
+    if (!multisig.members.some((member) => member.address === owner)) {
+      throw new Error(
+        `The address ${owner} is not a member of the multisig ${multisig.address}.`
+      )
+    }
+
+    const remaining = multisig.members.filter((member) => member.address !== owner)
+
+    this._requireViableMembers(remaining, options.threshold ?? multisig.threshold, multisig.address)
+
+    const actions = [this._encodeRemoveMemberAction(owner)]
+
+    if (options.threshold !== undefined) {
+      actions.push(this._encodeChangeThresholdAction(options.threshold))
+    }
+
+    return this._proposeTransaction(multisig, this._encodeConfigTransactionCreateData(actions))
   }
 
   /**
@@ -1264,16 +1309,79 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /** @private */
-  _validateThreshold (threshold, memberCount) {
-    if (!Number.isInteger(threshold) || threshold < 1 || threshold > memberCount) {
+  _validateThreshold (threshold, voterCount) {
+    if (!Number.isInteger(threshold) || threshold < 1 || threshold > voterCount) {
       throw new Error(
-        `Invalid threshold ${threshold}. It must be an integer between 1 and the number of owners (${memberCount}).`
+        `Invalid threshold ${threshold}. It must be an integer between 1 and the number of owners able to vote (${voterCount}).`
       )
     }
 
     if (threshold > MAX_THRESHOLD) {
       throw new Error(`Invalid threshold ${threshold}. It must not exceed ${MAX_THRESHOLD}.`)
     }
+  }
+
+  /**
+   * Checks the signer may propose, ahead of anything about what is being proposed.
+   *
+   * The program validates the creator before it looks at the actions, so a signer who cannot
+   * propose at all should hear that rather than a complaint about their proposal's contents.
+   *
+   * @private
+   */
+  async _requireCanPropose (multisig) {
+    this._requirePermission(
+      multisig,
+      await this.getSignerAddress(),
+      PERMISSION_INITIATE,
+      'propose transactions'
+    )
+  }
+
+  /** @private */
+  _countVoters (members) {
+    return members.filter((member) => member.mask & PERMISSION_VOTE).length
+  }
+
+  /**
+   * Validates the member set a configuration change would leave behind.
+   *
+   * These are the rules the program checks in `invariant()` — after applying every action, so
+   * a proposal breaking one is only refused at execution, once its rent is spent and the votes
+   * are cast. Every one is decidable from the member list already in hand.
+   *
+   * @private
+   */
+  _requireViableMembers (members, threshold, multisigPda) {
+    if (!members.length) {
+      throw new Error(`The multisig ${multisigPda} would be left with no members.`)
+    }
+
+    const required = [
+      [PERMISSION_VOTE, 'vote on proposals'],
+      [PERMISSION_INITIATE, 'propose transactions'],
+      [PERMISSION_EXECUTE, 'execute proposals']
+    ]
+
+    for (const [mask, permission] of required) {
+      if (!members.some((member) => member.mask & mask)) {
+        throw new Error(
+          `The multisig ${multisigPda} would be left with no member able to ${permission}.`
+        )
+      }
+    }
+
+    this._validateThreshold(threshold, this._countVoters(members))
+  }
+
+  /** @private */
+  _encodeRemoveMemberAction (owner) {
+    const action = new Uint8Array(ENUM_TAG_SIZE + ADDRESS_SIZE)
+
+    action[0] = CONFIG_ACTION_REMOVE_MEMBER
+    action.set(getAddressEncoder().encode(owner), ENUM_TAG_SIZE)
+
+    return action
   }
 
   /** @private */
