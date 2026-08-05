@@ -241,10 +241,26 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /**
      * Proposes swapping one member for another.
      *
+     * **This does not swap the member.** It creates a proposal; the member set changes only once
+     * enough owners approve it and one of them calls {@link executeTx}.
+     *
+     * The replacement **inherits the permissions of the member it replaces**, so the swap leaves
+     * the multisig's voting power unchanged. This differs from {@link addOwner}, which grants
+     * full permissions.
+     *
+     * Squads has no swap instruction: this is a removal and an addition applied together. Doing
+     * them as two proposals instead is not equivalent — removing first can be refused outright
+     * when the departing member is the only voter, and adding first only works if the removal is
+     * proposed after the addition has executed.
+     *
      * @param {string} oldOwnerAddress - The address of the member to replace.
      * @param {string} newOwnerAddress - The address of the new member.
      * @param {MultisigOptions} [options] - The operation options.
-     * @returns {Promise<MultisigTransactionResult>} The operation result.
+     * @returns {Promise<MultisigTransactionResult>} The proposal result.
+     * @throws {Error} If either address is malformed, they are equal, the old address is not a
+     *   member, the new one already is, the threshold would exceed the resulting voters, the
+     *   multisig does not exist or is controlled by a configuration authority, the signer cannot
+     *   propose, or the RPC request fails.
      */
     swapOwner(oldOwnerAddress: string, newOwnerAddress: string, options?: MultisigOptions): Promise<MultisigTransactionResult>;
     /**

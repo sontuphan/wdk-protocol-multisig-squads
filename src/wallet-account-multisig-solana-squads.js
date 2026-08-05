@@ -712,13 +712,74 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /**
    * Proposes swapping one member for another.
    *
+   * **This does not swap the member.** It creates a proposal; the member set changes only once
+   * enough owners approve it and one of them calls {@link executeTx}.
+   *
+   * The replacement **inherits the permissions of the member it replaces**, so the swap leaves
+   * the multisig's voting power unchanged. This differs from {@link addOwner}, which grants
+   * full permissions.
+   *
+   * Squads has no swap instruction: this is a removal and an addition applied together. Doing
+   * them as two proposals instead is not equivalent — removing first can be refused outright
+   * when the departing member is the only voter, and adding first only works if the removal is
+   * proposed after the addition has executed.
+   *
    * @param {string} oldOwnerAddress - The address of the member to replace.
    * @param {string} newOwnerAddress - The address of the new member.
    * @param {MultisigOptions} [options] - The operation options.
-   * @returns {Promise<MultisigTransactionResult>} The operation result.
+   * @returns {Promise<MultisigTransactionResult>} The proposal result.
+   * @throws {Error} If either address is malformed, they are equal, the old address is not a
+   *   member, the new one already is, the threshold would exceed the resulting voters, the
+   *   multisig does not exist or is controlled by a configuration authority, the signer cannot
+   *   propose, or the RPC request fails.
    */
   async swapOwner (oldOwnerAddress, newOwnerAddress, options = {}) {
-    throw new NotImplementedError('swapOwner(oldOwnerAddress, newOwnerAddress, options)')
+    const oldOwner = address(oldOwnerAddress)
+    const newOwner = address(newOwnerAddress)
+
+    // Swapping a member for itself changes nothing, yet still costs a vote round and
+    // invalidates every other pending proposal.
+    if (oldOwner === newOwner) {
+      throw new Error(`Cannot swap the member ${oldOwner} of the multisig for itself.`)
+    }
+
+    const multisig = await this._getMultisigAccount()
+
+    this._requireDeployed(multisig, 'proposing configuration changes')
+    this._requireAutonomous(multisig)
+    await this._requireCanPropose(multisig)
+
+    const replaced = multisig.members.find((member) => member.address === oldOwner)
+
+    if (!replaced) {
+      throw new Error(
+        `The address ${oldOwner} is not a member of the multisig ${multisig.address}.`
+      )
+    }
+
+    if (multisig.members.some((member) => member.address === newOwner)) {
+      throw new Error(
+        `The address ${newOwner} is already a member of the multisig ${multisig.address}.`
+      )
+    }
+
+    const resulting = [
+      ...multisig.members.filter((member) => member.address !== oldOwner),
+      { address: newOwner, mask: replaced.mask }
+    ]
+
+    this._requireViableMembers(resulting, options.threshold ?? multisig.threshold, multisig.address)
+
+    const actions = [
+      this._encodeRemoveMemberAction(oldOwner),
+      this._encodeAddMemberAction(newOwner, replaced.mask)
+    ]
+
+    if (options.threshold !== undefined) {
+      actions.push(this._encodeChangeThresholdAction(options.threshold))
+    }
+
+    return this._proposeTransaction(multisig, this._encodeConfigTransactionCreateData(actions))
   }
 
   /**

@@ -386,7 +386,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
   it('throws NotImplementedError for unimplemented write methods', async () => {
     // Only methods that still throw before touching the network belong here.
     await expect(account.updateOwners([TEST_SIGNER], 1)).rejects.toThrow()
-    await expect(account.swapOwner(TEST_SIGNER, OTHER_MEMBER)).rejects.toThrow()
+    await expect(account.changeThreshold(2)).rejects.toThrow()
   })
 
   it('throws NotSupportedError for message proposals', async () => {
@@ -1359,6 +1359,179 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.addOwner('CfGcujEkPVDx7yGyn1PUjxn2e353MXbLk8ixzwuJUktK', { threshold: 2 }))
         .resolves.toBeDefined()
+    })
+  })
+
+  describe('swapOwner', () => {
+    const NEW_OWNER = 'CfGcujEkPVDx7yGyn1PUjxn2e353MXbLk8ixzwuJUktK'
+    const TWO_OWNERS = [
+      { address: TEST_SIGNER, mask: 7 },
+      { address: OTHER_MEMBER, mask: 7 }
+    ]
+
+    it('sends RemoveMember then AddMember in one proposal', async () => {
+      const { account, sendTransaction } = await configuringAccount({ members: TWO_OWNERS })
+
+      await account.swapOwner(OTHER_MEMBER, NEW_OWNER)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+      const { data } = instructions[0]
+
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+      expect(instructions).toHaveLength(2)
+      expect(data).toHaveLength(80)
+      expect(new DataView(data.buffer).getUint32(8, true)).toBe(2)
+      expect(data[12]).toBe(1)
+      expect(getBase58Decoder().decode(data.subarray(13, 45))).toBe(OTHER_MEMBER)
+      expect(data[45]).toBe(0)
+      expect(getBase58Decoder().decode(data.subarray(46, 78))).toBe(NEW_OWNER)
+    })
+
+    it('gives the replacement the mask of the member it replaces', async () => {
+      // Mask 5 is Initiate|Execute: the replacement must not gain the vote.
+      const { account, sendTransaction } = await configuringAccount({
+        members: [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 5 }]
+      })
+
+      await account.swapOwner(OTHER_MEMBER, NEW_OWNER)
+
+      const { data } = sendTransaction.mock.calls[0][0].instructions[0]
+
+      expect(data[78]).toBe(5)
+    })
+
+    it('inherits a full mask when that is what the member held', async () => {
+      const { account, sendTransaction } = await configuringAccount({ members: TWO_OWNERS })
+
+      await account.swapOwner(OTHER_MEMBER, NEW_OWNER)
+
+      expect(sendTransaction.mock.calls[0][0].instructions[0].data[78]).toBe(7)
+    })
+
+    it('adds a ChangeThreshold action when asked', async () => {
+      const { account, sendTransaction } = await configuringAccount({ members: TWO_OWNERS })
+
+      await account.swapOwner(OTHER_MEMBER, NEW_OWNER, { threshold: 2 })
+
+      const { data } = sendTransaction.mock.calls[0][0].instructions[0]
+
+      expect(data).toHaveLength(83)
+      expect(new DataView(data.buffer).getUint32(8, true)).toBe(3)
+      expect(data[79]).toBe(2)
+      expect(new DataView(data.buffer).getUint16(80, true)).toBe(2)
+    })
+
+    it('returns the proposal at the next index with no confirmations', async () => {
+      const { account } = await configuringAccount({ members: TWO_OWNERS })
+
+      expect(await account.swapOwner(OTHER_MEMBER, NEW_OWNER)).toEqual({
+        proposalId: '5',
+        hash: 'facade',
+        fee: 5000n,
+        confirmations: 0,
+        threshold: 1,
+        executed: false
+      })
+    })
+
+    it('replaces the sole member of a 1-of-1', async () => {
+      // Two proposals cannot do this in one round; the atomic form can.
+      const { account, sendTransaction } = await configuringAccount()
+
+      await expect(account.swapOwner(TEST_SIGNER, NEW_OWNER)).resolves.toBeDefined()
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+    })
+
+    it('refuses swapping a member for itself', async () => {
+      const { account, sendTransaction } = await configuringAccount({ members: TWO_OWNERS })
+
+      await expect(account.swapOwner(OTHER_MEMBER, OTHER_MEMBER)).rejects.toThrow(/for itself/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('reports a self-swap as such rather than as a duplicate', async () => {
+      const { account } = await configuringAccount({ members: TWO_OWNERS })
+
+      await expect(account.swapOwner(OTHER_MEMBER, OTHER_MEMBER))
+        .rejects.not.toThrow(/already a member/)
+    })
+
+    it('refuses a self-swap without reading the multisig', async () => {
+      const { account } = await configuringAccount({ members: TWO_OWNERS })
+
+      await expect(account.swapOwner(OTHER_MEMBER, OTHER_MEMBER)).rejects.toThrow()
+      expect(account._rpc.getAccountInfo).not.toHaveBeenCalled()
+    })
+
+    it('refuses when the old address is not a member', async () => {
+      const { account, sendTransaction } = await configuringAccount({ members: TWO_OWNERS })
+
+      await expect(account.swapOwner(THIRD_MEMBER, NEW_OWNER)).rejects.toThrow(/is not a member/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('refuses when the new address is already a member', async () => {
+      const { account, sendTransaction } = await configuringAccount({ members: TWO_OWNERS })
+
+      await expect(account.swapOwner(OTHER_MEMBER, TEST_SIGNER)).rejects.toThrow(/already a member/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('bounds the threshold by the inherited mask, not a granted one', async () => {
+      // Swapping out a non-voter leaves one voter, so a threshold of 2 is impossible. It
+      // would be possible if the replacement were granted the vote instead of inheriting.
+      const { account, sendTransaction } = await configuringAccount({
+        members: [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 5 }]
+      })
+
+      await expect(account.swapOwner(OTHER_MEMBER, NEW_OWNER, { threshold: 2 }))
+        .rejects.toThrow(/number of owners able to vote \(1\)/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('refuses a threshold above the resulting voter count', async () => {
+      // Swapping is voter-neutral, so the ceiling stays at the current voter count.
+      const { account, sendTransaction } = await configuringAccount({ members: TWO_OWNERS })
+
+      await expect(account.swapOwner(OTHER_MEMBER, NEW_OWNER, { threshold: 3 }))
+        .rejects.toThrow(/Invalid threshold/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('refuses a controlled multisig', async () => {
+      const { account, sendTransaction } = await configuringAccount({
+        members: TWO_OWNERS,
+        configAuthority: THIRD_MEMBER
+      })
+
+      await expect(account.swapOwner(OTHER_MEMBER, NEW_OWNER))
+        .rejects.toThrow(/controlled by the configuration authority/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws when the signer cannot propose', async () => {
+      const { account, sendTransaction } = await configuringAccount({
+        members: [{ address: TEST_SIGNER, mask: 6 }, { address: OTHER_MEMBER, mask: 7 }]
+      })
+
+      await expect(account.swapOwner(OTHER_MEMBER, NEW_OWNER)).rejects.toThrow(/permission to propose/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws when the multisig does not exist', async () => {
+      const { account } = await configuringAccount({ deployed: false })
+
+      await expect(account.swapOwner(TEST_SIGNER, NEW_OWNER)).rejects.toThrow(/does not exist/)
+    })
+
+    it.each([
+      ['the old address', 'nope', NEW_OWNER],
+      ['the new address', TEST_SIGNER, 'nope']
+    ])('throws on a malformed %s before any RPC call', async (_label, oldOwner, newOwner) => {
+      const { account, sendTransaction } = await configuringAccount({ members: TWO_OWNERS })
+
+      await expect(account.swapOwner(oldOwner, newOwner)).rejects.toThrow()
+      expect(sendTransaction).not.toHaveBeenCalled()
     })
   })
 

@@ -143,6 +143,39 @@ describe('wire format', () => {
     })
 
     it.each([
+      ['inheriting a full mask', 7, 80],
+      ['inheriting a limited mask', 5, 80]
+    ])('matches the SDK for a swap %s', (_label, mask, size) => {
+      const OLD = OWNERS[0]
+      const mine = account._encodeConfigTransactionCreateData([
+        account._encodeRemoveMemberAction(address(OLD)),
+        account._encodeAddMemberAction(address(NEW_OWNER), mask)
+      ])
+
+      expect(mine).toHaveLength(size)
+      expect(Array.from(mine)).toEqual(reference([
+        { __kind: 'RemoveMember', oldMember: new PublicKey(OLD) },
+        { __kind: 'AddMember', newMember: { key: new PublicKey(NEW_OWNER), permissions: { mask } } }
+      ]))
+    })
+
+    it('matches the SDK for a swap plus ChangeThreshold', () => {
+      const OLD = OWNERS[0]
+      const mine = account._encodeConfigTransactionCreateData([
+        account._encodeRemoveMemberAction(address(OLD)),
+        account._encodeAddMemberAction(address(NEW_OWNER), 7),
+        account._encodeChangeThresholdAction(2)
+      ])
+
+      expect(mine).toHaveLength(83)
+      expect(Array.from(mine)).toEqual(reference([
+        { __kind: 'RemoveMember', oldMember: new PublicKey(OLD) },
+        { __kind: 'AddMember', newMember: { key: new PublicKey(NEW_OWNER), permissions: { mask: 7 } } },
+        { __kind: 'ChangeThreshold', newThreshold: 2 }
+      ]))
+    })
+
+    it.each([
       [1], [2], [255], [256], [65535]
     ])('encodes a threshold of %i as a u16', (threshold) => {
       const mine = account._encodeConfigTransactionCreateData([
