@@ -18,6 +18,8 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals'
 
 import { getBase58Decoder, getBase58Encoder, getBase64Decoder } from '@solana/codecs'
 
+import { NotImplementedError } from '@tetherto/wdk-wallet'
+
 import WalletManagerMultisigSolanaSquads, {
   WalletAccountReadOnlyMultisigSolanaSquads,
   SQUADS_PROGRAM_ADDRESS,
@@ -383,9 +385,12 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     expect(readOnly).toBeInstanceOf(WalletAccountReadOnlyMultisigSolanaSquads)
   })
 
-  it('throws NotImplementedError for unimplemented write methods', async () => {
-    // Only methods that still throw before touching the network belong here.
-    await expect(account.updateOwners([TEST_SIGNER], 1)).rejects.toThrow()
+  it('throws NotImplementedError for unimplemented write options', async () => {
+    // Only paths that still throw before touching the network belong here.
+    await expect(account.sendTransaction({ to: TEST_SIGNER, value: 1n }, { autoExecute: true }))
+      .rejects.toThrow(NotImplementedError)
+    await expect(account.transfer({ token: TEST_SIGNER, recipient: OTHER_MEMBER, amount: 1n }, { autoExecute: true }))
+      .rejects.toThrow(NotImplementedError)
   })
 
   it('throws NotSupportedError for message proposals', async () => {
@@ -395,7 +400,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
   })
 
   it('separates unsupported message proposals from unimplemented writes', async () => {
-    await expect(account.updateOwners([TEST_SIGNER], 1)).rejects.not.toThrow(NotSupportedError)
+    // A consumer catching NotImplementedError to mean "unfinished" must not also catch
+    // "this protocol cannot do it".
+    await expect(account.sendTransaction({ to: TEST_SIGNER, value: 1n }, { autoExecute: true }))
+      .rejects.not.toThrow(NotSupportedError)
   })
 
   describe('deploy', () => {

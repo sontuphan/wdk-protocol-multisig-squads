@@ -826,18 +826,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /**
-   * Proposes replacing the full member set and threshold in a single operation.
-   *
-   * @param {string[]} newOwners - The new member addresses.
-   * @param {number} newThreshold - The new threshold.
-   * @param {MultisigOptions} [options] - The operation options.
-   * @returns {Promise<MultisigTransactionResult>} The operation result.
-   */
-  async updateOwners (newOwners, newThreshold, options = {}) {
-    throw new NotImplementedError('updateOwners(newOwners, newThreshold, options)')
-  }
-
-  /**
    * Returns a read-only view of this account.
    *
    * @returns {WalletAccountReadOnlyMultisigSolanaSquads} The read-only account.
