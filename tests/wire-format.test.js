@@ -707,7 +707,7 @@ describe('wire format', () => {
       async (value) => {
         const vault = await account.getVaultAddress()
 
-        expect(Array.from(account._encodeTransactionMessage(vault, { to: RECIPIENT, value })))
+        expect(Array.from(account._encodeTransactionMessage(vault, { to: RECIPIENT, value }).bytes))
           .toEqual(reference(vault, value))
       }
     )
@@ -715,7 +715,7 @@ describe('wire format', () => {
     it('is 120 bytes for a native transfer', async () => {
       const vault = await account.getVaultAddress()
 
-      expect(account._encodeTransactionMessage(vault, { to: RECIPIENT, value: 1n }))
+      expect(account._encodeTransactionMessage(vault, { to: RECIPIENT, value: 1n }).bytes)
         .toHaveLength(120)
     })
 
@@ -770,7 +770,7 @@ describe('wire format', () => {
       const vault = await account.getVaultAddress()
       const instructions = await buildInstructions(vault, createAta)
 
-      const mine = account._compileTransactionMessage(address(vault), instructions)
+      const mine = account._compileTransactionMessage(address(vault), instructions).bytes
       const reference = utils.transactionMessageToMultisigTransactionMessageBytes({
         message: new TransactionMessage({
           payerKey: new PublicKey(vault),

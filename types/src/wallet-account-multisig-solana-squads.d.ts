@@ -100,9 +100,14 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {SolanaTransaction} tx - The transaction to propose.
      * @param {MultisigTransactionOptions} [options] - The send options.
      * @returns {Promise<MultisigTransactionResult>} The proposal result.
+     * Setting `autoExecute` approves and executes the proposal in the same transaction, but
+     * only where that can work: a threshold of 1, no time lock, and a signer holding all three
+     * permissions. Where it cannot, the flag is ignored and the result is an ordinary proposal
+     * — read `executed` rather than assuming it applied.
+     *
      * @throws {Error} If the multisig does not exist, the signer cannot propose, or the RPC
      *   request fails.
-     * @todo Support `autoExecute`, and transaction messages beyond a native transfer.
+     * @todo Support transaction messages beyond a native transfer.
      */
     sendTransaction(tx: SolanaTransaction, options?: MultisigTransactionOptions): Promise<MultisigTransactionResult>;
     /**
@@ -120,9 +125,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @returns {Promise<MultisigTransactionResult>} The transfer proposal result.
      * @throws {Error} If the mint or recipient is malformed, the mint does not exist, the
      *   signer cannot propose, or the quote exceeds `transferMaxFee`.
+     * Setting `autoExecute` approves and executes the proposal in the same transaction where
+     * that can work — see {@link sendTransaction}. A transfer that would fail at execution then
+     * fails outright, leaving no proposal behind rather than an unexecutable one.
+     *
      * @throws {NotSupportedError} If the mint belongs to the Token-2022 program.
      * @todo Support Token-2022 (Token Extensions Program).
-     * @todo Support `autoExecute`.
      */
     transfer(transferOptions: TransferOptions, options?: MultisigTransactionOptions): Promise<MultisigTransactionResult>;
     /**
@@ -183,8 +191,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the signer
      *   cannot execute, the proposal is not approved, its time lock has not elapsed, a config
      *   proposal has been invalidated, or the RPC request fails.
-     * @throws {NotImplementedError} If the proposal is a batch.
-     * @todo Support batches.
+     * @throws {NotImplementedError} If the proposal backs a batch. Batches are a deliberate
+     *   scope decision rather than pending work: a batch executes one inner transaction per
+     *   call, so it does not fit a method whose result is a single transaction.
      */
     executeTx(proposalId: number | bigint | string): Promise<TransactionResult>;
     /**
@@ -318,6 +327,26 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @private
      */
     private _proposeTransaction;
+    /**
+     * Decides whether this signer's proposal can be approved and executed in the same
+     * transaction, and builds those two instructions when it can.
+     *
+     * Returns nothing when the flag cannot apply — it is a request, not an assertion.
+     *
+     * @private
+     */
+    private _buildAutoExecuteInstructions;
+    /**
+     * Whether a proposal this signer creates would be executable in the same transaction.
+     *
+     * The threshold must be 1, since a fresh proposal carries one vote. The time lock must be
+     * zero, because the approval's timestamp is the current instant — any positive lock fails
+     * by construction rather than by timing. And the signer needs to vote and execute, not
+     * merely propose.
+     *
+     * @private
+     */
+    private _canAutoExecute;
     /** @private */
     private _encodeTransactionMessage;
     /**
@@ -325,6 +354,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *
      * Note this is not the message the program then stores: the argument uses one-byte
      * length prefixes where the stored account uses four-byte ones.
+     *
+     * Returns the account keys and header counts alongside the bytes, because auto-execution
+     * has to resolve the message's accounts before the transaction account exists to be read
+     * back.
      *
      * @private
      */

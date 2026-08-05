@@ -394,12 +394,9 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     expect(readOnly).toBeInstanceOf(WalletAccountReadOnlyMultisigSolanaSquads)
   })
 
-  it('throws NotImplementedError for unimplemented write options', async () => {
-    // Only paths that still throw before touching the network belong here.
-    await expect(account.sendTransaction({ to: TEST_SIGNER, value: 1n }, { autoExecute: true }))
-      .rejects.toThrow(NotImplementedError)
-    await expect(account.transfer({ token: TEST_SIGNER, recipient: OTHER_MEMBER, amount: 1n }, { autoExecute: true }))
-      .rejects.toThrow(NotImplementedError)
+  it('throws NotImplementedError for messages beyond a native transfer', async () => {
+    // The last write path that still refuses before touching the network.
+    await expect(account.sendTransaction({ instructions: [] })).rejects.toThrow(NotImplementedError)
   })
 
   it('throws NotSupportedError for message proposals', async () => {
@@ -411,8 +408,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
   it('separates unsupported message proposals from unimplemented writes', async () => {
     // A consumer catching NotImplementedError to mean "unfinished" must not also catch
     // "this protocol cannot do it".
-    await expect(account.sendTransaction({ to: TEST_SIGNER, value: 1n }, { autoExecute: true }))
-      .rejects.not.toThrow(NotSupportedError)
+    await expect(account.sendTransaction({ instructions: [] })).rejects.not.toThrow(NotSupportedError)
   })
 
   describe('deploy', () => {
@@ -653,7 +649,9 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       mask = 7,
       transactionIndex = 0n,
       isMember = true,
-      deployed = true
+      deployed = true,
+      threshold = 2,
+      timeLock = 0
     } = {}) {
       const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
         provider: TEST_RPC_URL,
@@ -666,7 +664,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         : [{ address: OTHER_MEMBER, mask: 7 }]
 
       const getAccountInfo = serveAccount(
-        deployed ? multisigAccountValue(members, { threshold: 2, transactionIndex }) : null
+        deployed ? multisigAccountValue(members, { threshold, transactionIndex, timeLock }) : null
       )
       const sendTransaction = jest.fn(async () => ({ hash: 'cafebabe', fee: 5000n }))
 
@@ -754,11 +752,68 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(account.sendTransaction(TX)).rejects.toThrow(/does not exist/)
     })
 
-    it('rejects autoExecute as unimplemented rather than ignoring it', async () => {
-      const { account, sendTransaction } = await proposingAccount()
+    describe('autoExecute', () => {
+      it('approves and executes in the same transaction', async () => {
+        const { account, sendTransaction } = await proposingAccount({ threshold: 1 })
 
-      await expect(account.sendTransaction(TX, { autoExecute: true })).rejects.toThrow()
-      expect(sendTransaction).not.toHaveBeenCalled()
+        const result = await account.sendTransaction(TX, { autoExecute: true })
+        const [{ instructions }] = sendTransaction.mock.calls[0]
+
+        expect(sendTransaction).toHaveBeenCalledTimes(1)
+        expect(instructions).toHaveLength(4)
+        expect(Array.from(instructions[2].data.slice(0, 8)))
+          .toEqual([144, 37, 164, 136, 188, 216, 42, 248])
+        expect(Array.from(instructions[3].data))
+          .toEqual([194, 8, 161, 87, 153, 164, 25, 171])
+        expect(result).toMatchObject({ confirmations: 1, executed: true })
+      })
+
+      it('appends the message accounts to the execute instruction', async () => {
+        const { account, sendTransaction } = await proposingAccount({ threshold: 1 })
+
+        await account.sendTransaction(TX, { autoExecute: true })
+
+        const [{ instructions }] = sendTransaction.mock.calls[0]
+        const vault = await account.getVaultAddress()
+        const remaining = instructions[3].accounts.slice(4)
+
+        // The vault is writable but never a signer: the program signs for it.
+        expect(remaining.map((a) => a.address)).toContain(vault)
+        expect(remaining.find((a) => a.address === vault).role).toBe(1)
+      })
+
+      it('needs no extra RPC call', async () => {
+        const { account, getAccountInfo } = await proposingAccount({ threshold: 1 })
+
+        await account.sendTransaction(TX, { autoExecute: true })
+
+        expect(getAccountInfo).toHaveBeenCalledTimes(1)
+      })
+
+      it.each([
+        ['the threshold is above 1', { threshold: 2 }],
+        ['a time lock is set', { threshold: 1, timeLock: 60 }],
+        ['the signer cannot vote', { threshold: 1, mask: 5 }],
+        ['the signer cannot execute', { threshold: 1, mask: 3 }]
+      ])('ignores the flag when %s', async (_label, options) => {
+        const { account, sendTransaction } = await proposingAccount(options)
+
+        const result = await account.sendTransaction(TX, { autoExecute: true })
+        const [{ instructions }] = sendTransaction.mock.calls[0]
+
+        // A request, not an assertion: propose only, and say so.
+        expect(instructions).toHaveLength(2)
+        expect(result).toMatchObject({ confirmations: 0, executed: false })
+      })
+
+      it('proposes only when the flag is absent', async () => {
+        const { account, sendTransaction } = await proposingAccount({ threshold: 1 })
+
+        const result = await account.sendTransaction(TX)
+
+        expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(2)
+        expect(result).toMatchObject({ confirmations: 0, executed: false })
+      })
     })
   })
 
@@ -2173,11 +2228,17 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 
-    it('rejects autoExecute as unimplemented', async () => {
-      const { account, sendTransaction } = await transferringAccount()
+    it.each([
+      ['the recipient holds the token', true],
+      ['the recipient account must be created', false]
+    ])('auto-executes when %s', async (_label, recipientHasAta) => {
+      const { account, sendTransaction } = await transferringAccount({ recipientHasAta })
 
-      await expect(account.transfer(OPTIONS, { autoExecute: true })).rejects.toThrow()
-      expect(sendTransaction).not.toHaveBeenCalled()
+      const result = await account.transfer(OPTIONS, { autoExecute: true })
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+
+      expect(instructions).toHaveLength(4)
+      expect(result).toMatchObject({ confirmations: 1, executed: true })
     })
   })
 })
