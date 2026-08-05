@@ -191,9 +191,25 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /**
      * Proposes adding a new member to the multisig.
      *
+     * **This does not add the member.** It creates a proposal; the member set changes only once
+     * enough owners approve it and one of them calls {@link executeTx}.
+     *
+     * The new member is given full permissions, matching {@link deploy}. Pass
+     * `options.threshold` to change the approval threshold in the same proposal — doing it as a
+     * second proposal cannot work, because executing either one invalidates the other.
+     *
+     * Note two further effects of executing the resulting proposal: every other pending proposal
+     * is invalidated, including ones created after this one, except vault proposals already
+     * approved; and the multisig account is enlarged in ten-member steps, so roughly every tenth
+     * addition costs its executor about 0.0023 SOL more than the others.
+     *
      * @param {string} ownerAddress - The address of the member to add.
      * @param {MultisigOptions} [options] - The operation options.
-     * @returns {Promise<MultisigTransactionResult>} The operation result.
+     * @returns {Promise<MultisigTransactionResult>} The proposal result.
+     * @throws {Error} If the address is malformed or already a member, the threshold is out of
+     *   range, the multisig does not exist or is controlled by a configuration authority, the
+     *   signer cannot propose, or the RPC request fails.
+     * @todo Let the caller choose the new member's permissions.
      */
     addOwner(ownerAddress: string, options?: MultisigOptions): Promise<MultisigTransactionResult>;
     /**
@@ -253,6 +269,17 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     private _proposeVaultTransaction;
     /** @private */
+    private _requireDeployed;
+    /**
+     * Proposes a transaction from a creating instruction's data, opening it for voting.
+     *
+     * The vault and config paths differ only in that data — the account list, the index
+     * arithmetic and the accompanying `proposalCreate` are identical.
+     *
+     * @private
+     */
+    private _proposeTransaction;
+    /** @private */
     private _encodeTransactionMessage;
     /**
      * Compiles instructions into the message Squads takes as an instruction argument.
@@ -305,6 +332,16 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     private _toAccountRole;
     /** @private */
     private _encodeProposalVoteData;
+    /** @private */
+    private _requireAutonomous;
+    /** @private */
+    private _validateThreshold;
+    /** @private */
+    private _encodeAddMemberAction;
+    /** @private */
+    private _encodeChangeThresholdAction;
+    /** @private */
+    private _encodeConfigTransactionCreateData;
     /** @private */
     private _encodeVaultTransactionCreateData;
     /** @private */

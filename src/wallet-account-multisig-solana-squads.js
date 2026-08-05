@@ -84,6 +84,7 @@ const SEED_MULTISIG = 'multisig'
 
 const VAULT_TRANSACTION_CREATE_DISCRIMINATOR = [48, 250, 78, 168, 208, 226, 218, 211]
 const PROPOSAL_CREATE_DISCRIMINATOR = [220, 60, 73, 224, 30, 108, 79, 159]
+const CONFIG_TRANSACTION_CREATE_DISCRIMINATOR = [155, 236, 87, 228, 137, 75, 81, 39]
 const PROPOSAL_APPROVE_DISCRIMINATOR = [144, 37, 164, 136, 188, 216, 42, 248]
 const PROPOSAL_REJECT_DISCRIMINATOR = [243, 62, 134, 156, 230, 106, 246, 135]
 const VAULT_TRANSACTION_EXECUTE_DISCRIMINATOR = [194, 8, 161, 87, 153, 164, 25, 171]
@@ -102,8 +103,14 @@ const PROPOSAL_STATUS_APPROVED = 3
 
 const SPENDING_LIMIT_ACTIONS = ['AddSpendingLimit', 'RemoveSpendingLimit']
 
+const CONFIG_ACTION_ADD_MEMBER = 0
+const CONFIG_ACTION_CHANGE_THRESHOLD = 2
+
 const OPTION_SOME = 1
 const OPTION_TAG_SIZE = 1
+const ENUM_TAG_SIZE = 1
+const THRESHOLD_SIZE = 2
+const MAX_THRESHOLD = 65535
 
 const SYSTEM_TRANSFER_INSTRUCTION = 2
 const SYSTEM_TRANSFER_DATA_SIZE = 12
@@ -602,12 +609,48 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /**
    * Proposes adding a new member to the multisig.
    *
+   * **This does not add the member.** It creates a proposal; the member set changes only once
+   * enough owners approve it and one of them calls {@link executeTx}.
+   *
+   * The new member is given full permissions, matching {@link deploy}. Pass
+   * `options.threshold` to change the approval threshold in the same proposal — doing it as a
+   * second proposal cannot work, because executing either one invalidates the other.
+   *
+   * Note two further effects of executing the resulting proposal: every other pending proposal
+   * is invalidated, including ones created after this one, except vault proposals already
+   * approved; and the multisig account is enlarged in ten-member steps, so roughly every tenth
+   * addition costs its executor about 0.0023 SOL more than the others.
+   *
    * @param {string} ownerAddress - The address of the member to add.
    * @param {MultisigOptions} [options] - The operation options.
-   * @returns {Promise<MultisigTransactionResult>} The operation result.
+   * @returns {Promise<MultisigTransactionResult>} The proposal result.
+   * @throws {Error} If the address is malformed or already a member, the threshold is out of
+   *   range, the multisig does not exist or is controlled by a configuration authority, the
+   *   signer cannot propose, or the RPC request fails.
+   * @todo Let the caller choose the new member's permissions.
    */
   async addOwner (ownerAddress, options = {}) {
-    throw new NotImplementedError('addOwner(ownerAddress, options)')
+    const newOwner = address(ownerAddress)
+    const multisig = await this._getMultisigAccount()
+
+    this._requireDeployed(multisig, 'proposing configuration changes')
+    this._requireAutonomous(multisig)
+
+    if (multisig.members.some((member) => member.address === newOwner)) {
+      throw new Error(
+        `The address ${newOwner} is already a member of the multisig ${multisig.address}.`
+      )
+    }
+
+    const actions = [this._encodeAddMemberAction(newOwner, ALMIGHTY_PERMISSIONS)]
+
+    if (options.threshold !== undefined) {
+      // The threshold is checked against the member set this proposal would produce.
+      this._validateThreshold(options.threshold, multisig.members.length + 1)
+      actions.push(this._encodeChangeThresholdAction(options.threshold))
+    }
+
+    return this._proposeTransaction(multisig, this._encodeConfigTransactionCreateData(actions))
   }
 
   /**
@@ -713,11 +756,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       address(owner)
     }
 
-    if (!Number.isInteger(threshold) || threshold < 1 || threshold > owners.length) {
-      throw new Error(
-        `Invalid threshold ${threshold}. It must be an integer between 1 and the number of owners (${owners.length}).`
-      )
-    }
+    this._validateThreshold(threshold, owners.length)
   }
 
   /**
@@ -726,19 +765,33 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @private
    */
   async _proposeVaultTransaction (message) {
-    const {
-      address: multisigPda,
-      isCreated,
-      threshold,
-      transactionIndex,
-      members
-    } = await this._getMultisigAccount()
+    return this._proposeTransaction(
+      await this._getMultisigAccount(),
+      this._encodeVaultTransactionCreateData(message)
+    )
+  }
 
-    if (!isCreated) {
+  /** @private */
+  _requireDeployed (multisig, action) {
+    if (!multisig.isCreated) {
       throw new Error(
-        `The multisig account ${multisigPda} does not exist. Deploy it before proposing transactions.`
+        `The multisig account ${multisig.address} does not exist. Deploy it before ${action}.`
       )
     }
+  }
+
+  /**
+   * Proposes a transaction from a creating instruction's data, opening it for voting.
+   *
+   * The vault and config paths differ only in that data — the account list, the index
+   * arithmetic and the accompanying `proposalCreate` are identical.
+   *
+   * @private
+   */
+  async _proposeTransaction (multisig, data) {
+    const { address: multisigPda, threshold, transactionIndex, members } = multisig
+
+    this._requireDeployed(multisig, 'proposing transactions')
 
     const signerAddress = await this.getSignerAddress()
 
@@ -768,7 +821,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
           creator,
           systemProgram
         ],
-        data: this._encodeVaultTransactionCreateData(message)
+        data
       },
       {
         programAddress: this._programId,
@@ -1197,6 +1250,74 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     offset += VEC_PREFIX_SIZE
 
     data.set(bytes, offset)
+
+    return data
+  }
+
+  /** @private */
+  _requireAutonomous (multisig) {
+    if (multisig.configAuthority) {
+      throw new Error(
+        `The multisig ${multisig.address} is controlled by the configuration authority ${multisig.configAuthority}, which alone can change its members and threshold.`
+      )
+    }
+  }
+
+  /** @private */
+  _validateThreshold (threshold, memberCount) {
+    if (!Number.isInteger(threshold) || threshold < 1 || threshold > memberCount) {
+      throw new Error(
+        `Invalid threshold ${threshold}. It must be an integer between 1 and the number of owners (${memberCount}).`
+      )
+    }
+
+    if (threshold > MAX_THRESHOLD) {
+      throw new Error(`Invalid threshold ${threshold}. It must not exceed ${MAX_THRESHOLD}.`)
+    }
+  }
+
+  /** @private */
+  _encodeAddMemberAction (owner, mask) {
+    const action = new Uint8Array(ENUM_TAG_SIZE + ADDRESS_SIZE + 1)
+
+    action[0] = CONFIG_ACTION_ADD_MEMBER
+    action.set(getAddressEncoder().encode(owner), ENUM_TAG_SIZE)
+    action[ENUM_TAG_SIZE + ADDRESS_SIZE] = mask
+
+    return action
+  }
+
+  /** @private */
+  _encodeChangeThresholdAction (threshold) {
+    const action = new Uint8Array(ENUM_TAG_SIZE + THRESHOLD_SIZE)
+
+    action[0] = CONFIG_ACTION_CHANGE_THRESHOLD
+    new DataView(action.buffer).setUint16(ENUM_TAG_SIZE, threshold, true)
+
+    return action
+  }
+
+  /** @private */
+  _encodeConfigTransactionCreateData (actions) {
+    const body = actions.reduce((total, action) => total + action.length, 0)
+    const data = new Uint8Array(
+      CONFIG_TRANSACTION_CREATE_DISCRIMINATOR.length + VEC_PREFIX_SIZE + body + OPTION_TAG_SIZE
+    )
+    const view = new DataView(data.buffer)
+
+    data.set(CONFIG_TRANSACTION_CREATE_DISCRIMINATOR, 0)
+
+    let offset = CONFIG_TRANSACTION_CREATE_DISCRIMINATOR.length
+
+    view.setUint32(offset, actions.length, true)
+    offset += VEC_PREFIX_SIZE
+
+    for (const action of actions) {
+      data.set(action, offset)
+      offset += action.length
+    }
+
+    data[offset] = OPTION_NONE
 
     return data
   }

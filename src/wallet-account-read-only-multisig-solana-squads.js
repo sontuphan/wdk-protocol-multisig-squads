@@ -97,8 +97,10 @@ const CONFIG_ACTION_BODY_SIZES = [33, 32, 2, 4, 0, 32, 0]
 const ADD_SPENDING_LIMIT_FIXED_SIZE = 74
 
 const CLOCK_SYSVAR_ADDRESS = 'SysvarC1ock11111111111111111111111111111111'
+const DEFAULT_ADDRESS = '11111111111111111111111111111111'
 const CLOCK_UNIX_TIMESTAMP_OFFSET = 32
 
+const MULTISIG_CONFIG_AUTHORITY_OFFSET = 40
 const MULTISIG_THRESHOLD_OFFSET = 72
 const MULTISIG_TIME_LOCK_OFFSET = 74
 const MULTISIG_TRANSACTION_INDEX_OFFSET = 78
@@ -880,7 +882,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * from one consistent snapshot.
    *
    * @protected
-   * @returns {Promise<{ address: string, isCreated: boolean, threshold: number, timeLock: number, transactionIndex: bigint, staleTransactionIndex: bigint, rentCollector: string | null, members: Array<{ address: string, mask: number }> }>}
+   * @returns {Promise<{ address: string, isCreated: boolean, configAuthority: string | null, threshold: number, timeLock: number, transactionIndex: bigint, staleTransactionIndex: bigint, rentCollector: string | null, members: Array<{ address: string, mask: number }> }>}
    *   The decoded account. When `isCreated` is false every other field is a placeholder.
    * @throws {Error} If the address holds a non-Squads account, or if the RPC request fails.
    */
@@ -1157,6 +1159,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       return {
         address: multisigPda,
         isCreated: false,
+        configAuthority: null,
         threshold: 0,
         timeLock: 0,
         transactionIndex: 0n,
@@ -1174,6 +1177,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
     const addressDecoder = getBase58Decoder()
+
+    // An autonomous multisig stores the all-zero pubkey here; anything else is a controlled
+    // multisig, whose configuration only its authority can change.
+    const authority = addressDecoder.decode(
+      data.subarray(MULTISIG_CONFIG_AUTHORITY_OFFSET, MULTISIG_CONFIG_AUTHORITY_OFFSET + ADDRESS_SIZE)
+    )
+    const configAuthority = authority === DEFAULT_ADDRESS ? null : authority
 
     const hasRentCollector = data[MULTISIG_RENT_COLLECTOR_OFFSET] === 1
 
@@ -1204,6 +1214,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     return {
       address: multisigPda,
       isCreated: true,
+      configAuthority,
       threshold: view.getUint16(MULTISIG_THRESHOLD_OFFSET, true),
       timeLock: view.getUint32(MULTISIG_TIME_LOCK_OFFSET, true),
       transactionIndex: view.getBigUint64(MULTISIG_TRANSACTION_INDEX_OFFSET, true),

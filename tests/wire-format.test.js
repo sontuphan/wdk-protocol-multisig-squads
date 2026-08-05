@@ -75,6 +75,69 @@ describe('wire format', () => {
     account = await wallet.getAccount(0)
   })
 
+  describe('configTransactionCreate instruction data', () => {
+    const NEW_OWNER = '2JvLzXomThTBMSj2YQY3wE21kiaSpwGyJ17nm9xiLMsE'
+
+    /**
+     * Serializes the create args with the Squads SDK.
+     *
+     * @param {Object[]} actions - The SDK-shaped config actions.
+     * @returns {number[]} The reference bytes.
+     */
+    function reference (actions) {
+      const [bytes] = generated.configTransactionCreateStruct.serialize({
+        instructionDiscriminator: generated.configTransactionCreateInstructionDiscriminator,
+        args: { actions, memo: null }
+      })
+
+      return Array.from(bytes)
+    }
+
+    it('matches the SDK for a lone AddMember', () => {
+      const mine = account._encodeConfigTransactionCreateData([
+        account._encodeAddMemberAction(address(NEW_OWNER), 7)
+      ])
+
+      expect(mine).toHaveLength(47)
+      expect(Array.from(mine)).toEqual(reference([
+        { __kind: 'AddMember', newMember: { key: new PublicKey(NEW_OWNER), permissions: { mask: 7 } } }
+      ]))
+    })
+
+    it('matches the SDK for AddMember plus ChangeThreshold', () => {
+      const mine = account._encodeConfigTransactionCreateData([
+        account._encodeAddMemberAction(address(NEW_OWNER), 7),
+        account._encodeChangeThresholdAction(2)
+      ])
+
+      expect(mine).toHaveLength(50)
+      expect(Array.from(mine)).toEqual(reference([
+        { __kind: 'AddMember', newMember: { key: new PublicKey(NEW_OWNER), permissions: { mask: 7 } } },
+        { __kind: 'ChangeThreshold', newThreshold: 2 }
+      ]))
+    })
+
+    it.each([
+      [1], [2], [255], [256], [65535]
+    ])('encodes a threshold of %i as a u16', (threshold) => {
+      const mine = account._encodeConfigTransactionCreateData([
+        account._encodeChangeThresholdAction(threshold)
+      ])
+
+      expect(Array.from(mine)).toEqual(reference([
+        { __kind: 'ChangeThreshold', newThreshold: threshold }
+      ]))
+    })
+
+    it('agrees with the SDK on the discriminator and the action tags', () => {
+      expect(Array.from(generated.configTransactionCreateInstructionDiscriminator))
+        .toEqual([155, 236, 87, 228, 137, 75, 81, 39])
+      // Tag 0 is AddMember, tag 2 is ChangeThreshold.
+      expect(account._encodeAddMemberAction(address(NEW_OWNER), 7)[0]).toBe(0)
+      expect(account._encodeChangeThresholdAction(1)[0]).toBe(2)
+    })
+  })
+
   describe('proposal vote instruction data', () => {
     // Approve and reject share `ProposalVoteArgs`, so one encoder serves both and the diff
     // has to cover both discriminators.

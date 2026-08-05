@@ -378,13 +378,14 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * from one consistent snapshot.
      *
      * @protected
-     * @returns {Promise<{ address: string, isCreated: boolean, threshold: number, timeLock: number, transactionIndex: bigint, staleTransactionIndex: bigint, rentCollector: string | null, members: Array<{ address: string, mask: number }> }>}
+     * @returns {Promise<{ address: string, isCreated: boolean, configAuthority: string | null, threshold: number, timeLock: number, transactionIndex: bigint, staleTransactionIndex: bigint, rentCollector: string | null, members: Array<{ address: string, mask: number }> }>}
      *   The decoded account. When `isCreated` is false every other field is a placeholder.
      * @throws {Error} If the address holds a non-Squads account, or if the RPC request fails.
      */
     protected _getMultisigAccount(): Promise<{
         address: string;
         isCreated: boolean;
+        configAuthority: string | null;
         threshold: number;
         timeLock: number;
         transactionIndex: bigint;

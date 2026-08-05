@@ -56,12 +56,18 @@ function multisigAccountValue (members, {
   threshold = 1,
   transactionIndex = 0n,
   staleTransactionIndex = 0n,
-  timeLock = 0
+  timeLock = 0,
+  configAuthority = null
 } = {}) {
   const data = new Uint8Array(95 + 1 + 4 + members.length * 33)
   const view = new DataView(data.buffer)
 
   data.set(MULTISIG_DISCRIMINATOR, 0)
+
+  if (configAuthority) {
+    data.set(getBase58Encoder().encode(configAuthority), 40)
+  }
+
   view.setUint16(72, threshold, true)
   view.setUint32(74, timeLock, true)
   view.setBigUint64(78, transactionIndex, true)
@@ -343,8 +349,8 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
   it('throws NotImplementedError for unimplemented write methods', async () => {
     // Only methods that still throw before touching the network belong here.
-    await expect(account.addOwner(TEST_SIGNER)).rejects.toThrow()
     await expect(account.updateOwners([TEST_SIGNER], 1)).rejects.toThrow()
+    await expect(account.swapOwner(TEST_SIGNER, OTHER_MEMBER)).rejects.toThrow()
   })
 
   it('throws NotSupportedError for message proposals', async () => {
@@ -354,7 +360,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
   })
 
   it('separates unsupported message proposals from unimplemented writes', async () => {
-    await expect(account.addOwner(TEST_SIGNER)).rejects.not.toThrow(NotSupportedError)
+    await expect(account.updateOwners([TEST_SIGNER], 1)).rejects.not.toThrow(NotSupportedError)
   })
 
   describe('deploy', () => {
@@ -989,6 +995,187 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const { account, sendTransaction } = await votingAccount()
 
       await expect(account.rejectTx(3, 42)).rejects.toThrow(/must be a string/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('addOwner', () => {
+    /**
+     * Builds a configuring account with a stubbed RPC and send.
+     *
+     * @param {Object} [options] - The scenario.
+     * @param {Array} [options.members] - The current members.
+     * @param {number} [options.threshold=1] - The current threshold.
+     * @param {string|null} [options.configAuthority] - A configuration authority, if controlled.
+     * @param {boolean} [options.deployed=true] - Whether the multisig exists.
+     * @returns {Promise<{ account: Object, sendTransaction: Function }>}
+     */
+    async function configuringAccount ({
+      members = [{ address: TEST_SIGNER, mask: 7 }],
+      threshold = 1,
+      configAuthority = null,
+      deployed = true
+    } = {}) {
+      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
+      const account = await wallet.getAccount(0)
+
+      account._rpc = {
+        getAccountInfo: serveAccount(
+          deployed
+            ? multisigAccountValue(members, { threshold, transactionIndex: 4n, configAuthority })
+            : null
+        )
+      }
+
+      const sendTransaction = jest.fn(async () => ({ hash: 'facade', fee: 5000n }))
+      account._signerAccount.sendTransaction = sendTransaction
+
+      return { account, sendTransaction }
+    }
+
+    it('creates the config transaction and its proposal in one transaction', async () => {
+      const { account, sendTransaction } = await configuringAccount()
+
+      await account.addOwner(OTHER_MEMBER)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+      expect(instructions).toHaveLength(2)
+      expect(Array.from(instructions[0].data.slice(0, 8)))
+        .toEqual([155, 236, 87, 228, 137, 75, 81, 39])
+      expect(Array.from(instructions[1].data.slice(0, 8)))
+        .toEqual([220, 60, 73, 224, 30, 108, 79, 159])
+    })
+
+    it('sends one AddMember action with full permissions', async () => {
+      const { account, sendTransaction } = await configuringAccount()
+
+      await account.addOwner(OTHER_MEMBER)
+
+      const { data } = sendTransaction.mock.calls[0][0].instructions[0]
+
+      expect(data).toHaveLength(47)
+      expect(new DataView(data.buffer).getUint32(8, true)).toBe(1)
+      expect(data[12]).toBe(0)
+      expect(getBase58Decoder().decode(data.subarray(13, 45))).toBe(OTHER_MEMBER)
+      expect(data[45]).toBe(7)
+    })
+
+    it('proposes at the next transaction index', async () => {
+      const { account, sendTransaction } = await configuringAccount()
+
+      const result = await account.addOwner(OTHER_MEMBER)
+      const { data } = sendTransaction.mock.calls[0][0].instructions[1]
+
+      expect(result.proposalId).toBe('5')
+      expect(new DataView(data.buffer).getBigUint64(8, true)).toBe(5n)
+    })
+
+    it('adds a ChangeThreshold action in the same proposal', async () => {
+      const { account, sendTransaction } = await configuringAccount()
+
+      await account.addOwner(OTHER_MEMBER, { threshold: 2 })
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+      const { data } = instructions[0]
+
+      // Still one proposal, but two actions.
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+      expect(instructions).toHaveLength(2)
+      expect(new DataView(data.buffer).getUint32(8, true)).toBe(2)
+      expect(data).toHaveLength(50)
+      expect(data[46]).toBe(2)
+      expect(new DataView(data.buffer).getUint16(47, true)).toBe(2)
+    })
+
+    it('returns the proposal with no confirmations of its own', async () => {
+      const { account } = await configuringAccount({ threshold: 1 })
+
+      expect(await account.addOwner(OTHER_MEMBER)).toEqual({
+        proposalId: '5',
+        hash: 'facade',
+        fee: 5000n,
+        confirmations: 0,
+        threshold: 1,
+        executed: false
+      })
+    })
+
+    it('accepts a threshold equal to the member count after the addition', async () => {
+      const { account, sendTransaction } = await configuringAccount()
+
+      await expect(account.addOwner(OTHER_MEMBER, { threshold: 2 })).resolves.toBeDefined()
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+    })
+
+    it('refuses a threshold above the member count after the addition', async () => {
+      const { account, sendTransaction } = await configuringAccount()
+
+      await expect(account.addOwner(OTHER_MEMBER, { threshold: 3 })).rejects.toThrow(/Invalid threshold/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it.each([[0], [-1], [1.5]])('refuses a threshold of %s', async (threshold) => {
+      const { account, sendTransaction } = await configuringAccount()
+
+      await expect(account.addOwner(OTHER_MEMBER, { threshold })).rejects.toThrow(/Invalid threshold/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('refuses an address that is already a member', async () => {
+      const { account, sendTransaction } = await configuringAccount({
+        members: [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }]
+      })
+
+      await expect(account.addOwner(OTHER_MEMBER)).rejects.toThrow(/already a member/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('refuses a controlled multisig', async () => {
+      const { account, sendTransaction } = await configuringAccount({ configAuthority: THIRD_MEMBER })
+
+      await expect(account.addOwner(OTHER_MEMBER)).rejects.toThrow(/controlled by the configuration authority/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('treats the all-zero authority as autonomous', async () => {
+      const { account, sendTransaction } = await configuringAccount({ configAuthority: SYSTEM_PROGRAM })
+
+      await expect(account.addOwner(OTHER_MEMBER)).resolves.toBeDefined()
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+    })
+
+    it('throws when the signer cannot propose', async () => {
+      const { account, sendTransaction } = await configuringAccount({
+        members: [{ address: TEST_SIGNER, mask: 2 }]
+      })
+
+      await expect(account.addOwner(OTHER_MEMBER)).rejects.toThrow(/permission to propose/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws when the signer is not a member', async () => {
+      const { account } = await configuringAccount({
+        members: [{ address: OTHER_MEMBER, mask: 7 }]
+      })
+
+      await expect(account.addOwner(THIRD_MEMBER)).rejects.toThrow(/not a member/)
+    })
+
+    it('throws when the multisig does not exist', async () => {
+      const { account } = await configuringAccount({ deployed: false })
+
+      await expect(account.addOwner(OTHER_MEMBER)).rejects.toThrow(/does not exist/)
+    })
+
+    it('throws on a malformed address before any RPC call', async () => {
+      const { account, sendTransaction } = await configuringAccount()
+
+      await expect(account.addOwner('nope')).rejects.toThrow()
       expect(sendTransaction).not.toHaveBeenCalled()
     })
   })
