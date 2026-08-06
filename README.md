@@ -81,6 +81,17 @@ account.dispose()
 - **Solana Devnet**
 - **Standard Solana RPC Providers**
 
+## Testing
+
+```sh
+npm test                  # unit tests
+npm run test:integration  # against a local validator running the real Squads program
+```
+
+The integration suite starts and stops its own `solana-test-validator`, so it needs only
+that binary on `PATH`; the Squads program it loads is committed to the repository. See
+[tests/integration/README.md](tests/integration/README.md).
+
 ## Community
 
 Join the [WDK Discord](https://discord.gg/arYXDhHB2w) to connect with other developers.

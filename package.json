@@ -39,6 +39,10 @@
     "bare-node-runtime": "^1.1.4"
   },
   "devDependencies": {
+    "@solana-program/system": "0.9.0",
+    "@solana/functional": "3.0.3",
+    "@solana/transaction-messages": "3.0.3",
+    "@solana/transactions": "3.0.3",
     "@sqds/multisig": "2.1.4",
     "cross-env": "7.0.3",
     "jest": "^30.2.0",

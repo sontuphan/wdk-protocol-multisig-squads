@@ -297,6 +297,11 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /**
      * Returns a read-only view of this account.
      *
+     * The view carries the multisig address this account has resolved, rather than only
+     * what the configuration named: an account configured with a `createKeySecret` alone
+     * knows its address once {@link getAddress} or {@link deploy} has run, and the secret
+     * itself is withheld from a view that cannot sign with it.
+     *
      * @returns {WalletAccountReadOnlyMultisigSolanaSquads} The read-only account.
      */
     toReadOnlyAccount(): WalletAccountReadOnlyMultisigSolanaSquads;

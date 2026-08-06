@@ -14,16 +14,1057 @@
 
 'use strict'
 
-import { describe, it, expect } from '@jest/globals'
+import { spawn } from 'node:child_process'
+import { access } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-import WalletManagerMultisigSolanaSquads from '@tetherto/wdk-protocol-multisig-squads'
+import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals'
 
-// Integration tests run against a local solana-test-validator.
-// Fill these in once the multisig methods are implemented.
-describe('WalletManagerMultisigSolanaSquads (integration)', () => {
-  it.todo('creates a Squads multisig against a local validator')
+import { address } from '@solana/addresses'
+import { createSolanaRpc } from '@solana/rpc'
+import { generateKeyPairSigner } from '@solana/signers'
 
-  it('exports the manager class', () => {
-    expect(typeof WalletManagerMultisigSolanaSquads).toBe('function')
+import { WalletAccountReadOnlySolana } from '@tetherto/wdk-wallet-solana'
+
+import WalletManagerMultisigSolanaSquads, {
+  NotSupportedError,
+  SQUADS_PROGRAM_ADDRESS,
+  WalletAccountMultisigSolanaSquads,
+  WalletAccountReadOnlyMultisigSolanaSquads
+} from '@tetherto/wdk-protocol-multisig-squads'
+
+import {
+  LAMPORTS_PER_SOL,
+  airdrop,
+  confirmTransaction,
+  deployTestToken,
+  sendTestTokensTo
+} from './helpers/chain.js'
+import { approveWithAll, createWallet, deployMultisig, sorted } from './helpers/multisig.js'
+
+jest.setTimeout(180_000)
+
+const TEST_RPC_URL = 'http://127.0.0.1:8899'
+
+const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
+
+/** @param {string} target */
+function solanaAccount (target) {
+  return new WalletAccountReadOnlySolana(target, {
+    provider: TEST_RPC_URL,
+    commitment: 'confirmed'
+  })
+}
+
+// The Squads ProgramConfig PDA, seeds ["multisig", "program_config"].
+const SQUADS_PROGRAM_CONFIG_ADDRESS = 'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr'
+
+const PROGRAM_SO_PATH = join(FIXTURES_DIR, 'squads-program.so')
+const PROGRAM_CONFIG_PATH = join(FIXTURES_DIR, 'squads-program-config.json')
+
+const READY_ATTEMPTS = 60
+const READY_INTERVAL_MS = 500
+
+/** @returns {Promise<void>} */
+async function assertFixtures () {
+  for (const path of [PROGRAM_SO_PATH, PROGRAM_CONFIG_PATH]) {
+    try {
+      await access(path)
+    } catch {
+      throw new Error(
+        `The Squads fixture ${path} is missing. It is committed to the repository — ` +
+        'see tests/integration/fixtures/README.md.'
+      )
+    }
+  }
+}
+
+/**
+ * @param {{ getLatestBlockhash: Function }} rpc
+ * @returns {Promise<() => Promise<void>>} A function that stops the validator.
+ */
+async function startSolanaTestValidator (rpc) {
+  await assertFixtures()
+
+  const validator = spawn('solana-test-validator', [
+    '--reset',
+    '--ticks-per-slot', '4',
+    '--limit-ledger-size', '10000',
+    '--upgradeable-program', SQUADS_PROGRAM_ADDRESS, PROGRAM_SO_PATH, 'none',
+    '--account', SQUADS_PROGRAM_CONFIG_ADDRESS, PROGRAM_CONFIG_PATH
+  ], {
+    stdio: ['ignore', 'ignore', 'ignore']
+  })
+
+  let startupError
+
+  const closed = new Promise((resolve) => {
+    validator.once('close', resolve)
+  })
+
+  validator.once('error', (error) => {
+    startupError = error
+  })
+
+  const stopSolanaTestValidator = async () => {
+    if (!validator.killed && validator.exitCode === null) {
+      validator.kill('SIGKILL')
+    }
+
+    await closed
+  }
+
+  for (let attempt = 0; attempt < READY_ATTEMPTS; attempt++) {
+    if (startupError) {
+      await stopSolanaTestValidator()
+      throw startupError
+    }
+
+    try {
+      await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send()
+      return stopSolanaTestValidator
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, READY_INTERVAL_MS))
+    }
+  }
+
+  await stopSolanaTestValidator()
+
+  throw new Error(`The validator was not answering at ${TEST_RPC_URL}`)
+}
+
+describe('@tetherto/wdk-protocol-multisig-squads', () => {
+  const rpc = createSolanaRpc(TEST_RPC_URL)
+
+  let stopSolanaTestValidator
+
+  beforeAll(async () => {
+    stopSolanaTestValidator = await startSolanaTestValidator(rpc)
+  })
+
+  afterAll(async () => {
+    if (stopSolanaTestValidator) {
+      await stopSolanaTestValidator()
+      stopSolanaTestValidator = undefined
+    }
+  })
+
+  describe('module and localnet', () => {
+    it('exports the manager and both account classes', () => {
+      expect(typeof WalletManagerMultisigSolanaSquads).toBe('function')
+      expect(typeof WalletAccountMultisigSolanaSquads).toBe('function')
+      expect(typeof WalletAccountReadOnlyMultisigSolanaSquads).toBe('function')
+    })
+
+    it('runs against a validator hosting the Squads program', async () => {
+      const { value } = await rpc
+        .getMultipleAccounts(
+          [address(SQUADS_PROGRAM_ADDRESS), address(SQUADS_PROGRAM_CONFIG_ADDRESS)],
+          { commitment: 'confirmed', encoding: 'base64' }
+        )
+        .send()
+
+      const [program, programConfig] = value
+
+      expect(program.executable).toBe(true)
+      expect(programConfig.owner).toBe(SQUADS_PROGRAM_ADDRESS)
+      expect(SQUADS_PROGRAM_ADDRESS).toBe('SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf')
+    })
+
+    it('derives an account per index from one manager', async () => {
+      const wallet = new WalletManagerMultisigSolanaSquads(
+        'test walk nut penalty hip pave soap entry language right filter choice',
+        { provider: TEST_RPC_URL }
+      )
+
+      const [first, second] = await Promise.all([wallet.getAccount(0), wallet.getAccount(1)])
+
+      expect(await first.getSignerAddress()).not.toBe(await second.getSignerAddress())
+    })
+  })
+
+  describe('deploy', () => {
+    it('creates a multisig at the address derived from the create key', async () => {
+      const { accounts, signers } = await createWallet({ members: 1 })
+      const [account] = accounts
+
+      const derived = await account.getAddress()
+
+      expect(await account.isDeployed()).toBe(false)
+
+      await airdrop(rpc, signers[0], LAMPORTS_PER_SOL)
+
+      const { hash } = await account.deploy(signers, 1)
+
+      await confirmTransaction(rpc, hash)
+
+      expect(await account.getAddress()).toBe(derived)
+      expect(await account.isDeployed()).toBe(true)
+      expect(sorted(await account.getOwners())).toEqual(sorted(signers))
+      expect(await account.getThreshold()).toBe(1)
+      expect(await account.getNonce()).toBe(0n)
+    })
+
+    it('reports the same multisig from every member account', async () => {
+      const { accounts, multisigPda } = await deployMultisig({ members: 3, threshold: 2 })
+
+      const addresses = await Promise.all(accounts.map((account) => account.getAddress()))
+
+      expect(addresses).toEqual([multisigPda, multisigPda, multisigPda])
+    })
+
+    it('gives every owner full permissions and reports them', async () => {
+      const { accounts, signers } = await deployMultisig({ members: 2, threshold: 2 })
+
+      const info = await accounts[0].getMultisigInfo()
+
+      expect(sorted(info.owners)).toEqual(sorted(signers))
+      expect(info).toMatchObject({ masks: [7, 7], threshold: 2, isCreated: true })
+    })
+
+    it('holds funds in the vault rather than the multisig account', async () => {
+      const { accounts, multisigPda, vaultPda } = await deployMultisig({
+        members: 1,
+        threshold: 1,
+        fundVault: LAMPORTS_PER_SOL
+      })
+
+      expect(vaultPda).not.toBe(multisigPda)
+      expect(await accounts[0].getBalance()).toBe(LAMPORTS_PER_SOL)
+      expect(await solanaAccount(vaultPda).getBalance()).toBe(LAMPORTS_PER_SOL)
+    })
+
+    it('quotes a deploy that covers what the creator is actually debited', async () => {
+      const { accounts, signers } = await createWallet({ members: 1 })
+      const [account] = accounts
+
+      await airdrop(rpc, signers[0], LAMPORTS_PER_SOL)
+
+      const before = await solanaAccount(signers[0]).getBalance()
+      const { fee } = await account.quoteDeploy(1)
+
+      const { hash } = await account.deploy(signers, 1)
+
+      await confirmTransaction(rpc, hash)
+
+      const spent = before - (await solanaAccount(signers[0]).getBalance())
+
+      expect(fee).toBeGreaterThan(0n)
+      expect(spent).toBe(fee)
+    })
+
+    it('quotes more rent for a larger member set', async () => {
+      const { accounts } = await createWallet({ members: 1 })
+
+      const [one, five] = await Promise.all([
+        accounts[0].quoteDeploy(1),
+        accounts[0].quoteDeploy(5)
+      ])
+
+      expect(five.fee).toBeGreaterThan(one.fee)
+    })
+
+    it('refuses to deploy the same multisig twice', async () => {
+      const { accounts, signers } = await deployMultisig({ members: 1, threshold: 1 })
+
+      await expect(accounts[0].deploy(signers, 1)).rejects.toThrow(/already exists/)
+    })
+
+    it('refuses a threshold above the number of owners', async () => {
+      const { accounts, signers } = await createWallet({ members: 2 })
+
+      await expect(accounts[0].deploy(signers, 3)).rejects.toThrow()
+    })
+
+    it('refuses to deploy without a create key secret', async () => {
+      const { accounts, signers } = await createWallet({
+        members: 1,
+        config: { createKeySecret: undefined }
+      })
+
+      await expect(accounts[0].deploy(signers, 1)).rejects.toThrow(/createKeySecret/)
+    })
+
+    it('reads an existing multisig from its address alone', async () => {
+      const { multisigPda, signers } = await deployMultisig({ members: 2, threshold: 2 })
+
+      const { accounts } = await createWallet({
+        members: 1,
+        config: { multisigPda, createKeySecret: undefined }
+      })
+
+      expect(await accounts[0].getAddress()).toBe(multisigPda)
+      expect(await accounts[0].isDeployed()).toBe(true)
+      expect(sorted(await accounts[0].getOwners())).toEqual(sorted(signers))
+    })
+  })
+
+  describe('SOL transfers', () => {
+    const TRANSFER_AMOUNT = LAMPORTS_PER_SOL / 10n
+
+    it('moves SOL out of the vault through the full proposal lifecycle', async () => {
+      const multisig = await deployMultisig({
+        members: 2,
+        threshold: 2,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const { accounts, signers, vaultPda } = multisig
+      const recipient = (await generateKeyPairSigner()).address
+
+      const proposal = await accounts[0].sendTransaction({
+        to: recipient,
+        value: TRANSFER_AMOUNT
+      })
+
+      await confirmTransaction(rpc, proposal.hash)
+
+      expect(proposal).toMatchObject({
+        proposalId: '1',
+        confirmations: 0,
+        threshold: 2,
+        executed: false
+      })
+      expect(await accounts[0].getNonce()).toBe(1n)
+
+      const [created] = await accounts[0].getProposals([proposal.proposalId])
+
+      expect(created).toMatchObject({
+        proposalId: '1',
+        status: 'Active',
+        confirmations: 0,
+        approved: [],
+        rejected: []
+      })
+      expect(await accounts[0].isReadyToExecute(proposal.proposalId)).toBe(false)
+
+      const [first, second] = await approveWithAll(accounts, proposal.proposalId, rpc)
+
+      expect(first.confirmations).toBe(1)
+      expect(second.confirmations).toBe(2)
+      expect(second.executed).toBe(false)
+
+      const [approved] = await accounts[0].getProposals([proposal.proposalId])
+
+      expect(approved).toMatchObject({ status: 'Approved', confirmations: 2 })
+      expect(sorted(approved.approved)).toEqual(sorted(signers))
+      expect(await accounts[0].isReadyToExecute(proposal.proposalId)).toBe(true)
+
+      const vaultBefore = await solanaAccount(vaultPda).getBalance()
+      const execution = await accounts[1].executeTx(proposal.proposalId)
+
+      await confirmTransaction(rpc, execution.hash)
+
+      expect(await solanaAccount(recipient).getBalance()).toBe(TRANSFER_AMOUNT)
+      expect(await solanaAccount(vaultPda).getBalance()).toBe(vaultBefore - TRANSFER_AMOUNT)
+
+      const [executed] = await accounts[0].getProposals([proposal.proposalId])
+
+      expect(executed.status).toBe('Executed')
+      expect(await accounts[0].isReadyToExecute(proposal.proposalId)).toBe(false)
+    })
+
+    it('charges the executing member rather than the vault for the execution fee', async () => {
+      const { accounts, signers, vaultPda } = await deployMultisig({
+        members: 1,
+        threshold: 1,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const recipient = (await generateKeyPairSigner()).address
+
+      const proposal = await accounts[0].sendTransaction({ to: recipient, value: TRANSFER_AMOUNT })
+
+      await confirmTransaction(rpc, proposal.hash)
+      await approveWithAll(accounts, proposal.proposalId, rpc)
+
+      const signerBefore = await solanaAccount(signers[0]).getBalance()
+      const vaultBefore = await solanaAccount(vaultPda).getBalance()
+
+      const execution = await accounts[0].executeTx(proposal.proposalId)
+
+      await confirmTransaction(rpc, execution.hash)
+
+      expect(await solanaAccount(vaultPda).getBalance()).toBe(vaultBefore - TRANSFER_AMOUNT)
+      expect(await solanaAccount(signers[0]).getBalance()).toBe(signerBefore - execution.fee)
+    })
+
+    it('executes without a second round trip when autoExecute applies', async () => {
+      const { accounts, vaultPda } = await deployMultisig({
+        members: 1,
+        threshold: 1,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const recipient = (await generateKeyPairSigner()).address
+
+      const proposal = await accounts[0].sendTransaction(
+        { to: recipient, value: TRANSFER_AMOUNT },
+        { autoExecute: true }
+      )
+
+      await confirmTransaction(rpc, proposal.hash)
+
+      expect(proposal.executed).toBe(true)
+      expect(proposal.confirmations).toBe(1)
+      expect(await solanaAccount(recipient).getBalance()).toBe(TRANSFER_AMOUNT)
+      expect(await solanaAccount(vaultPda).getBalance()).toBe(LAMPORTS_PER_SOL - TRANSFER_AMOUNT)
+
+      const [executed] = await accounts[0].getProposals([proposal.proposalId])
+
+      expect(executed.status).toBe('Executed')
+    })
+
+    it('ignores autoExecute when the threshold cannot be met by the proposer alone', async () => {
+      const { accounts } = await deployMultisig({
+        members: 2,
+        threshold: 2,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const recipient = (await generateKeyPairSigner()).address
+
+      const proposal = await accounts[0].sendTransaction(
+        { to: recipient, value: TRANSFER_AMOUNT },
+        { autoExecute: true }
+      )
+
+      await confirmTransaction(rpc, proposal.hash)
+
+      expect(proposal.executed).toBe(false)
+      expect(await solanaAccount(recipient).getBalance()).toBe(0n)
+
+      const [pending] = await accounts[0].getProposals([proposal.proposalId])
+
+      expect(pending.status).toBe('Active')
+    })
+
+    it('numbers proposals by the multisig transaction index', async () => {
+      const { accounts } = await deployMultisig({
+        members: 1,
+        threshold: 1,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const recipient = (await generateKeyPairSigner()).address
+
+      const first = await accounts[0].sendTransaction({ to: recipient, value: TRANSFER_AMOUNT })
+
+      await confirmTransaction(rpc, first.hash)
+
+      const second = await accounts[0].sendTransaction({ to: recipient, value: TRANSFER_AMOUNT })
+
+      await confirmTransaction(rpc, second.hash)
+
+      expect(first.proposalId).toBe('1')
+      expect(second.proposalId).toBe('2')
+      expect(await accounts[0].getNonce()).toBe(2n)
+
+      const proposals = await accounts[0].getProposals(['1', '2', '3'])
+
+      expect(proposals[0].status).toBe('Active')
+      expect(proposals[1].status).toBe('Active')
+      expect(proposals[2]).toBeNull()
+    })
+
+    it('quotes a transfer proposal before it is created', async () => {
+      const { accounts } = await deployMultisig({ members: 2, threshold: 2 })
+      const recipient = (await generateKeyPairSigner()).address
+
+      const { fee } = await accounts[0].quoteSendTransaction({
+        to: recipient,
+        value: TRANSFER_AMOUNT
+      })
+
+      expect(fee).toBeGreaterThan(0n)
+    })
+
+    it('fails execution when the vault cannot cover the transfer', async () => {
+      const { accounts } = await deployMultisig({ members: 1, threshold: 1 })
+      const recipient = (await generateKeyPairSigner()).address
+
+      const proposal = await accounts[0].sendTransaction({ to: recipient, value: TRANSFER_AMOUNT })
+
+      await confirmTransaction(rpc, proposal.hash)
+      await approveWithAll(accounts, proposal.proposalId, rpc)
+
+      // Preflight rejects it at send time, and a node without preflight would reject it at
+      // confirmation — either way the proposal stays approved and nothing leaves the vault.
+      await expect(
+        accounts[0].executeTx(proposal.proposalId).then((result) => confirmTransaction(rpc, result.hash))
+      ).rejects.toThrow()
+
+      expect(await solanaAccount(recipient).getBalance()).toBe(0n)
+
+      const [stillApproved] = await accounts[0].getProposals([proposal.proposalId])
+
+      expect(stillApproved.status).toBe('Approved')
+    })
+  })
+
+  describe('SPL token transfers', () => {
+    const MINT_AMOUNT = 1_000_000n
+    const TRANSFER_AMOUNT = 250_000n
+
+    let testToken
+
+    beforeAll(async () => {
+      testToken = await deployTestToken(rpc)
+    })
+
+    it('reads a vault token balance from its associated token account', async () => {
+      const { accounts, vaultPda } = await deployMultisig({ members: 1, threshold: 1 })
+
+      expect(await accounts[0].getTokenBalance(testToken.mint)).toBe(0n)
+
+      await sendTestTokensTo(rpc, testToken, vaultPda, MINT_AMOUNT)
+
+      expect(await accounts[0].getTokenBalance(testToken.mint)).toBe(MINT_AMOUNT)
+    })
+
+    it('transfers tokens out of the vault through the full proposal lifecycle', async () => {
+      const { accounts, vaultPda } = await deployMultisig({
+        members: 2,
+        threshold: 2,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const recipient = (await generateKeyPairSigner()).address
+
+      await sendTestTokensTo(rpc, testToken, vaultPda, MINT_AMOUNT)
+
+      const proposal = await accounts[0].transfer({
+        token: testToken.mint,
+        recipient,
+        amount: TRANSFER_AMOUNT
+      })
+
+      await confirmTransaction(rpc, proposal.hash)
+
+      expect(proposal).toMatchObject({ proposalId: '1', confirmations: 0, executed: false })
+
+      await approveWithAll(accounts, proposal.proposalId, rpc)
+
+      expect(await accounts[0].isReadyToExecute(proposal.proposalId)).toBe(true)
+
+      const execution = await accounts[1].executeTx(proposal.proposalId)
+
+      await confirmTransaction(rpc, execution.hash)
+
+      expect(await accounts[0].getTokenBalance(testToken.mint)).toBe(MINT_AMOUNT - TRANSFER_AMOUNT)
+      expect(await solanaAccount(recipient).getTokenBalance(testToken.mint)).toBe(TRANSFER_AMOUNT)
+    })
+
+    it('creates the recipient token account at execution, paid by the vault', async () => {
+      const { accounts, vaultPda } = await deployMultisig({
+        members: 1,
+        threshold: 1,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const recipient = (await generateKeyPairSigner()).address
+
+      await sendTestTokensTo(rpc, testToken, vaultPda, MINT_AMOUNT)
+
+      expect(await solanaAccount(recipient).getTokenBalance(testToken.mint)).toBe(0n)
+
+      const proposal = await accounts[0].transfer(
+        { token: testToken.mint, recipient, amount: TRANSFER_AMOUNT },
+        { autoExecute: true }
+      )
+
+      await confirmTransaction(rpc, proposal.hash)
+
+      expect(proposal.executed).toBe(true)
+      expect(await solanaAccount(recipient).getTokenBalance(testToken.mint)).toBe(TRANSFER_AMOUNT)
+    })
+
+    it('quotes a token transfer', async () => {
+      const { accounts } = await deployMultisig({ members: 2, threshold: 2 })
+      const recipient = (await generateKeyPairSigner()).address
+
+      const { fee } = await accounts[0].quoteTransfer({
+        token: testToken.mint,
+        recipient,
+        amount: TRANSFER_AMOUNT
+      })
+
+      expect(fee).toBeGreaterThan(0n)
+    })
+
+    it('refuses to propose a transfer of a mint that does not exist', async () => {
+      const { accounts } = await deployMultisig({ members: 1, threshold: 1 })
+      const missing = (await generateKeyPairSigner()).address
+      const recipient = (await generateKeyPairSigner()).address
+
+      await expect(
+        accounts[0].transfer({ token: missing, recipient, amount: TRANSFER_AMOUNT })
+      ).rejects.toThrow(/does not exist/)
+    })
+  })
+
+  describe('voting', () => {
+    const TRANSFER_AMOUNT = LAMPORTS_PER_SOL / 100n
+
+    async function propose (multisig, proposer = 0) {
+      const recipient = (await generateKeyPairSigner()).address
+      const proposal = await multisig.accounts[proposer].sendTransaction({
+        to: recipient,
+        value: TRANSFER_AMOUNT
+      })
+
+      await confirmTransaction(multisig.rpc, proposal.hash)
+
+      return { ...proposal, recipient }
+    }
+
+    it('counts approvals and lists the members who cast them', async () => {
+      const multisig = await deployMultisig({
+        members: 3,
+        threshold: 2,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const { accounts, signers } = multisig
+      const proposal = await propose(multisig)
+
+      const first = await accounts[0].approveTx(proposal.proposalId)
+
+      await confirmTransaction(rpc, first.hash)
+
+      const [afterOne] = await accounts[0].getProposals([proposal.proposalId])
+
+      expect(afterOne).toMatchObject({
+        status: 'Active',
+        confirmations: 1,
+        approved: [signers[0]]
+      })
+
+      const second = await accounts[1].approveTx(proposal.proposalId)
+
+      await confirmTransaction(rpc, second.hash)
+
+      const [afterTwo] = await accounts[0].getProposals([proposal.proposalId])
+
+      expect(afterTwo).toMatchObject({ status: 'Approved', confirmations: 2 })
+      expect(sorted(afterTwo.approved)).toEqual(sorted([signers[0], signers[1]]))
+    })
+
+    it('records a rejection and ends the proposal once approval is unreachable', async () => {
+      const multisig = await deployMultisig({
+        members: 2,
+        threshold: 2,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const { accounts, signers } = multisig
+      const proposal = await propose(multisig)
+
+      const rejection = await accounts[1].rejectTx(proposal.proposalId)
+
+      await confirmTransaction(rpc, rejection.hash)
+
+      expect(rejection.confirmations).toBe(0)
+
+      const [rejected] = await accounts[0].getProposals([proposal.proposalId])
+
+      expect(rejected).toMatchObject({ status: 'Rejected', rejected: [signers[1]] })
+      expect(await accounts[0].isReadyToExecute(proposal.proposalId)).toBe(false)
+      await expect(accounts[0].executeTx(proposal.proposalId)).rejects.toThrow(/rejected/)
+    })
+
+    it('lets a member replace an approval with a rejection', async () => {
+      const multisig = await deployMultisig({
+        members: 3,
+        threshold: 3,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const { accounts, signers } = multisig
+      const proposal = await propose(multisig)
+
+      const approval = await accounts[0].approveTx(proposal.proposalId)
+
+      await confirmTransaction(rpc, approval.hash)
+
+      const rejection = await accounts[0].rejectTx(proposal.proposalId)
+
+      await confirmTransaction(rpc, rejection.hash)
+
+      // The rejection withdraws the approval, so the count goes down rather than up.
+      expect(rejection.confirmations).toBe(0)
+
+      const [voted] = await accounts[0].getProposals([proposal.proposalId])
+
+      expect(voted.approved).toEqual([])
+      expect(voted.rejected).toEqual([signers[0]])
+    })
+
+    it('records a memo alongside a vote', async () => {
+      const multisig = await deployMultisig({
+        members: 2,
+        threshold: 2,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const { accounts } = multisig
+      const proposal = await propose(multisig)
+
+      const approval = await accounts[0].approveTx(proposal.proposalId, 'looks good')
+
+      await confirmTransaction(rpc, approval.hash)
+
+      const [voted] = await accounts[0].getProposals([proposal.proposalId])
+
+      expect(voted.confirmations).toBe(1)
+    })
+
+    it('refuses a second approval from the same member', async () => {
+      const multisig = await deployMultisig({
+        members: 2,
+        threshold: 2,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const { accounts } = multisig
+      const proposal = await propose(multisig)
+
+      const approval = await accounts[0].approveTx(proposal.proposalId)
+
+      await confirmTransaction(rpc, approval.hash)
+
+      await expect(accounts[0].approveTx(proposal.proposalId)).rejects.toThrow(/already approved/)
+    })
+
+    it('refuses a vote from a non-member', async () => {
+      const multisig = await deployMultisig({
+        members: 1,
+        threshold: 1,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const proposal = await propose(multisig)
+
+      // Account 1 shares the create key, so it addresses the same multisig, but its signer
+      // was never made a member.
+      const outsider = await multisig.manager.getAccount(1)
+
+      await expect(outsider.approveTx(proposal.proposalId)).rejects.toThrow()
+      await expect(outsider.sendTransaction({ to: proposal.recipient, value: 1n })).rejects.toThrow()
+    })
+
+    it('refuses to execute a proposal that has not been approved', async () => {
+      const multisig = await deployMultisig({
+        members: 2,
+        threshold: 2,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const { accounts } = multisig
+      const proposal = await propose(multisig)
+
+      await expect(accounts[0].executeTx(proposal.proposalId)).rejects.toThrow(/open for voting/)
+    })
+
+    it('refuses to execute a proposal twice', async () => {
+      const multisig = await deployMultisig({
+        members: 1,
+        threshold: 1,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const { accounts } = multisig
+      const proposal = await propose(multisig)
+
+      await approveWithAll(accounts, proposal.proposalId, rpc)
+
+      const execution = await accounts[0].executeTx(proposal.proposalId)
+
+      await confirmTransaction(rpc, execution.hash)
+
+      await expect(accounts[0].executeTx(proposal.proposalId)).rejects.toThrow(/executed/)
+    })
+
+    it('reports nothing for a proposal id that was never used', async () => {
+      const { accounts } = await deployMultisig({ members: 1, threshold: 1 })
+
+      expect(await accounts[0].getProposals([99])).toEqual([null])
+      expect(await accounts[0].isReadyToExecute(99)).toBe(false)
+      await expect(accounts[0].executeTx(99)).rejects.toThrow(/no proposal/)
+    })
+  })
+
+  describe('configuration changes', () => {
+    async function settle (multisig, proposalId, voters = multisig.accounts) {
+      await approveWithAll(voters, proposalId, multisig.rpc)
+
+      const execution = await voters[0].executeTx(proposalId)
+
+      await confirmTransaction(multisig.rpc, execution.hash)
+
+      return execution
+    }
+
+    it('adds an owner once the proposal is approved and executed', async () => {
+      const multisig = await deployMultisig({ members: 1, threshold: 1 })
+      const { accounts, signers } = multisig
+      const newOwner = (await generateKeyPairSigner()).address
+
+      const proposal = await accounts[0].addOwner(newOwner)
+
+      await confirmTransaction(rpc, proposal.hash)
+
+      // Proposing is not applying: the member set is unchanged until execution.
+      expect(sorted(await accounts[0].getOwners())).toEqual(sorted(signers))
+
+      await settle(multisig, proposal.proposalId)
+
+      const info = await accounts[0].getMultisigInfo()
+
+      expect(sorted(info.owners)).toEqual(sorted([...signers, newOwner]))
+      expect(info.masks).toEqual([7, 7])
+      expect(info.threshold).toBe(1)
+    })
+
+    it('adds an owner and raises the threshold in one proposal', async () => {
+      const multisig = await deployMultisig({ members: 1, threshold: 1 })
+      const { accounts, signers } = multisig
+      const newOwner = (await generateKeyPairSigner()).address
+
+      const proposal = await accounts[0].addOwner(newOwner, { threshold: 2 })
+
+      await confirmTransaction(rpc, proposal.hash)
+      await settle(multisig, proposal.proposalId)
+
+      const info = await accounts[0].getMultisigInfo()
+
+      expect(sorted(info.owners)).toEqual(sorted([...signers, newOwner]))
+      expect(info.threshold).toBe(2)
+    })
+
+    it('removes an owner and lowers the threshold in one proposal', async () => {
+      const multisig = await deployMultisig({ members: 3, threshold: 3 })
+      const { accounts, signers } = multisig
+
+      const proposal = await accounts[0].removeOwner(signers[2], { threshold: 2 })
+
+      await confirmTransaction(rpc, proposal.hash)
+      await settle(multisig, proposal.proposalId)
+
+      const info = await accounts[0].getMultisigInfo()
+
+      expect(sorted(info.owners)).toEqual(sorted([signers[0], signers[1]]))
+      expect(info.threshold).toBe(2)
+    })
+
+    it('swaps one owner for another atomically', async () => {
+      const multisig = await deployMultisig({ members: 2, threshold: 2 })
+      const { accounts, signers } = multisig
+      const newOwner = (await generateKeyPairSigner()).address
+
+      const proposal = await accounts[0].swapOwner(signers[1], newOwner)
+
+      await confirmTransaction(rpc, proposal.hash)
+      await settle(multisig, proposal.proposalId)
+
+      const info = await accounts[0].getMultisigInfo()
+
+      expect(info.owners).toContain(signers[0])
+      expect(info.owners).toContain(newOwner)
+      expect(info.owners).not.toContain(signers[1])
+      expect(info.threshold).toBe(2)
+    })
+
+    it('changes the threshold', async () => {
+      const multisig = await deployMultisig({ members: 3, threshold: 3 })
+      const { accounts } = multisig
+
+      const proposal = await accounts[0].changeThreshold(2)
+
+      await confirmTransaction(rpc, proposal.hash)
+      await settle(multisig, proposal.proposalId)
+
+      expect(await accounts[0].getThreshold()).toBe(2)
+    })
+
+    it('executes a config proposal through executeTx without a kind hint', async () => {
+      const multisig = await deployMultisig({ members: 1, threshold: 1 })
+      const { accounts } = multisig
+      const recipient = (await generateKeyPairSigner()).address
+      const newOwner = (await generateKeyPairSigner()).address
+
+      // A vault proposal and a config proposal share one index space, so executeTx has to
+      // discriminate them from the account data alone.
+      const vault = await accounts[0].sendTransaction({ to: recipient, value: 1n })
+
+      await confirmTransaction(rpc, vault.hash)
+
+      const config = await accounts[0].addOwner(newOwner)
+
+      await confirmTransaction(rpc, config.hash)
+
+      expect(config.proposalId).toBe('2')
+
+      await settle(multisig, config.proposalId)
+
+      const [executed] = await accounts[0].getProposals([config.proposalId])
+
+      expect(executed.status).toBe('Executed')
+    })
+
+    it('invalidates pending proposals when a config change executes', async () => {
+      const multisig = await deployMultisig({
+        members: 2,
+        threshold: 2,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const { accounts } = multisig
+      const recipient = (await generateKeyPairSigner()).address
+
+      const pending = await accounts[0].sendTransaction({ to: recipient, value: 1n })
+
+      await confirmTransaction(rpc, pending.hash)
+
+      const config = await accounts[0].changeThreshold(1)
+
+      await confirmTransaction(rpc, config.hash)
+      await settle(multisig, config.proposalId)
+
+      // The executed config change bumped staleTransactionIndex past the pending proposal,
+      // so it can no longer collect votes.
+      await expect(accounts[0].approveTx(pending.proposalId)).rejects.toThrow()
+
+      const [stale] = await accounts[0].getProposals([pending.proposalId])
+
+      expect(stale.status).toBe('Active')
+      expect(await accounts[0].isReadyToExecute(pending.proposalId)).toBe(false)
+    })
+
+    it('refuses to add an owner that is already a member', async () => {
+      const { accounts, signers } = await deployMultisig({ members: 2, threshold: 2 })
+
+      await expect(accounts[0].addOwner(signers[1])).rejects.toThrow()
+    })
+
+    it('refuses to remove an owner that is not a member', async () => {
+      const { accounts } = await deployMultisig({ members: 2, threshold: 2 })
+      const outsider = (await generateKeyPairSigner()).address
+
+      await expect(accounts[0].removeOwner(outsider)).rejects.toThrow()
+    })
+
+    it('refuses a threshold the remaining voters could never reach', async () => {
+      const { accounts, signers } = await deployMultisig({ members: 2, threshold: 2 })
+
+      await expect(accounts[0].changeThreshold(3)).rejects.toThrow()
+      await expect(accounts[0].removeOwner(signers[1])).rejects.toThrow()
+    })
+
+    it('refuses a config change on a multisig that does not exist', async () => {
+      const { accounts } = await createWallet({ members: 1 })
+      const outsider = (await generateKeyPairSigner()).address
+
+      expect(await accounts[0].isDeployed()).toBe(false)
+      await expect(accounts[0].addOwner(outsider)).rejects.toThrow(/does not exist/)
+      await expect(accounts[0].changeThreshold(1)).rejects.toThrow(/does not exist/)
+    })
+  })
+
+  describe('account surface', () => {
+    it('validates that the signer is an owner', async () => {
+      const { accounts, manager } = await deployMultisig({ members: 1, threshold: 1 })
+
+      await expect(accounts[0].validateSignerIsOwner()).resolves.toBeUndefined()
+
+      const outsider = await manager.getAccount(1)
+
+      await expect(outsider.validateSignerIsOwner()).rejects.toThrow(/not a member/)
+    })
+
+    it('signs a message with the member key rather than the multisig', async () => {
+      const { accounts, signers, multisigPda } = await deployMultisig({ members: 1, threshold: 1 })
+
+      const signature = await accounts[0].sign('hello')
+
+      expect(typeof signature).toBe('string')
+      expect(signers[0]).not.toBe(multisigPda)
+    })
+
+    it('refuses the message-proposal surface Squads has no primitive for', async () => {
+      const { accounts } = await deployMultisig({ members: 1, threshold: 1 })
+      const [account] = accounts
+
+      await expect(account.proposeMessage('hello')).rejects.toThrow(NotSupportedError)
+      await expect(account.approveMessage('0x00')).rejects.toThrow(NotSupportedError)
+      await expect(account.getMessages(['0x00'])).rejects.toThrow(NotSupportedError)
+      await expect(account.verify('hello', '0x00')).rejects.toThrow(NotSupportedError)
+    })
+
+    it('returns a receipt for a confirmed transaction and null for an unknown one', async () => {
+      const { accounts, deployHash } = await deployMultisig({ members: 1, threshold: 1 })
+
+      const receipt = await accounts[0].getTransactionReceipt(deployHash)
+
+      expect(receipt).not.toBeNull()
+      expect(receipt.meta.err).toBeNull()
+
+      const unknown = '5'.repeat(87)
+
+      expect(await accounts[0].getTransactionReceipt(unknown)).toBeNull()
+      await expect(accounts[0].getTransactionReceipt('not-a-signature')).rejects.toThrow(
+        /Invalid transaction signature/
+      )
+    })
+
+    it('exposes a read-only view that reads the same state without signing', async () => {
+      const multisig = await deployMultisig({
+        members: 2,
+        threshold: 2,
+        fundVault: LAMPORTS_PER_SOL
+      })
+      const { accounts, signers, multisigPda, vaultPda } = multisig
+      const recipient = (await generateKeyPairSigner()).address
+
+      const proposal = await accounts[0].sendTransaction({ to: recipient, value: 1n })
+
+      await confirmTransaction(rpc, proposal.hash)
+      await approveWithAll(accounts, proposal.proposalId, rpc)
+
+      const readOnly = accounts[0].toReadOnlyAccount()
+
+      expect(readOnly).toBeInstanceOf(WalletAccountReadOnlyMultisigSolanaSquads)
+      expect(await readOnly.getAddress()).toBe(multisigPda)
+      expect(await readOnly.getVaultAddress()).toBe(vaultPda)
+      expect(sorted(await readOnly.getOwners())).toEqual(sorted(signers))
+      expect(await readOnly.getThreshold()).toBe(2)
+      expect(await readOnly.getBalance()).toBe(LAMPORTS_PER_SOL)
+      expect(await readOnly.isReadyToExecute(proposal.proposalId)).toBe(true)
+
+      const [seen] = await readOnly.getProposals([proposal.proposalId])
+
+      expect(seen.status).toBe('Approved')
+    })
+
+    it('reports an undeployed multisig without throwing', async () => {
+      const { accounts } = await createWallet({ members: 1 })
+      const [account] = accounts
+
+      expect(await account.isDeployed()).toBe(false)
+      expect(await account.getMultisigInfo()).toMatchObject({
+        owners: [],
+        threshold: 0,
+        isCreated: false
+      })
+      expect(await account.getBalance()).toBe(0n)
+
+      await expect(account.getOwners()).rejects.toThrow(/does not exist/)
+      await expect(account.getThreshold()).rejects.toThrow(/does not exist/)
+      await expect(account.getNonce()).rejects.toThrow(/does not exist/)
+    })
+
+    it('derives distinct vaults per index and rejects one out of range', async () => {
+      const { accounts } = await deployMultisig({ members: 1, threshold: 1 })
+      const [account] = accounts
+
+      const [zero, one] = await Promise.all([
+        account.getVaultAddress(0),
+        account.getVaultAddress(1)
+      ])
+
+      expect(zero).not.toBe(one)
+      await expect(account.getVaultAddress(256)).rejects.toThrow(/Invalid vault index/)
+    })
+
+    it('refuses to read a multisig with no address configured', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, { provider: TEST_RPC_URL })
+
+      await expect(account.getAddress()).rejects.toThrow(/No multisig address is configured/)
+    })
   })
 })
