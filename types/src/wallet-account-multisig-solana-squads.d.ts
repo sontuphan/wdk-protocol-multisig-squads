@@ -21,6 +21,24 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     protected _signerAccount: WalletAccountSolana;
     /**
+     * The derivation path's index of this account.
+     *
+     * @type {number}
+     */
+    get index(): number;
+    /**
+     * The derivation path of this account (see [SLIP-0010](https://slips.readthedocs.io/en/latest/slip-0010/)).
+     *
+     * @type {string}
+     */
+    get path(): string;
+    /**
+     * The key pair of the signer account.
+     *
+     * @type {import('@tetherto/wdk-wallet').KeyPair}
+     */
+    get keyPair(): import("@tetherto/wdk-wallet").KeyPair;
+    /**
      * Signs a message with the signer account.
      *
      * @param {string | Uint8Array} message - The message to sign.

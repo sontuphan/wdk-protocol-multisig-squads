@@ -16,9 +16,23 @@
 
 import WalletManager from '@tetherto/wdk-wallet'
 
+import FailoverProvider from '@tetherto/wdk-failover-provider'
+
+import { createSolanaRpc } from '@solana/rpc'
+
 import WalletAccountMultisigSolanaSquads from './wallet-account-multisig-solana-squads.js'
 
+/** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
+
+/** @typedef {import('@tetherto/wdk-wallet').FeeRates} FeeRates */
+
 /** @typedef {import('./wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsConfig} SolanaMultisigSquadsConfig */
+
+const FEE_RATE_NORMAL_MULTIPLIER = 110n
+
+const FEE_RATE_FAST_MULTIPLIER = 200n
+
+const DEFAULT_BASE_FEE = 5_000n
 
 /**
  * Wallet manager for Solana Squads multisig wallets.
@@ -28,9 +42,9 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
    * Creates a new wallet manager for Solana Squads multisig wallets.
    *
    * @param {string | Uint8Array} seed - The wallet's [BIP-39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki) seed phrase.
-   * @param {SolanaMultisigSquadsConfig} config - The configuration object.
+   * @param {SolanaMultisigSquadsConfig} [config] - The configuration object.
    */
-  constructor (seed, config) {
+  constructor (seed, config = {}) {
     super(seed, config)
 
     /**
@@ -40,6 +54,20 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
      * @type {SolanaMultisigSquadsConfig}
      */
     this._config = config
+
+    const { provider, retries = 3 } = config
+
+    /**
+     * A Solana RPC client for HTTP requests.
+     *
+     * @protected
+     * @type {SolanaRpc | undefined}
+     */
+    this._rpc = Array.isArray(provider)
+      ? this._createFailoverRpc(provider, retries)
+      : provider
+        ? createSolanaRpc(provider)
+        : undefined
   }
 
   /**
@@ -70,5 +98,44 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
     }
 
     return this._accounts[path]
+  }
+
+  /**
+   * Returns the current fee rates.
+   *
+   * @returns {Promise<FeeRates>} The fee rates (in lamports).
+   * @throws {Error} If no provider is configured or the RPC request fails.
+   */
+  async getFeeRates () {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to get fee rates.')
+    }
+
+    const fees = await this._rpc.getRecentPrioritizationFees().send()
+
+    const nonZeroFees = fees
+      .filter((fee) => fee.prioritizationFee > 0)
+      .map((fee) => BigInt(fee.prioritizationFee))
+
+    const fee =
+      nonZeroFees.length > 0
+        ? nonZeroFees.reduce((max, fee) => (fee > max ? fee : max), 0n)
+        : DEFAULT_BASE_FEE
+
+    return {
+      normal: (fee * FEE_RATE_NORMAL_MULTIPLIER) / 100n,
+      fast: (fee * FEE_RATE_FAST_MULTIPLIER) / 100n
+    }
+  }
+
+  /** @private */
+  _createFailoverRpc (urls, retries) {
+    const failoverProvider = new FailoverProvider({ retries })
+
+    for (const url of urls) {
+      failoverProvider.addProvider(createSolanaRpc(url))
+    }
+
+    return failoverProvider.initialize()
   }
 }

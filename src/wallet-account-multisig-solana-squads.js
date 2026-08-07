@@ -159,6 +159,33 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /**
+   * The derivation path's index of this account.
+   *
+   * @type {number}
+   */
+  get index () {
+    return this._signerAccount.index
+  }
+
+  /**
+   * The derivation path of this account (see [SLIP-0010](https://slips.readthedocs.io/en/latest/slip-0010/)).
+   *
+   * @type {string}
+   */
+  get path () {
+    return this._signerAccount.path
+  }
+
+  /**
+   * The key pair of the signer account.
+   *
+   * @type {import('@tetherto/wdk-wallet').KeyPair}
+   */
+  get keyPair () {
+    return this._signerAccount.keyPair
+  }
+
+  /**
    * Returns the address of the Squads multisig account.
    *
    * Resolves the create key from `createKeySecret` when no `multisigPda` or `createKey`
