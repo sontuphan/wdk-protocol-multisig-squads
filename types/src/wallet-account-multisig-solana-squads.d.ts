@@ -54,18 +54,34 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /**
      * Signs a message with the signer account.
      *
-     * @param {string | Uint8Array} message - The message to sign.
+     * @param {string} message - The message to sign.
      * @returns {Promise<string>} The signature.
      */
-    sign(message: string | Uint8Array): Promise<string>;
+    sign(message: string): Promise<string>;
+    /**
+     * Signs a transaction with the signer account. Not supported by Squads.
+     *
+     * @param {SolanaTransaction} tx - The transaction to sign.
+     * @returns {Promise<SolanaTransaction>} The signed transaction.
+     * @throws {NotSupportedError} Always, since a multisig cannot sign a transaction itself.
+     */
+    signTransaction(tx: SolanaTransaction): Promise<SolanaTransaction>;
+    /**
+     * Sends a transaction from the multisig. Not supported by Squads.
+     *
+     * @param {SolanaTransaction} tx - The transaction to send.
+     * @returns {Promise<TransactionResult>} The transaction's result.
+     * @throws {NotSupportedError} Always, since a multisig does not submit transactions itself.
+     */
+    sendTransaction(tx: SolanaTransaction): Promise<TransactionResult>;
     /**
      * Proposes a message to be signed by the multisig members. Not supported by Squads.
      *
-     * @param {string | Uint8Array} message - The message to propose.
+     * @param {string} message - The message to propose.
      * @returns {Promise<MultisigMessageProposal & MultisigSignature>} The message proposal.
      * @throws {NotSupportedError} Always, since Squads has no message-signing primitive.
      */
-    proposeMessage(message: string | Uint8Array): Promise<MultisigMessageProposal & MultisigSignature>;
+    proposeMessage(message: string): Promise<MultisigMessageProposal & MultisigSignature>;
     /**
      * Approves a pending message proposal. Not supported by Squads.
      *
@@ -205,9 +221,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /**
      * Returns a read-only copy of the account.
      *
-     * @returns {WalletAccountReadOnlyMultisigSolanaSquads} The read-only account.
+     * @returns {Promise<WalletAccountReadOnlyMultisigSolanaSquads>} The read-only account.
      */
-    toReadOnlyAccount(): WalletAccountReadOnlyMultisigSolanaSquads;
+    toReadOnlyAccount(): Promise<WalletAccountReadOnlyMultisigSolanaSquads>;
     /**
      * Disposes the wallet account, erasing the private key from the memory.
      *

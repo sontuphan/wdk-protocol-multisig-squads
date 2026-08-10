@@ -1016,7 +1016,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       await confirmTransaction(rpc, proposal.hash)
       await approveWithAll(accounts, proposal.proposalId, rpc)
 
-      const readOnly = accounts[0].toReadOnlyAccount()
+      const readOnly = await accounts[0].toReadOnlyAccount()
 
       expect(readOnly).toBeInstanceOf(WalletAccountReadOnlyMultisigSolanaSquads)
       expect(await readOnly.getAddress()).toBe(multisigPda)

@@ -388,8 +388,8 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     expect(signerAddress.length).toBeGreaterThan(0)
   })
 
-  it('returns a read-only view', () => {
-    const readOnly = account.toReadOnlyAccount()
+  it('returns a read-only view', async () => {
+    const readOnly = await account.toReadOnlyAccount()
 
     expect(readOnly).toBeInstanceOf(WalletAccountReadOnlyMultisigSolanaSquads)
   })

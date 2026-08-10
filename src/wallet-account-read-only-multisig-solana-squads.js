@@ -60,7 +60,9 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
  * supply `createKeySecret`, which the create key is derived from.
  *
  * @typedef {Object} SolanaMultisigSquadsReadOnlyConfig
- * @property {string | string[]} provider - A Solana RPC URL, or a list of URLs for failover.
+ * @property {string | string[]} [provider] - A Solana RPC URL, or a list of URLs for
+ *   failover. Omit it to derive addresses without reaching the cluster; every method that
+ *   needs the cluster then throws.
  * @property {Commitment} [commitment] - The commitment level for transactions (default: 'confirmed').
  * @property {number} [retries] - The number of retries for the failover provider (default: 3).
  * @property {string} [programId] - The Squads program to operate against, for a fork or a
@@ -329,10 +331,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     super(signerAddress)
 
     /**
-     * The multisig Squads configuration.
+     * The multisig Squads configuration. It carries the signing fields too when a signing
+     * account owns it, or when one derived this account through `_withConfig`.
      *
      * @protected
-     * @type {SolanaMultisigSquadsReadOnlyConfig}
+     * @type {SolanaMultisigSquadsConfig}
      */
     this._config = config
 
@@ -685,8 +688,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   /**
    * Verifies a message's signature. Not supported by Squads.
    *
-   * @param {string | Uint8Array} message - The signed message.
-   * @param {string | Uint8Array} signature - The signature to verify.
+   * @param {string} message - The signed message.
+   * @param {string} signature - The signature to verify.
    * @returns {Promise<boolean>} Whether the signature is valid.
    * @throws {NotSupportedError} Always, since a multisig address has no private key.
    */

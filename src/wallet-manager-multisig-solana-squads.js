@@ -22,6 +22,8 @@ import { createSolanaRpc } from '@solana/rpc'
 
 import WalletAccountMultisigSolanaSquads from './wallet-account-multisig-solana-squads.js'
 
+import { NotSupportedError } from './errors.js'
+
 /** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
 
 /** @typedef {import('@tetherto/wdk-wallet').FeeRates} FeeRates */
@@ -88,11 +90,20 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
    * @example
    * // Returns the account with derivation path m/44'/501'/1'/0'
    * const account = await wallet.getAccount(1);
-   * @param {number} [index] - The index of the account to get (default: 0).
+   * @param {number | string} [indexOrSignerName] - The index of the account to get
+   *   (default: 0). A registered signer name is not supported.
    * @returns {Promise<WalletAccountMultisigSolanaSquads>} The account.
+   * @throws {NotSupportedError} If a signer name is given.
    */
-  async getAccount (index = 0) {
-    return await this.getAccountByPath(`${index}'/0'`)
+  async getAccount (indexOrSignerName = 0) {
+    if (typeof indexOrSignerName === 'string') {
+      throw new NotSupportedError(
+        'getAccount(signerName)',
+        'this wallet derives every account from its own seed and keeps no signer registry, so there is no account to return for a signer name. Use getAccount(index) or getAccountByPath(path).'
+      )
+    }
+
+    return await this.getAccountByPath(`${indexOrSignerName}'/0'`)
   }
 
   /**

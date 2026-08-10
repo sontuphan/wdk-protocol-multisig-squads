@@ -27,7 +27,9 @@
  * supply `createKeySecret`, which the create key is derived from.
  *
  * @typedef {Object} SolanaMultisigSquadsReadOnlyConfig
- * @property {string | string[]} provider - A Solana RPC URL, or a list of URLs for failover.
+ * @property {string | string[]} [provider] - A Solana RPC URL, or a list of URLs for
+ *   failover. Omit it to derive addresses without reaching the cluster; every method that
+ *   needs the cluster then throws.
  * @property {Commitment} [commitment] - The commitment level for transactions (default: 'confirmed').
  * @property {number} [retries] - The number of retries for the failover provider (default: 3).
  * @property {string} [programId] - The Squads program to operate against, for a fork or a
@@ -171,12 +173,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     constructor(signerAddress: string | undefined, config: SolanaMultisigSquadsReadOnlyConfig);
     /**
-     * The multisig Squads configuration.
+     * The multisig Squads configuration. It carries the signing fields too when a signing
+     * account owns it, or when one derived this account through `_withConfig`.
      *
      * @protected
-     * @type {SolanaMultisigSquadsReadOnlyConfig}
+     * @type {SolanaMultisigSquadsConfig}
      */
-    protected _config: SolanaMultisigSquadsReadOnlyConfig;
+    protected _config: SolanaMultisigSquadsConfig;
     /**
      * The signer's address.
      *
@@ -302,12 +305,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Verifies a message's signature. Not supported by Squads.
      *
-     * @param {string | Uint8Array} message - The signed message.
-     * @param {string | Uint8Array} signature - The signature to verify.
+     * @param {string} message - The signed message.
+     * @param {string} signature - The signature to verify.
      * @returns {Promise<boolean>} Whether the signature is valid.
      * @throws {NotSupportedError} Always, since a multisig address has no private key.
      */
-    verify(message: string | Uint8Array, signature: string | Uint8Array): Promise<boolean>;
+    verify(message: string, signature: string): Promise<boolean>;
     /**
      * Returns the proposals at the given ids, keyed by id in canonical decimal form.
      *
@@ -546,9 +549,11 @@ export type SolanaTransactionReceipt = import("@tetherto/wdk-wallet-solana").Sol
  */
 export type SolanaMultisigSquadsReadOnlyConfig = {
     /**
-     * - A Solana RPC URL, or a list of URLs for failover.
+     * - A Solana RPC URL, or a list of URLs for
+     * failover. Omit it to derive addresses without reaching the cluster; every method that
+     * needs the cluster then throws.
      */
-    provider: string | string[];
+    provider?: string | string[];
     /**
      * - The commitment level for transactions.
      */

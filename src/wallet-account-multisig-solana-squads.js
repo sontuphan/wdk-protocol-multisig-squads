@@ -149,14 +149,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     super(signerAccount._address, config)
 
     /**
-     * The multisig Squads configuration.
-     *
-     * @protected
-     * @type {SolanaMultisigSquadsConfig}
-     */
-    this._config = config
-
-    /**
      * The underlying Solana signer account.
      *
      * @protected
@@ -218,7 +210,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /**
    * Signs a message with the signer account.
    *
-   * @param {string | Uint8Array} message - The message to sign.
+   * @param {string} message - The message to sign.
    * @returns {Promise<string>} The signature.
    */
   async sign (message) {
@@ -226,9 +218,37 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /**
+   * Signs a transaction with the signer account. Not supported by Squads.
+   *
+   * @param {SolanaTransaction} tx - The transaction to sign.
+   * @returns {Promise<SolanaTransaction>} The signed transaction.
+   * @throws {NotSupportedError} Always, since a multisig cannot sign a transaction itself.
+   */
+  async signTransaction (tx) {
+    throw new NotSupportedError(
+      'signTransaction(tx)',
+      'a Squads multisig is a program-derived address with no private key, so it cannot sign. Propose the transaction with propose(tx) and let the members approve it instead.'
+    )
+  }
+
+  /**
+   * Sends a transaction from the multisig. Not supported by Squads.
+   *
+   * @param {SolanaTransaction} tx - The transaction to send.
+   * @returns {Promise<TransactionResult>} The transaction's result.
+   * @throws {NotSupportedError} Always, since a multisig does not submit transactions itself.
+   */
+  async sendTransaction (tx) {
+    throw new NotSupportedError(
+      'sendTransaction(tx)',
+      'a Squads multisig does not submit transactions directly: it proposes them and executes once the approval threshold is met. Use propose(tx) and then executeProposal(proposalId) instead.'
+    )
+  }
+
+  /**
    * Proposes a message to be signed by the multisig members. Not supported by Squads.
    *
-   * @param {string | Uint8Array} message - The message to propose.
+   * @param {string} message - The message to propose.
    * @returns {Promise<MultisigMessageProposal & MultisigSignature>} The message proposal.
    * @throws {NotSupportedError} Always, since Squads has no message-signing primitive.
    */
@@ -751,9 +771,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /**
    * Returns a read-only copy of the account.
    *
-   * @returns {WalletAccountReadOnlyMultisigSolanaSquads} The read-only account.
+   * @returns {Promise<WalletAccountReadOnlyMultisigSolanaSquads>} The read-only account.
    */
-  toReadOnlyAccount () {
+  async toReadOnlyAccount () {
     const { createKeySecret, ...config } = this._config
 
     return new WalletAccountReadOnlyMultisigSolanaSquads(this._signerAddress, {
