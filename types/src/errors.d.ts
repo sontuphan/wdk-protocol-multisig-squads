@@ -1,11 +1,10 @@
 /**
  * Thrown by methods that Squads cannot support, as opposed to methods that are merely
- * unimplemented. Callers can treat this as final: retrying, upgrading, or waiting will
- * not make the operation available.
+ * unimplemented.
  */
 export class NotSupportedError extends Error {
     /**
-     * Create a new not supported error.
+     * Creates a new not supported error.
      *
      * @param {string} methodName - The method's name.
      * @param {string} reason - Why Squads cannot support the method.

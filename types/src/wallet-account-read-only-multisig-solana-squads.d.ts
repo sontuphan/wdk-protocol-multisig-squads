@@ -5,17 +5,13 @@
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInfo} MultisigInfo */
 /**
  * @typedef {MultisigInfo & { masks: number[] }} SolanaMultisigInfo
- *   `MultisigInfo` widened with each owner's Squads permission mask, positionally aligned with
- *   `owners`. The interface pins `owners` to `string[]`, so the masks travel alongside rather
- *   than inside it, and as bare numbers rather than repeating the addresses.
+ *   `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`.
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessageProposal} MultisigMessageProposal */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
  * @typedef {MultisigProposal & { statusName: string, approved: string[], rejected: string[], cancelled: string[] }} SolanaMultisigProposal
- *   `MultisigProposal` widened with the proposal's Squads status and its vote lists. The
- *   interface's `status` collapses to `'pending'` or `'executed'`, so without `statusName` a
- *   caller cannot tell an approved proposal from a rejected or cancelled one.
+ *   `MultisigProposal` widened with the proposal's Squads status and its vote lists.
  */
 /** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
@@ -43,8 +39,7 @@ export const TRANSACTION_KIND_VAULT: "vault";
 export const TRANSACTION_KIND_CONFIG: "config";
 export const TRANSACTION_KIND_BATCH: "batch";
 /**
- * Read-only Solana Squads multisig wallet account.
- * Provides query-only operations for Squads multisig wallets.
+ * Read-only Solana Squads multisig wallet account implementation.
  *
  * @implements {IWalletAccountReadOnlyMultisig}
  */
@@ -72,7 +67,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     protected _signerAddress: string | null;
     /**
      * The address of the Squads multisig account.
-     * Lazily populated by {@link getAddress} when only a `createKey` is configured.
      *
      * @protected
      * @type {string | null}
@@ -109,25 +103,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Returns whether the multisig account exists on-chain.
      *
-     * Squads deploys no program per multisig — the Squads program is shared by every
-     * multisig on the network. This reports whether the `Multisig` account at this
-     * account's address has been created (by `multisigCreateV2`), which is what
-     * `deploy()` does.
-     *
-     * Note that just after `deploy()` resolves this may still return `false`, until
-     * the creating transaction reaches this account's commitment level.
-     *
      * @returns {Promise<boolean>} Whether the multisig account exists.
      * @throws {Error} If no address is configured, or if the RPC request fails.
      */
     isDeployed(): Promise<boolean>;
     /**
      * Returns the addresses of the multisig's members, in on-chain order.
-     *
-     * Note that Squads members carry permissions (proposer / voter / executor) that
-     * this list does not express: the number of members is **not** the denominator
-     * of {@link getThreshold}, since only members holding the voter permission can
-     * approve a proposal.
      *
      * @returns {Promise<string[]>} The member addresses.
      * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
@@ -136,10 +117,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Returns the number of approvals a proposal needs before it can be executed.
      *
-     * Note that only members holding the voter permission can approve, so this is
-     * **not** a fraction of {@link getOwners}'s length: a multisig can hold members
-     * that are unable to vote.
-     *
      * @returns {Promise<number>} The threshold.
      * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
      */
@@ -147,41 +124,19 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Returns aggregated information about the multisig.
      *
-     * This is the single account read the other accessors are derived from:
-     * {@link getOwners} and {@link getThreshold} both delegate here, so every field
-     * they return comes from one consistent snapshot.
-     *
-     * When `isCreated` is `false` the multisig does not exist on chain yet, and
-     * `owners` and `threshold` are placeholders that must not be read — they are `[]`
-     * and `0` regardless of what a future multisig at this address would hold.
-     *
-     * `masks` gives each owner's Squads permissions — proposer (1), voter (2), executor (4) —
-     * at the same index as `owners`. It is the only way to learn how many owners can actually
-     * vote, which is the denominator {@link getThreshold} is measured against and the bound
-     * every threshold change is validated by.
-     *
      * @returns {Promise<SolanaMultisigInfo>} The multisig info.
      * @throws {Error} If the address holds a non-Squads account, or if the RPC request fails.
      */
     getMultisigInfo(): Promise<SolanaMultisigInfo>;
     /**
-     * Returns the current transaction index (nonce) of the multisig.
-     *
-     * This is the index of the **most recently created** transaction, or `0n` when
-     * none has been created yet. A new proposal takes the next index, so callers
-     * creating one want `await getNonce() + 1n` rather than this value.
+     * Returns the transaction index of the most recently created transaction.
      *
      * @returns {Promise<bigint>} The transaction index.
      * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
      */
     getNonce(): Promise<bigint>;
     /**
-     * Returns the address of one of the multisig's vaults.
-     *
-     * Vaults are where a Squads multisig holds its funds, so this is **not** the
-     * address returned by {@link getAddress}: that one identifies the multisig and
-     * holds only its rent. Index `0` is the main treasury; higher indices are the
-     * sub-accounts the Squads app exposes.
+     * Returns the address of one of the multisig's vaults, where its funds are held.
      *
      * @param {number | string} [vaultIndexOrAddress=0] - A vault index between 0 and 255,
      *   or a vault address to use as given.
@@ -192,12 +147,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Returns the native SOL balance of one of the multisig's vaults.
      *
-     * Returns `0n` when the vault holds nothing, which is also the case when it has
-     * never been funded and therefore has no account on chain yet.
-     *
-     * Not all of this balance is transferable in a single instruction: a transfer must
-     * leave the vault either empty or above the rent-exempt minimum.
-     *
      * @param {number | string} [vaultIndexOrAddress=0] - A vault index between 0 and 255,
      *   or a vault address to read as given.
      * @returns {Promise<bigint>} The balance in lamports.
@@ -206,15 +155,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     getBalance(vaultIndexOrAddress?: number | string): Promise<bigint>;
     /**
      * Returns the balance of an SPL token held by one of the multisig's vaults.
-     *
-     * Tokens are held in a token account owned by the vault, not in the vault account
-     * itself, so this reads the vault's associated token account for the given mint.
-     * Returns `0n` when the vault holds none of the token, including when no associated
-     * token account exists for it yet.
-     *
-     * Only legacy SPL Token mints are supported: the associated token account is derived
-     * with the SPL Token program as a seed, so a Token-2022 mint resolves to a different
-     * address and reports `0n` even when it holds a balance.
      *
      * @param {string} tokenAddress - The SPL token mint address.
      * @param {number | string} [vaultIndexOrAddress=0] - A vault index between 0 and 255,
@@ -225,20 +165,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     getTokenBalance(tokenAddress: string, vaultIndexOrAddress?: number | string): Promise<bigint>;
     /**
-     * Returns the receipt of a transaction, or `null` if the RPC has no record of it.
-     *
-     * This reports on a single Solana transaction and is not proposal-aware: a Squads
-     * proposal spans a creation, one approval per voter, and an execution, each with its
-     * own signature. Use {@link getProposals} to ask about a proposal's state.
-     *
-     * A returned receipt does **not** imply the transaction succeeded — a failed
-     * transaction is still included in a block and has a receipt, with `meta.err` set.
-     * Note also that `null` covers both "not confirmed yet" and "no longer served by
-     * this node", since nodes retain transaction history for a limited window.
-     *
-     * A configured commitment of `processed` is raised to `confirmed`, because the
-     * underlying RPC method rejects anything lower and a receipt cannot exist for an
-     * unconfirmed transaction.
+     * Retrieves a transaction receipt by its signature.
      *
      * @param {string} hash - The transaction signature.
      * @returns {Promise<SolanaTransactionReceipt | null>} The receipt, or null if the
@@ -247,37 +174,16 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     getTransactionReceipt(hash: string): Promise<SolanaTransactionReceipt | null>;
     /**
-     * Verifies that a signature over a message is valid for this account.
-     *
-     * **Not supported, and not pending work.** This account's address is a
-     * program-derived address with no private key, so no signature can be attributed to
-     * it and there is nothing to verify against. Solana has no equivalent of EIP-1271,
-     * which is what lets a keyless smart-contract wallet answer this question on other
-     * chains. To check an individual member's signature, verify it against that member's
-     * own address instead.
+     * Verifies a message's signature. Not supported by Squads.
      *
      * @param {string | Uint8Array} message - The signed message.
      * @param {string | Uint8Array} signature - The signature to verify.
      * @returns {Promise<boolean>} Whether the signature is valid.
-     * @throws {NotSupportedError} Always, for the reasons above.
+     * @throws {NotSupportedError} Always, since a multisig address has no private key.
      */
     verify(message: string | Uint8Array, signature: string | Uint8Array): Promise<boolean>;
     /**
-     * Returns the proposals at the given ids, keyed by id.
-     *
-     * A proposal's id is its transaction index. Keys are the ids in canonical decimal form,
-     * so an id passed as `5`, `5n` or `'005'` is keyed as `'5'`. Values are `null` where no
-     * proposal exists at that id.
-     *
-     * Note that `confirmations >= threshold` does **not** mean a proposal can be
-     * executed: it must also be in the approved status, not invalidated by a later
-     * configuration change, and past any time lock. Use {@link isReadyToExecute}.
-     *
-     * `status` is `'executed'` once the proposal has run on-chain and `'pending'` otherwise,
-     * which cannot distinguish a rejected proposal from one still collecting votes — read
-     * `statusName` for the Squads status: `Draft`, `Active`, `Rejected`, `Approved`,
-     * `Executing`, `Executed` or `Cancelled`. `approved`, `rejected` and `cancelled` list
-     * the members who cast each kind of vote, and `confirmations` is `approved.length`.
+     * Returns the proposals at the given ids, keyed by id in canonical decimal form.
      *
      * @param {Array<number | bigint | string>} proposalIds - The proposal (transaction index) ids.
      * @returns {Promise<Record<string, SolanaMultisigProposal | null>>} For each id, the
@@ -286,9 +192,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     getProposals(proposalIds: Array<number | bigint | string>): Promise<Record<string, SolanaMultisigProposal | null>>;
     /**
-     * Returns the proposal at the given id, or `null` if none exists there.
-     *
-     * A single-id {@link getProposals}, which documents the fields of the result.
+     * Returns the proposal at the given id.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @returns {Promise<SolanaMultisigProposal | null>} The proposal, or null if no proposal
@@ -299,62 +203,31 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Returns whether a proposal can be executed right now.
      *
-     * A proposal becomes executable once it has been approved and its time lock has
-     * elapsed. Configuration proposals additionally must not have been invalidated by a
-     * later configuration change; vault and batch proposals that were approved before
-     * being invalidated stay executable.
-     *
-     * This is a point-in-time answer rather than a guarantee: a configuration change or
-     * a cancellation can make an executable proposal unexecutable. Every reason for a
-     * `false` result collapses into the same value, including a proposal that does not
-     * exist.
-     *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @returns {Promise<boolean>} Whether the proposal can be executed.
      * @throws {Error} If the id is invalid, no address is configured, or the RPC fails.
      */
     isReadyToExecute(proposalId: number | bigint | string): Promise<boolean>;
     /**
-     * Returns the signed-message proposals for the given message hashes.
-     *
-     * **Not supported, and not pending work.** Squads has no message-signing primitive,
-     * and a multisig cannot produce a signature at all: its accounts are program-derived
-     * addresses, which hold no private key. A message's *approval* can be recorded
-     * on-chain by wrapping it in a vault transaction, but the result is proof of approval
-     * rather than a signature, and Squads keys its accounts by sequential transaction
-     * index rather than by message hash, so a hash cannot be resolved to an account.
+     * Returns the signed-message proposals for the given message hashes. Not supported by Squads.
      *
      * @param {string[]} messageIds - The message hashes.
      * @returns {Promise<Record<string, MultisigMessageProposal | null>>} For each hash, the
      *   message proposal, or null if it has not been found.
-     * @throws {NotSupportedError} Always, for the reasons above.
+     * @throws {NotSupportedError} Always, since Squads has no message-signing primitive.
      */
     getMessageProposals(messageIds: string[]): Promise<Record<string, MultisigMessageProposal | null>>;
     /**
-     * Returns the signed-message proposal for the given message hash.
-     *
-     * **Not supported, and not pending work.** See {@link getMessageProposals}.
+     * Returns the signed-message proposal for the given message hash. Not supported by Squads.
      *
      * @param {string} messageId - The message's hash.
      * @returns {Promise<MultisigMessageProposal | null>} The message proposal, or null if it
      *   has not been found.
-     * @throws {NotSupportedError} Always, for the reasons above.
+     * @throws {NotSupportedError} Always, since Squads has no message-signing primitive.
      */
     getMessageProposal(messageId: string): Promise<MultisigMessageProposal | null>;
     /**
-     * Quotes the cost of deploying (creating) the multisig.
-     *
-     * The quote covers what the creator's account is debited: rent for the multisig
-     * account, the protocol's creation fee, and the base fee for the two signatures the
-     * creation transaction carries. It excludes priority fees, which the sender chooses,
-     * and excludes funding a vault, which is a separate step.
-     *
-     * Rent scales with the number of members, which the multisig does not have until it
-     * is created, so `memberCount` defaults to a single member. Pass the intended count
-     * to quote a larger multisig.
-     *
-     * Note that this rent is **not** refundable: Squads has no instruction to close a
-     * multisig account, unlike the accounts backing proposals and transactions.
+     * Quotes the costs of a deploy operation.
      *
      * @param {number} [memberCount=1] - The number of members the multisig will hold.
      * @returns {Promise<{ fee: bigint }>} The deploy quote, in lamports.
@@ -364,17 +237,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
         fee: bigint;
     }>;
     /**
-     * Quotes the cost of proposing a transaction.
-     *
-     * This is what the **proposer** is debited: rent for the transaction and proposal
-     * accounts Squads creates, plus the base fee for the single signature that creates
-     * them. Approvals and execution are paid by the members who submit them, from their
-     * own accounts, so they are excluded — as are priority fees.
-     *
-     * Most of the quote is refundable rent rather than a fee: the accounts can be closed
-     * once the proposal is executed or cancelled, refunding to the multisig's rent
-     * collector when one is configured. Proposal rent scales with the number of members,
-     * so it usually dominates.
+     * Quotes the costs of a propose operation.
      *
      * @param {SolanaTransaction} tx - The transaction to quote.
      * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged
@@ -387,18 +250,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
         fee: bigint;
     }>;
     /**
-     * Quotes the cost of a transfer.
-     *
-     * This is what the **proposer** is debited: rent for the transaction and proposal
-     * accounts Squads creates, plus the base fee for the single signature that creates
-     * them. Approvals and execution are paid by the members who submit them, and priority
-     * fees are excluded.
-     *
-     * One cost is deliberately **not** included. When the recipient holds no account for
-     * the token yet, one is created during execution and paid for by the **vault**, not by
-     * the proposer. That rent leaves the treasury, is not refundable to the multisig, and a
-     * vault without enough SOL to cover it will fail execution after the proposal has
-     * already been created and approved.
+     * Quotes the costs of a transfer operation.
      *
      * @param {import('@tetherto/wdk-wallet').TransferOptions} transferOptions - The transfer options.
      * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged
@@ -412,18 +264,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
         fee: bigint;
     }>;
     /**
-     * Quotes the cost of executing a pending proposal.
-     *
-     * This is what the **executor** is debited: the base fee for the single signature the
-     * execution transaction carries. Squads creates no account at execution, and the rent it
-     * already holds for the proposal and transaction accounts is not spent again — nor is it
-     * reclaimed, since neither account is closed.
-     *
-     * Two costs the executor may still pay are excluded, because neither is decidable from
-     * the proposal alone: priority fees, which the sender chooses, and the rent for an
-     * account the wrapped instructions create, such as a spending limit added by a
-     * configuration proposal. A transfer's recipient token account is paid for by the vault
-     * rather than the executor, so it is excluded on both counts.
+     * Quotes the costs of an execute proposal operation.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @returns {Promise<Omit<TransactionResult, 'hash'>>} The execution quote, in lamports.
@@ -433,10 +274,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     quoteExecuteProposal(proposalId: number | bigint | string): Promise<Omit<TransactionResult, "hash">>;
     /**
      * Reads and decodes the multisig account, keeping every field it holds.
-     *
-     * This is the single decode the account-level accessors project from, so callers that
-     * need several fields — a threshold together with a transaction index, say — get them
-     * from one consistent snapshot.
      *
      * @protected
      * @returns {Promise<{ address: string, isCreated: boolean, configAuthority: string | null, threshold: number, timeLock: number, transactionIndex: bigint, staleTransactionIndex: bigint, rentCollector: string | null, members: Array<{ address: string, mask: number }> }>}
@@ -460,10 +297,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Reads the multisig and one of its proposals in a single request.
      *
-     * Every precondition on voting and execution spans both accounts — the member set and
-     * the stale index live on the multisig, the status and vote lists on the proposal — so
-     * they are read together to keep them from disagreeing.
-     *
      * @protected
      * @param {bigint} index - The proposal (transaction index) id.
      * @returns {Promise<{ multisig: Awaited<ReturnType<WalletAccountReadOnlyMultisigSolanaSquads['_getMultisigAccount']>>, proposal: { address: Address, exists: boolean, status: number, statusName: string | null, approved: string[], rejected: string[], cancelled: string[] } }>}
@@ -485,11 +318,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
         };
     }>;
     /**
-     * Reads everything execution depends on in a single request.
-     *
-     * Adds the backing transaction and the clock to {@link _getMultisigAndProposal}'s pair:
-     * the transaction says which instruction executes it and which accounts it needs, and the
-     * clock is what the multisig's time lock is measured against.
+     * Reads the multisig, a proposal, its backing transaction and the clock in a single request.
      *
      * @protected
      * @param {bigint} index - The proposal (transaction index) id.
@@ -538,10 +367,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Derives the ephemeral signer addresses a stored transaction's message expects.
      *
-     * Squads substitutes these program-derived addresses for the throwaway keypairs a
-     * transaction would otherwise need — an account cannot be created at an address that does
-     * not sign for itself, and no keypair can be held across a proposal's lifetime.
-     *
      * @protected
      * @param {string} transactionPda - The transaction address the signers are derived from.
      * @param {number} count - How many the message needs.
@@ -578,9 +403,7 @@ export type Address = import("@solana/addresses").Address;
 export type IWalletAccountReadOnlyMultisig = import("@tetherto/wdk-wallet/multisig").IWalletAccountReadOnlyMultisig;
 export type MultisigInfo = import("@tetherto/wdk-wallet/multisig").MultisigInfo;
 /**
- * `MultisigInfo` widened with each owner's Squads permission mask, positionally aligned with
- * `owners`. The interface pins `owners` to `string[]`, so the masks travel alongside rather
- * than inside it, and as bare numbers rather than repeating the addresses.
+ * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`.
  */
 export type SolanaMultisigInfo = MultisigInfo & {
     masks: number[];
@@ -588,9 +411,7 @@ export type SolanaMultisigInfo = MultisigInfo & {
 export type MultisigMessageProposal = import("@tetherto/wdk-wallet/multisig").MultisigMessageProposal;
 export type MultisigProposal = import("@tetherto/wdk-wallet/multisig").MultisigProposal;
 /**
- * `MultisigProposal` widened with the proposal's Squads status and its vote lists. The
- * interface's `status` collapses to `'pending'` or `'executed'`, so without `statusName` a
- * caller cannot tell an approved proposal from a rejected or cancelled one.
+ * `MultisigProposal` widened with the proposal's Squads status and its vote lists.
  */
 export type SolanaMultisigProposal = MultisigProposal & {
     statusName: string;
