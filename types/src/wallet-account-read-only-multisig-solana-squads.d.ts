@@ -20,8 +20,8 @@
 /**
  * @typedef {Object} SolanaMultisigSquadsCommonConfig
  * @property {string | string[]} provider - A Solana RPC URL, or a list of URLs for failover.
- * @property {Commitment} [commitment='confirmed'] - The commitment level for transactions.
- * @property {number} [retries=3] - The number of retries for the failover provider.
+ * @property {Commitment} [commitment] - The commitment level for transactions (default: 'confirmed').
+ * @property {number} [retries] - The number of retries for the failover provider (default: 3).
  * @property {string} [programId] - An override for the Squads program address.
  * @property {string} [multisigPda] - The address of an existing Squads multisig to operate on.
  * @property {string} [createKey] - The create key used to derive a new multisig PDA on creation.
@@ -248,8 +248,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Returns the address of one of the multisig's vaults, where its funds are held.
      *
-     * @param {number | string} [vaultIndexOrAddress=0] - A vault index between 0 and 255,
-     *   or a vault address to use as given.
+     * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and 255, or a
+     *   vault address to use as given (default: 0).
      * @returns {Promise<string>} The vault address.
      * @throws {Error} If the index is out of range, or the address is not valid base58.
      */
@@ -257,8 +257,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Returns the native SOL balance of one of the multisig's vaults.
      *
-     * @param {number | string} [vaultIndexOrAddress=0] - A vault index between 0 and 255,
-     *   or a vault address to read as given.
+     * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and 255, or a
+     *   vault address to read as given (default: 0).
      * @returns {Promise<bigint>} The balance in lamports.
      * @throws {Error} If the vault cannot be resolved, or if the RPC request fails.
      */
@@ -267,8 +267,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * Returns the balance of an SPL token held by one of the multisig's vaults.
      *
      * @param {string} tokenAddress - The SPL token mint address.
-     * @param {number | string} [vaultIndexOrAddress=0] - A vault index between 0 and 255,
-     *   or a vault address to read as given.
+     * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and 255, or a
+     *   vault address to read as given (default: 0).
      * @returns {Promise<bigint>} The token balance (in base unit).
      * @throws {Error} If the mint address is malformed, or if the RPC request fails.
      * @todo Support Token-2022 (Token Extensions Program).
@@ -295,12 +295,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Returns the proposals at the given ids, keyed by id in canonical decimal form.
      *
-     * @param {Array<number | bigint | string>} proposalIds - The proposal (transaction index) ids.
+     * @param {(number | bigint | string)[]} proposalIds - The proposal (transaction index) ids.
      * @returns {Promise<Record<string, SolanaMultisigProposal | null>>} For each id, the
      *   proposal, or null if no proposal exists at that id.
      * @throws {Error} If an id is not a non-negative integer, or if the RPC request fails.
      */
-    getProposals(proposalIds: Array<number | bigint | string>): Promise<Record<string, SolanaMultisigProposal | null>>;
+    getProposals(proposalIds: (number | bigint | string)[]): Promise<Record<string, SolanaMultisigProposal | null>>;
     /**
      * Returns the proposal at the given id.
      *
@@ -339,7 +339,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Quotes the costs of a deploy operation.
      *
-     * @param {number} [memberCount=1] - The number of members the multisig will hold.
+     * @param {number} [memberCount] - The number of members the multisig will hold (default: 1).
      * @returns {Promise<{ fee: bigint }>} The deploy quote, in lamports.
      * @throws {Error} If `memberCount` is out of range, or if the RPC request fails.
      */
