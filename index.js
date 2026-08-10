@@ -33,7 +33,6 @@
 // ============================================
 // Re-export types from this package
 // ============================================
-/** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsCommonConfig} SolanaMultisigSquadsCommonConfig */
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsSigningConfig} SolanaMultisigSquadsSigningConfig */
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsConfig} SolanaMultisigSquadsConfig */
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsReadOnlyConfig} SolanaMultisigSquadsReadOnlyConfig */

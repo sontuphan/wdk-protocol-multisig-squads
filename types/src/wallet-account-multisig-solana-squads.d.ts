@@ -87,13 +87,11 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *
      * @param {string[]} [owners] - The member addresses. Defaults to this account's signer.
      * @param {number} [threshold] - The approvals a proposal needs (default: 1).
-     * @returns {Promise<{ hash: string }>} The creation transaction's signature.
+     * @returns {Promise<Pick<TransactionResult, 'hash'>>} The creation transaction's signature.
      * @throws {Error} If `createKeySecret` is missing, the owners or threshold are invalid,
      *   the multisig already exists, or the quoted fee exceeds `createMaxFee`.
      */
-    deploy(owners?: string[], threshold?: number): Promise<{
-        hash: string;
-    }>;
+    deploy(owners?: string[], threshold?: number): Promise<Pick<TransactionResult, "hash">>;
     /**
      * Proposes a transaction to the multisig, open for voting.
      *
@@ -160,40 +158,40 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * Proposes adding a new member to the multisig, with full permissions.
      *
      * @param {string} ownerAddress - The address of the member to add.
-     * @param {MultisigOptions} [options] - The operation options.
+     * @param {Partial<MultisigOptions>} [options] - The operation options.
      * @returns {Promise<SolanaMultisigProposalResult>} The proposal result.
      * @throws {Error} If the address is malformed or already a member, the threshold is out of
      *   range, the multisig does not exist or is controlled by a configuration authority, the
      *   signer cannot propose, or the RPC request fails.
      * @todo Let the caller choose the new member's permissions.
      */
-    addOwner(ownerAddress: string, options?: MultisigOptions): Promise<SolanaMultisigProposalResult>;
+    addOwner(ownerAddress: string, options?: Partial<MultisigOptions>): Promise<SolanaMultisigProposalResult>;
     /**
      * Proposes removing a member from the multisig.
      *
      * @param {string} ownerAddress - The address of the member to remove.
-     * @param {MultisigOptions} [options] - The operation options.
+     * @param {Partial<MultisigOptions>} [options] - The operation options.
      * @returns {Promise<SolanaMultisigProposalResult>} The proposal result.
      * @throws {Error} If the address is malformed or not a member, the removal would leave the
      *   multisig with no members or nobody able to vote, propose or execute, the threshold would
      *   exceed the remaining voters, the multisig does not exist or is controlled by a
      *   configuration authority, the signer cannot propose, or the RPC request fails.
      */
-    removeOwner(ownerAddress: string, options?: MultisigOptions): Promise<SolanaMultisigProposalResult>;
+    removeOwner(ownerAddress: string, options?: Partial<MultisigOptions>): Promise<SolanaMultisigProposalResult>;
     /**
      * Proposes swapping one member for another, the new member inheriting the old one's
      * permissions.
      *
      * @param {string} oldOwnerAddress - The address of the member to replace.
      * @param {string} newOwnerAddress - The address of the new member.
-     * @param {MultisigOptions} [options] - The operation options.
+     * @param {Partial<MultisigOptions>} [options] - The operation options.
      * @returns {Promise<SolanaMultisigProposalResult>} The proposal result.
      * @throws {Error} If either address is malformed, they are equal, the old address is not a
      *   member, the new one already is, the threshold would exceed the resulting voters, the
      *   multisig does not exist or is controlled by a configuration authority, the signer cannot
      *   propose, or the RPC request fails.
      */
-    swapOwner(oldOwnerAddress: string, newOwnerAddress: string, options?: MultisigOptions): Promise<SolanaMultisigProposalResult>;
+    swapOwner(oldOwnerAddress: string, newOwnerAddress: string, options?: Partial<MultisigOptions>): Promise<SolanaMultisigProposalResult>;
     /**
      * Proposes changing the approval threshold of the multisig.
      *
@@ -286,7 +284,9 @@ export type IMultisigOwnerManagement = import("@tetherto/wdk-wallet/multisig").I
 export type MultisigAutoExecuteResult = import("@tetherto/wdk-wallet/multisig").MultisigAutoExecuteResult;
 export type MultisigProposal = import("@tetherto/wdk-wallet/multisig").MultisigProposal;
 /**
- * `MultisigProposal` widened with the signature and fee of the transaction that carried the call.
+ * `MultisigProposal` widened with the signature and fee of the transaction that carried the
+ * call, plus `transaction` from `MultisigAutoExecuteResult`, which is set only when that same
+ * call also executed the proposal.
  */
 export type SolanaMultisigProposalResult = MultisigProposal & MultisigAutoExecuteResult & {
     hash: string;

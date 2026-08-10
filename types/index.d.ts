@@ -10,7 +10,6 @@ export type MultisigOptions = import("@tetherto/wdk-wallet/multisig").MultisigOp
 export type TransactionResult = import("@tetherto/wdk-wallet").TransactionResult;
 export type SimpleSolanaTransaction = import("@tetherto/wdk-wallet-solana").SimpleSolanaTransaction;
 export type SolanaTransactionReceipt = import("@tetherto/wdk-wallet-solana").SolanaTransactionReceipt;
-export type SolanaMultisigSquadsCommonConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsCommonConfig;
 export type SolanaMultisigSquadsSigningConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsSigningConfig;
 export type SolanaMultisigSquadsConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsConfig;
 export type SolanaMultisigSquadsReadOnlyConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsReadOnlyConfig;

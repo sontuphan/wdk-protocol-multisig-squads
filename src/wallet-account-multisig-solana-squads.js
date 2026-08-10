@@ -42,8 +42,11 @@ import {
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigAutoExecuteResult} MultisigAutoExecuteResult */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
+ * `MultisigProposal` widened with the signature and fee of the transaction that carried the
+ * call, plus `transaction` from `MultisigAutoExecuteResult`, which is set only when that same
+ * call also executed the proposal.
+ *
  * @typedef {MultisigProposal & MultisigAutoExecuteResult & { hash: string, fee: bigint }} SolanaMultisigProposalResult
- *   `MultisigProposal` widened with the signature and fee of the transaction that carried the call.
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigOptions} MultisigOptions */
@@ -278,7 +281,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {string[]} [owners] - The member addresses. Defaults to this account's signer.
    * @param {number} [threshold] - The approvals a proposal needs (default: 1).
-   * @returns {Promise<{ hash: string }>} The creation transaction's signature.
+   * @returns {Promise<Pick<TransactionResult, 'hash'>>} The creation transaction's signature.
    * @throws {Error} If `createKeySecret` is missing, the owners or threshold are invalid,
    *   the multisig already exists, or the quoted fee exceeds `createMaxFee`.
    */
@@ -577,7 +580,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * Proposes adding a new member to the multisig, with full permissions.
    *
    * @param {string} ownerAddress - The address of the member to add.
-   * @param {MultisigOptions} [options] - The operation options.
+   * @param {Partial<MultisigOptions>} [options] - The operation options.
    * @returns {Promise<SolanaMultisigProposalResult>} The proposal result.
    * @throws {Error} If the address is malformed or already a member, the threshold is out of
    *   range, the multisig does not exist or is controlled by a configuration authority, the
@@ -615,7 +618,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * Proposes removing a member from the multisig.
    *
    * @param {string} ownerAddress - The address of the member to remove.
-   * @param {MultisigOptions} [options] - The operation options.
+   * @param {Partial<MultisigOptions>} [options] - The operation options.
    * @returns {Promise<SolanaMultisigProposalResult>} The proposal result.
    * @throws {Error} If the address is malformed or not a member, the removal would leave the
    *   multisig with no members or nobody able to vote, propose or execute, the threshold would
@@ -655,7 +658,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {string} oldOwnerAddress - The address of the member to replace.
    * @param {string} newOwnerAddress - The address of the new member.
-   * @param {MultisigOptions} [options] - The operation options.
+   * @param {Partial<MultisigOptions>} [options] - The operation options.
    * @returns {Promise<SolanaMultisigProposalResult>} The proposal result.
    * @throws {Error} If either address is malformed, they are equal, the old address is not a
    *   member, the new one already is, the threshold would exceed the resulting voters, the

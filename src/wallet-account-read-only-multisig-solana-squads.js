@@ -35,15 +35,17 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountReadOnlyMultisig} IWalletAccountReadOnlyMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInfo} MultisigInfo */
 /**
+ * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`, and
+ * whether the multisig account exists on-chain.
+ *
  * @typedef {MultisigInfo & { masks: number[], isCreated: boolean }} SolanaMultisigInfo
- *   `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`,
- *   and whether the multisig account exists on-chain.
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessageProposal} MultisigMessageProposal */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
+ * `MultisigProposal` widened with the proposal's Squads status and its vote lists.
+ *
  * @typedef {MultisigProposal & { statusName: string, approved: string[], rejected: string[], cancelled: string[] }} SolanaMultisigProposal
- *   `MultisigProposal` widened with the proposal's Squads status and its vote lists.
  */
 /** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
 /** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
@@ -52,12 +54,12 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
 
 /**
- * The configuration every Squads account takes: how to reach the cluster, and how to identify
- * the multisig. `multisigPda` names an existing one; `createKey` derives its address instead.
- * Both may be given, and must then agree. A signing account may give neither and supply
- * `createKeySecret`, which the create key is derived from.
+ * The configuration a read-only Squads account takes: how to reach the cluster, and how to
+ * identify the multisig. `multisigPda` names an existing one; `createKey` derives its address
+ * instead. Both may be given, and must then agree. A signing account may give neither and
+ * supply `createKeySecret`, which the create key is derived from.
  *
- * @typedef {Object} SolanaMultisigSquadsCommonConfig
+ * @typedef {Object} SolanaMultisigSquadsReadOnlyConfig
  * @property {string | string[]} provider - A Solana RPC URL, or a list of URLs for failover.
  * @property {Commitment} [commitment] - The commitment level for transactions (default: 'confirmed').
  * @property {number} [retries] - The number of retries for the failover provider (default: 3).
@@ -78,9 +80,7 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
  * @property {number | bigint} [transferMaxFee] - The maximum fee amount for transfers.
  */
 
-/** @typedef {SolanaMultisigSquadsCommonConfig & SolanaMultisigSquadsSigningConfig} SolanaMultisigSquadsConfig */
-
-/** @typedef {SolanaMultisigSquadsCommonConfig} SolanaMultisigSquadsReadOnlyConfig */
+/** @typedef {SolanaMultisigSquadsReadOnlyConfig & SolanaMultisigSquadsSigningConfig} SolanaMultisigSquadsConfig */
 
 /**
  * A member of a Squads multisig, as stored on-chain.
@@ -831,6 +831,20 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     throw new NotSupportedError(
       'getMessageProposal(messageId)',
       'Squads has no message-signing primitive, and its accounts are keyed by sequential transaction index rather than by message hash'
+    )
+  }
+
+  /**
+   * Quotes the costs of a send transaction operation. Not supported by Squads.
+   *
+   * @param {SolanaTransaction} tx - The transaction to quote.
+   * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transaction's quote.
+   * @throws {NotSupportedError} Always, since a multisig does not submit transactions itself.
+   */
+  async quoteSendTransaction (tx) {
+    throw new NotSupportedError(
+      'quoteSendTransaction(tx)',
+      'a Squads multisig does not submit transactions directly: it proposes them and executes once the approval threshold is met. Quote the two steps with quotePropose(tx) and quoteExecuteProposal(proposalId) instead.'
     )
   }
 
