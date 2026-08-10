@@ -39,6 +39,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     get keyPair(): import("@tetherto/wdk-wallet").KeyPair;
     /**
+     * Returns the address of the Squads multisig account.
+     *
+     * @returns {Promise<string>} The multisig address.
+     * @throws {Error} If the multisig address cannot be resolved.
+     */
+    getAddress(): Promise<string>;
+    /**
      * Returns the address of the member this account votes and proposes as.
      *
      * @returns {Promise<string>} The signer's address.

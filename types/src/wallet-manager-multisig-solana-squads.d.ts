@@ -36,6 +36,13 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
      * @returns {Promise<WalletAccountMultisigSolanaSquads>} The account.
      */
     getAccountByPath(path: string): Promise<WalletAccountMultisigSolanaSquads>;
+    /**
+     * Returns the current fee rates.
+     *
+     * @returns {Promise<FeeRates>} The fee rates (in lamports).
+     * @throws {Error} If no provider is configured or the RPC request fails.
+     */
+    getFeeRates(): Promise<FeeRates>;
     /** @private */
     private _createFailoverRpc;
 }
