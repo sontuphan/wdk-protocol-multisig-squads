@@ -441,6 +441,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If no address is configured, or if the RPC request fails.
    */
   async isDeployed () {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to check whether the multisig exists.')
+    }
+
     const multisigPda = await this.getAddress()
 
     const { value } = await this._rpc
@@ -523,6 +527,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
    */
   async getNonce () {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to read the transaction index.')
+    }
+
     const multisigPda = await this.getAddress()
 
     const { value } = await this._rpc
@@ -600,6 +608,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If the vault cannot be resolved, or if the RPC request fails.
    */
   async getBalance (vaultIndexOrAddress = DEFAULT_VAULT_INDEX) {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to retrieve balances.')
+    }
+
     const vaultPda = await this.getVaultAddress(vaultIndexOrAddress)
 
     const { value } = await this._rpc
@@ -620,6 +632,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @todo Support Token-2022 (Token Extensions Program).
    */
   async getTokenBalance (tokenAddress, vaultIndexOrAddress = DEFAULT_VAULT_INDEX) {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to retrieve token balances.')
+    }
+
     const mint = address(tokenAddress)
     const vaultPda = await this.getVaultAddress(vaultIndexOrAddress)
 
@@ -649,6 +665,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If the signature is malformed, or if the RPC request fails.
    */
   async getTransactionReceipt (hash) {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to retrieve transaction receipts.')
+    }
+
     if (!this._isSignature(hash)) {
       throw new Error(`Invalid transaction signature: ${hash}`)
     }
@@ -688,6 +708,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   async getProposals (proposalIds) {
     if (!proposalIds.length) {
       return {}
+    }
+
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to read proposals.')
     }
 
     const { address: multisigPda, threshold, isCreated } = await this.getMultisigInfo()
@@ -746,6 +770,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If the id is invalid, no address is configured, or the RPC fails.
    */
   async isReadyToExecute (proposalId) {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to check whether a proposal can be executed.')
+    }
+
     const index = this._toProposalIndex(proposalId)
     const multisigPda = await this.getAddress()
 
@@ -862,6 +890,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       )
     }
 
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to quote deploy operations.')
+    }
+
     const [{ creationFee }, rent] = await Promise.all([
       this._getProgramConfig(),
       this._rpc
@@ -892,6 +924,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       throw new Error(
         `The multisig account ${multisigPda} does not exist. Deploy it before quoting transactions.`
       )
+    }
+
+    if (!account._rpc) {
+      throw new Error('The wallet must be connected to a provider to quote transactions.')
     }
 
     const transactionSize =
@@ -928,6 +964,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       throw new Error(
         `The multisig account ${multisigPda} does not exist. Deploy it before quoting transfers.`
       )
+    }
+
+    if (!account._rpc) {
+      throw new Error('The wallet must be connected to a provider to quote transfer operations.')
     }
 
     const messageSize = await account._splTransferMessageSize(mint, recipient)
@@ -971,6 +1011,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If the address holds a non-Squads account, or if the RPC request fails.
    */
   async _getMultisigAccount () {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to read the multisig account.')
+    }
+
     const multisigPda = await this.getAddress()
 
     const { value } = await this._rpc
@@ -994,6 +1038,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *   request fails.
    */
   async _getMultisigAndProposal (index) {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to read the multisig and its proposals.')
+    }
+
     const multisigPda = await this.getAddress()
     const proposalPda = await this._getProposalPda(multisigPda, index)
 
@@ -1021,6 +1069,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *   read, or the RPC request fails.
    */
   async _getMultisigProposalAndTransaction (index) {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to read the multisig and its proposals.')
+    }
+
     const multisigPda = await this.getAddress()
     const [proposalPda, transactionPda] = await Promise.all([
       this._getProposalPda(multisigPda, index),
@@ -1060,6 +1112,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If the account is missing or is not a program config.
    */
   async _getProgramConfig () {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to read the Squads program config.')
+    }
+
     const [programConfigPda] = await getProgramDerivedAddress({
       programAddress: this._programId,
       seeds: [SEED_PREFIX, SEED_PROGRAM_CONFIG]

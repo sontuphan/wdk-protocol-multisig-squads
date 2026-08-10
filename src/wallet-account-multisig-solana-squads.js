@@ -371,6 +371,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @todo Support Token-2022 (Token Extensions Program).
    */
   async transfer (transferOptions, transactionOptions = {}) {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to propose transfers.')
+    }
+
     const mint = address(transferOptions.token)
     const recipient = address(transferOptions.recipient)
     const vaultPda = await this.getVaultAddress(DEFAULT_VAULT_INDEX)
