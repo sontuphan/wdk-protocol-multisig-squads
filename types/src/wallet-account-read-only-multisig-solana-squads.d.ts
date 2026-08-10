@@ -15,9 +15,13 @@
  *   `MultisigProposal` widened with the proposal's Squads status and its vote lists.
  */
 /** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
+/** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
 /**
+ * The configuration every Squads account takes: how to reach the cluster, and which multisig
+ * to operate on. Exactly one of `multisigPda` and `createKey` identifies the multisig.
+ *
  * @typedef {Object} SolanaMultisigSquadsCommonConfig
  * @property {string | string[]} provider - A Solana RPC URL, or a list of URLs for failover.
  * @property {Commitment} [commitment] - The commitment level for transactions (default: 'confirmed').
@@ -27,6 +31,9 @@
  * @property {string} [createKey] - The create key used to derive a new multisig PDA on creation.
  */
 /**
+ * The extra configuration a signing account takes: the secret it derives a new multisig's
+ * address from, and the fee ceilings above which it refuses to submit.
+ *
  * @typedef {Object} SolanaMultisigSquadsSigningConfig
  * @property {string | Uint8Array} [createKeySecret] - The create key's secret, required to
  *   deploy a multisig. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
@@ -150,10 +157,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Creates a new read-only Solana Squads multisig wallet account.
      *
-     * @param {string | null} signerAddress - The signer's address, or null for pure read-only.
+     * @param {string | undefined} signerAddress - The signer's address, or undefined for a
+     *   pure read-only account.
      * @param {SolanaMultisigSquadsReadOnlyConfig} config - The configuration object.
      */
-    constructor(signerAddress: string | null, config: SolanaMultisigSquadsReadOnlyConfig);
+    constructor(signerAddress: string | undefined, config: SolanaMultisigSquadsReadOnlyConfig);
     /**
      * The multisig Squads configuration.
      *
@@ -165,23 +173,23 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * The signer's address.
      *
      * @protected
-     * @type {string | null}
+     * @type {string | undefined}
      */
-    protected _signerAddress: string | null;
+    protected _signerAddress: string | undefined;
     /**
      * The address of the Squads multisig account.
      *
      * @protected
-     * @type {string | null}
+     * @type {string | undefined}
      */
-    protected _multisigPda: string | null;
+    protected _multisigPda: string | undefined;
     /**
      * The create key used to derive the multisig address, if configured.
      *
      * @protected
-     * @type {string | null}
+     * @type {string | undefined}
      */
-    protected _createKey: string | null;
+    protected _createKey: string | undefined;
     /**
      * The address of the Squads program to operate against.
      *
@@ -340,39 +348,33 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * Quotes the costs of a deploy operation.
      *
      * @param {number} [memberCount] - The number of members the multisig will hold (default: 1).
-     * @returns {Promise<{ fee: bigint }>} The deploy quote, in lamports.
+     * @returns {Promise<Omit<TransactionResult, 'hash'>>} The deploy quote, in lamports.
      * @throws {Error} If `memberCount` is out of range, or if the RPC request fails.
      */
-    quoteDeploy(memberCount?: number): Promise<{
-        fee: bigint;
-    }>;
+    quoteDeploy(memberCount?: number): Promise<Omit<TransactionResult, "hash">>;
     /**
      * Quotes the costs of a propose operation.
      *
      * @param {SolanaTransaction} tx - The transaction to quote.
      * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged
      *   over this account's configuration.
-     * @returns {Promise<{ fee: bigint }>} The transaction quote, in lamports.
+     * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transaction quote, in lamports.
      * @throws {Error} If the multisig does not exist, the transaction is malformed, or the
      *   RPC request fails.
      */
-    quotePropose(tx: SolanaTransaction, config?: SolanaMultisigSquadsConfig): Promise<{
-        fee: bigint;
-    }>;
+    quotePropose(tx: SolanaTransaction, config?: SolanaMultisigSquadsConfig): Promise<Omit<TransactionResult, "hash">>;
     /**
      * Quotes the costs of a transfer operation.
      *
-     * @param {import('@tetherto/wdk-wallet').TransferOptions} transferOptions - The transfer options.
+     * @param {TransferOptions} transferOptions - The transfer options.
      * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged
      *   over this account's configuration.
-     * @returns {Promise<{ fee: bigint }>} The transfer quote, in lamports.
+     * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transfer quote, in lamports.
      * @throws {Error} If the mint or recipient is malformed, the multisig does not exist,
      *   or the RPC request fails.
      * @todo Support Token-2022 (Token Extensions Program).
      */
-    quoteTransfer(transferOptions: import("@tetherto/wdk-wallet").TransferOptions, config?: SolanaMultisigSquadsConfig): Promise<{
-        fee: bigint;
-    }>;
+    quoteTransfer(transferOptions: TransferOptions, config?: SolanaMultisigSquadsConfig): Promise<Omit<TransactionResult, "hash">>;
     /**
      * Quotes the costs of an execute proposal operation.
      *
@@ -519,8 +521,13 @@ export type SolanaMultisigProposal = MultisigProposal & {
     cancelled: string[];
 };
 export type TransactionResult = import("@tetherto/wdk-wallet").TransactionResult;
+export type TransferOptions = import("@tetherto/wdk-wallet").TransferOptions;
 export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
 export type SolanaTransactionReceipt = import("@tetherto/wdk-wallet-solana").SolanaTransactionReceipt;
+/**
+ * The configuration every Squads account takes: how to reach the cluster, and which multisig
+ * to operate on. Exactly one of `multisigPda` and `createKey` identifies the multisig.
+ */
 export type SolanaMultisigSquadsCommonConfig = {
     /**
      * - A Solana RPC URL, or a list of URLs for failover.
@@ -547,6 +554,10 @@ export type SolanaMultisigSquadsCommonConfig = {
      */
     createKey?: string;
 };
+/**
+ * The extra configuration a signing account takes: the secret it derives a new multisig's
+ * address from, and the fee ceilings above which it refuses to submit.
+ */
 export type SolanaMultisigSquadsSigningConfig = {
     /**
      * - The create key's secret, required to

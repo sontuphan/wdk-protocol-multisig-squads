@@ -16,8 +16,6 @@
 // ============================================
 // Re-export types from @tetherto/wdk-wallet
 // ============================================
-// The multisig types resolve only through the `/multisig` subpath: the package root does not
-// re-export them, so importing them from there silently yields `any`.
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInfo} MultisigInfo */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessageProposal} MultisigMessageProposal */
@@ -43,8 +41,6 @@
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigProposal} SolanaMultisigProposal */
 /** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigProposalResult} SolanaMultisigProposalResult */
 
-// The decoded Squads account shapes the protected methods return. They are reachable only
-// from here: the package's `exports` map blocks a deep import of `src/`.
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsMember} SquadsMember */
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsMultisigAccount} SquadsMultisigAccount */
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsProposalAccount} SquadsProposalAccount */

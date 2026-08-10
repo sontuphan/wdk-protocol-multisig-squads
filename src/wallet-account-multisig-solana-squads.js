@@ -38,9 +38,6 @@ import {
   TOKEN_PROGRAM_ADDRESS
 } from '@solana-program/token'
 
-// The multisig types resolve only through the `/multisig` subpath: the package root
-// re-exports them from a path that does not exist, so importing them from there silently
-// yields `any`.
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigAutoExecuteResult} MultisigAutoExecuteResult */
@@ -146,7 +143,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   constructor (seed, path, config) {
     const signerAccount = new WalletAccountSolana(seed, path, config)
 
-    super(signerAccount._address ?? null, config)
+    super(signerAccount._address, config)
 
     /**
      * The multisig Squads configuration.
@@ -754,8 +751,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     return new WalletAccountReadOnlyMultisigSolanaSquads(this._signerAddress, {
       ...config,
-      multisigPda: this._multisigPda ?? undefined,
-      createKey: this._createKey ?? undefined
+      multisigPda: this._multisigPda,
+      createKey: this._createKey
     })
   }
 
