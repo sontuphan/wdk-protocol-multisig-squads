@@ -42,7 +42,7 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
    * Creates a new wallet manager for Solana Squads multisig wallets.
    *
    * @param {string | Uint8Array} seed - The wallet's [BIP-39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki) seed phrase.
-   * @param {SolanaMultisigSquadsConfig} [config] - The configuration object.
+   * @param {SolanaMultisigSquadsConfig} [config] - The configuration object (default: {}).
    */
   constructor (seed, config = {}) {
     super(seed, config)
@@ -63,11 +63,23 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
      * @protected
      * @type {SolanaRpc | undefined}
      */
-    this._rpc = Array.isArray(provider)
-      ? this._createFailoverRpc(provider, retries)
-      : provider
-        ? createSolanaRpc(provider)
-        : undefined
+    this._rpc = undefined
+
+    if (Array.isArray(provider)) {
+      if (provider.length > 0) {
+        const failoverProvider = new FailoverProvider({ retries })
+
+        for (const entry of provider) {
+          const option = createSolanaRpc(entry)
+
+          failoverProvider.addProvider(option)
+        }
+
+        this._rpc = failoverProvider.initialize()
+      }
+    } else if (provider) {
+      this._rpc = createSolanaRpc(provider)
+    }
   }
 
   /**
@@ -126,16 +138,5 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
       normal: (fee * FEE_RATE_NORMAL_MULTIPLIER) / 100n,
       fast: (fee * FEE_RATE_FAST_MULTIPLIER) / 100n
     }
-  }
-
-  /** @private */
-  _createFailoverRpc (urls, retries) {
-    const failoverProvider = new FailoverProvider({ retries })
-
-    for (const url of urls) {
-      failoverProvider.addProvider(createSolanaRpc(url))
-    }
-
-    return failoverProvider.initialize()
   }
 }

@@ -52,14 +52,17 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
 
 /**
- * The configuration every Squads account takes: how to reach the cluster, and which multisig
- * to operate on. Exactly one of `multisigPda` and `createKey` identifies the multisig.
+ * The configuration every Squads account takes: how to reach the cluster, and how to identify
+ * the multisig. `multisigPda` names an existing one; `createKey` derives its address instead.
+ * Both may be given, and must then agree. A signing account may give neither and supply
+ * `createKeySecret`, which the create key is derived from.
  *
  * @typedef {Object} SolanaMultisigSquadsCommonConfig
  * @property {string | string[]} provider - A Solana RPC URL, or a list of URLs for failover.
  * @property {Commitment} [commitment] - The commitment level for transactions (default: 'confirmed').
  * @property {number} [retries] - The number of retries for the failover provider (default: 3).
- * @property {string} [programId] - An override for the Squads program address.
+ * @property {string} [programId] - The Squads program to operate against, for a fork or a
+ *   local deployment (default: `SQUADS_PROGRAM_ADDRESS`).
  * @property {string} [multisigPda] - The address of an existing Squads multisig to operate on.
  * @property {string} [createKey] - The create key used to derive a new multisig PDA on creation.
  */
@@ -143,6 +146,8 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
  * @property {SquadsAddressTableLookup[]} addressTableLookups - The lookup table references.
  */
 
+/** @typedef {'vault' | 'config' | 'batch'} SquadsTransactionKind */
+
 /** @typedef {'AddMember' | 'RemoveMember' | 'ChangeThreshold' | 'SetTimeLock' | 'AddSpendingLimit' | 'RemoveSpendingLimit' | 'SetRentCollector'} SquadsConfigActionKind */
 
 /**
@@ -162,7 +167,7 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
  * @typedef {Object} SquadsTransactionAccount
  * @property {Address} address - The transaction's program-derived address.
  * @property {boolean} exists - Whether a transaction has been created at that index.
- * @property {'vault' | 'config' | 'batch' | null} kind - The transaction kind, null when the
+ * @property {SquadsTransactionKind | null} kind - The transaction kind, null when the
  *   account is absent or holds a kind this package cannot decode.
  * @property {number} vaultIndex - The vault the message spends from; 0 for non-vault kinds.
  * @property {number} ephemeralSignerCount - The ephemeral signers the message expects.
@@ -200,9 +205,12 @@ const CONFIG_TRANSACTION_DISCRIMINATOR = Uint8Array.from([94, 8, 4, 35, 113, 139
 const BATCH_DISCRIMINATOR = Uint8Array.from([156, 194, 70, 44, 22, 88, 137, 44])
 const PROGRAM_CONFIG_DISCRIMINATOR = Uint8Array.from([196, 210, 90, 231, 144, 149, 140, 63])
 
-export const TRANSACTION_KIND_VAULT = 'vault'
-export const TRANSACTION_KIND_CONFIG = 'config'
-export const TRANSACTION_KIND_BATCH = 'batch'
+/**
+ * The transaction kinds a Squads proposal can back, keyed by kind.
+ *
+ * @type {{ [K in SquadsTransactionKind]: K }}
+ */
+export const TRANSACTION_KIND = { vault: 'vault', config: 'config', batch: 'batch' }
 
 const VAULT_TRANSACTION_VAULT_INDEX_OFFSET = 81
 const VAULT_TRANSACTION_EPHEMERAL_BUMPS_OFFSET = 83
@@ -374,11 +382,25 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * A Solana RPC client for HTTP requests.
      *
      * @protected
-     * @type {SolanaRpc}
+     * @type {SolanaRpc | undefined}
      */
-    this._rpc = Array.isArray(provider)
-      ? this._createFailoverRpc(provider, retries)
-      : createSolanaRpc(provider)
+    this._rpc = undefined
+
+    if (Array.isArray(provider)) {
+      if (provider.length > 0) {
+        const failoverProvider = new FailoverProvider({ retries })
+
+        for (const entry of provider) {
+          const option = createSolanaRpc(entry)
+
+          failoverProvider.addProvider(option)
+        }
+
+        this._rpc = failoverProvider.initialize()
+      }
+    } else if (provider) {
+      this._rpc = createSolanaRpc(provider)
+    }
   }
 
   /**
@@ -1165,17 +1187,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /** @private */
-  _createFailoverRpc (urls, retries) {
-    const failoverProvider = new FailoverProvider({ retries })
-
-    for (const url of urls) {
-      failoverProvider.addProvider(createSolanaRpc(url))
-    }
-
-    return failoverProvider.initialize()
-  }
-
-  /** @private */
   _hasDiscriminator (data, discriminator) {
     if (data.length < discriminator.length) {
       return false
@@ -1423,7 +1434,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       return {
         ...absent,
         exists: true,
-        kind: TRANSACTION_KIND_VAULT,
+        kind: TRANSACTION_KIND.vault,
         vaultIndex: data[VAULT_TRANSACTION_VAULT_INDEX_OFFSET],
         ephemeralSignerCount,
         message: this._decodeVaultTransactionMessage(
@@ -1438,13 +1449,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       return {
         ...absent,
         exists: true,
-        kind: TRANSACTION_KIND_CONFIG,
+        kind: TRANSACTION_KIND.config,
         actions: this._decodeConfigActions(data, view, CONFIG_TRANSACTION_ACTIONS_OFFSET)
       }
     }
 
     if (this._hasDiscriminator(data, BATCH_DISCRIMINATOR)) {
-      return { ...absent, exists: true, kind: TRANSACTION_KIND_BATCH }
+      return { ...absent, exists: true, kind: TRANSACTION_KIND.batch }
     }
 
     return { ...absent, exists: true }

@@ -19,14 +19,17 @@
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
 /**
- * The configuration every Squads account takes: how to reach the cluster, and which multisig
- * to operate on. Exactly one of `multisigPda` and `createKey` identifies the multisig.
+ * The configuration every Squads account takes: how to reach the cluster, and how to identify
+ * the multisig. `multisigPda` names an existing one; `createKey` derives its address instead.
+ * Both may be given, and must then agree. A signing account may give neither and supply
+ * `createKeySecret`, which the create key is derived from.
  *
  * @typedef {Object} SolanaMultisigSquadsCommonConfig
  * @property {string | string[]} provider - A Solana RPC URL, or a list of URLs for failover.
  * @property {Commitment} [commitment] - The commitment level for transactions (default: 'confirmed').
  * @property {number} [retries] - The number of retries for the failover provider (default: 3).
- * @property {string} [programId] - An override for the Squads program address.
+ * @property {string} [programId] - The Squads program to operate against, for a fork or a
+ *   local deployment (default: `SQUADS_PROGRAM_ADDRESS`).
  * @property {string} [multisigPda] - The address of an existing Squads multisig to operate on.
  * @property {string} [createKey] - The create key used to derive a new multisig PDA on creation.
  */
@@ -101,6 +104,7 @@
  * @property {string[]} accountKeys - The statically listed addresses, in message order.
  * @property {SquadsAddressTableLookup[]} addressTableLookups - The lookup table references.
  */
+/** @typedef {'vault' | 'config' | 'batch'} SquadsTransactionKind */
 /** @typedef {'AddMember' | 'RemoveMember' | 'ChangeThreshold' | 'SetTimeLock' | 'AddSpendingLimit' | 'RemoveSpendingLimit' | 'SetRentCollector'} SquadsConfigActionKind */
 /**
  * A configuration change a config transaction applies. `createKey` and `spendingLimit` name the
@@ -118,7 +122,7 @@
  * @typedef {Object} SquadsTransactionAccount
  * @property {Address} address - The transaction's program-derived address.
  * @property {boolean} exists - Whether a transaction has been created at that index.
- * @property {'vault' | 'config' | 'batch' | null} kind - The transaction kind, null when the
+ * @property {SquadsTransactionKind | null} kind - The transaction kind, null when the
  *   account is absent or holds a kind this package cannot decode.
  * @property {number} vaultIndex - The vault the message spends from; 0 for non-vault kinds.
  * @property {number} ephemeralSignerCount - The ephemeral signers the message expects.
@@ -145,9 +149,12 @@
  * @property {bigint} now - The cluster's current Unix timestamp, read from the clock sysvar.
  */
 export const SQUADS_PROGRAM_ADDRESS: "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf";
-export const TRANSACTION_KIND_VAULT: "vault";
-export const TRANSACTION_KIND_CONFIG: "config";
-export const TRANSACTION_KIND_BATCH: "batch";
+/**
+ * The transaction kinds a Squads proposal can back, keyed by kind.
+ *
+ * @type {{ [K in SquadsTransactionKind]: K }}
+ */
+export const TRANSACTION_KIND: { [K in SquadsTransactionKind]: K; };
 /**
  * Read-only Solana Squads multisig wallet account implementation.
  *
@@ -208,9 +215,9 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * A Solana RPC client for HTTP requests.
      *
      * @protected
-     * @type {SolanaRpc}
+     * @type {SolanaRpc | undefined}
      */
-    protected _rpc: SolanaRpc;
+    protected _rpc: SolanaRpc | undefined;
     /**
      * Returns the address of the Squads multisig account.
      *
@@ -470,8 +477,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     protected _getSpendingLimitPda(multisigPda: string, createKey: string): Promise<Address>;
     /** @private */
-    private _createFailoverRpc;
-    /** @private */
     private _hasDiscriminator;
     /** @private */
     private _isSignature;
@@ -525,8 +530,10 @@ export type TransferOptions = import("@tetherto/wdk-wallet").TransferOptions;
 export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
 export type SolanaTransactionReceipt = import("@tetherto/wdk-wallet-solana").SolanaTransactionReceipt;
 /**
- * The configuration every Squads account takes: how to reach the cluster, and which multisig
- * to operate on. Exactly one of `multisigPda` and `createKey` identifies the multisig.
+ * The configuration every Squads account takes: how to reach the cluster, and how to identify
+ * the multisig. `multisigPda` names an existing one; `createKey` derives its address instead.
+ * Both may be given, and must then agree. A signing account may give neither and supply
+ * `createKeySecret`, which the create key is derived from.
  */
 export type SolanaMultisigSquadsCommonConfig = {
     /**
@@ -542,7 +549,8 @@ export type SolanaMultisigSquadsCommonConfig = {
      */
     retries?: number;
     /**
-     * - An override for the Squads program address.
+     * - The Squads program to operate against, for a fork or a
+     * local deployment (default: `SQUADS_PROGRAM_ADDRESS`).
      */
     programId?: string;
     /**
@@ -718,6 +726,7 @@ export type SquadsTransactionMessage = {
      */
     addressTableLookups: SquadsAddressTableLookup[];
 };
+export type SquadsTransactionKind = 'vault' | 'config' | 'batch';
 export type SquadsConfigActionKind = 'AddMember' | 'RemoveMember' | 'ChangeThreshold' | 'SetTimeLock' | 'AddSpendingLimit' | 'RemoveSpendingLimit' | 'SetRentCollector';
 /**
  * A configuration change a config transaction applies. `createKey` and `spendingLimit` name the
@@ -754,7 +763,7 @@ export type SquadsTransactionAccount = {
      * - The transaction kind, null when the
      * account is absent or holds a kind this package cannot decode.
      */
-    kind: 'vault' | 'config' | 'batch' | null;
+    kind: SquadsTransactionKind | null;
     /**
      * - The vault the message spends from; 0 for non-vault kinds.
      */

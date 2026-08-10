@@ -6,7 +6,7 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
      * Creates a new wallet manager for Solana Squads multisig wallets.
      *
      * @param {string | Uint8Array} seed - The wallet's [BIP-39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki) seed phrase.
-     * @param {SolanaMultisigSquadsConfig} [config] - The configuration object.
+     * @param {SolanaMultisigSquadsConfig} [config] - The configuration object (default: {}).
      */
     constructor(seed: string | Uint8Array, config?: SolanaMultisigSquadsConfig);
     /**
@@ -43,8 +43,6 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
      * @throws {Error} If no provider is configured or the RPC request fails.
      */
     getFeeRates(): Promise<FeeRates>;
-    /** @private */
-    private _createFailoverRpc;
 }
 export type SolanaRpc = ReturnType<typeof import("@solana/rpc").createSolanaRpc>;
 export type FeeRates = import("@tetherto/wdk-wallet").FeeRates;

@@ -19,8 +19,7 @@ import { NoSuchElementError, NotImplementedError, ValueError } from '@tetherto/w
 import { WalletAccountSolana } from '@tetherto/wdk-wallet-solana'
 
 import WalletAccountReadOnlyMultisigSolanaSquads, {
-  TRANSACTION_KIND_CONFIG,
-  TRANSACTION_KIND_VAULT
+  TRANSACTION_KIND
 } from './wallet-account-read-only-multisig-solana-squads.js'
 
 import { NotSupportedError } from './errors.js'
@@ -52,6 +51,7 @@ import {
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigSignature} MultisigSignature */
 /** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
 /** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
+/** @typedef {import('@tetherto/wdk-wallet').KeyPair} KeyPair */
 
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 
@@ -183,7 +183,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /**
    * The key pair of the signer account.
    *
-   * @type {import('@tetherto/wdk-wallet').KeyPair}
+   * @type {KeyPair}
    */
   get keyPair () {
     return this._signerAccount.keyPair
@@ -253,7 +253,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /**
    * Validates that the signer is a member of the multisig.
    *
-   * @returns {Promise<void>}
+   * @returns {Promise<void>} Resolves if the signer is a member, otherwise throws.
    * @throws {Error} If the multisig does not exist, or the signer is not one of its members.
    */
   async validateSignerIsOwner () {
@@ -277,7 +277,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * `createKeySecret`.
    *
    * @param {string[]} [owners] - The member addresses. Defaults to this account's signer.
-   * @param {number} [threshold=1] - The approvals a proposal needs.
+   * @param {number} [threshold] - The approvals a proposal needs (default: 1).
    * @returns {Promise<{ hash: string }>} The creation transaction's signature.
    * @throws {Error} If `createKeySecret` is missing, the owners or threshold are invalid,
    *   the multisig already exists, or the quoted fee exceeds `createMaxFee`.
@@ -566,7 +566,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       )
     }
 
-    const instruction = transaction.kind === TRANSACTION_KIND_CONFIG
+    const instruction = transaction.kind === TRANSACTION_KIND.config
       ? await this._buildConfigExecuteInstruction(multisig, proposal, transaction, signerAddress, index)
       : await this._buildVaultExecuteInstruction(multisig, proposal, transaction, signerAddress)
 
@@ -759,7 +759,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /**
    * Disposes the wallet account, erasing the private key from the memory.
    *
-   * @returns {void}
+   * @returns {void} Nothing; the account cannot sign once disposed.
    */
   dispose () {
     this._signerAccount.dispose()
@@ -1184,7 +1184,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
   /** @private */
   async _buildVaultExecuteInstruction (multisig, proposal, transaction, signerAddress) {
-    if (transaction.kind !== TRANSACTION_KIND_VAULT) {
+    if (transaction.kind !== TRANSACTION_KIND.vault) {
       throw new NotImplementedError(
         `executeProposal(proposalId) for a ${transaction.kind ?? 'transaction of an unrecognized kind'}`
       )

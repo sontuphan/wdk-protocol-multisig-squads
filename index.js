@@ -46,6 +46,7 @@
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsProposalAccount} SquadsProposalAccount */
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsAddressTableLookup} SquadsAddressTableLookup */
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsTransactionMessage} SquadsTransactionMessage */
+/** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsTransactionKind} SquadsTransactionKind */
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsConfigActionKind} SquadsConfigActionKind */
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsConfigAction} SquadsConfigAction */
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsTransactionAccount} SquadsTransactionAccount */
@@ -58,7 +59,7 @@
 
 export { default } from './src/wallet-manager-multisig-solana-squads.js'
 
-export { default as WalletAccountReadOnlyMultisigSolanaSquads, SQUADS_PROGRAM_ADDRESS } from './src/wallet-account-read-only-multisig-solana-squads.js'
+export { default as WalletAccountReadOnlyMultisigSolanaSquads, SQUADS_PROGRAM_ADDRESS, TRANSACTION_KIND } from './src/wallet-account-read-only-multisig-solana-squads.js'
 
 export { default as WalletAccountMultisigSolanaSquads } from './src/wallet-account-multisig-solana-squads.js'
 
