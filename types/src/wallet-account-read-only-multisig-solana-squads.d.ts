@@ -257,7 +257,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Returns the address of one of the multisig's vaults, where its funds are held.
      *
-     * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX_VAULT_INDEX`, or a vault address to use as given (default: 0).
+     * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to use as given (default: 0).
      * @returns {Promise<string>} The vault address.
      * @throws {Error} If the index is out of range, or the address is not valid base58.
      */
@@ -265,7 +265,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Returns the native SOL balance of one of the multisig's vaults.
      *
-     * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX_VAULT_INDEX`, or a vault address to read as given (default: 0).
+     * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to read as given (default: 0).
      * @returns {Promise<bigint>} The balance in lamports.
      * @throws {Error} If the vault cannot be resolved, or if the RPC request fails.
      */
@@ -274,7 +274,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * Returns the balance of an SPL token held by one of the multisig's vaults.
      *
      * @param {string} tokenAddress - The SPL token mint address.
-     * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX_VAULT_INDEX`, or a vault address to read as given (default: 0).
+     * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to read as given (default: 0).
      * @returns {Promise<bigint>} The token balance (in base unit).
      * @throws {Error} If the mint address is malformed, or if the RPC request fails. @todo Support Token-2022 (Token Extensions Program).
      */
@@ -419,7 +419,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @protected
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @returns {bigint} The transaction index.
-     * @throws {Error} If the id is not an integer between 0 and `MAX_PROPOSAL_INDEX`.
+     * @throws {Error} If the id is not an integer between 0 and `MAX.proposalIndex`.
      */
     protected _toProposalIndex(proposalId: number | bigint | string): bigint;
     /**

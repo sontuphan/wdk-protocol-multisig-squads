@@ -30,9 +30,7 @@ import { NotSupportedError } from './errors.js'
 
 /** @typedef {import('./wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsConfig} SolanaMultisigSquadsConfig */
 
-const FEE_RATE_NORMAL_MULTIPLIER = 110n
-
-const FEE_RATE_FAST_MULTIPLIER = 200n
+const FEE_RATE_MULTIPLIER = { normal: 110n, fast: 200n }
 
 const DEFAULT_BASE_FEE = 5_000n
 
@@ -145,8 +143,8 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
         : DEFAULT_BASE_FEE
 
     return {
-      normal: (fee * FEE_RATE_NORMAL_MULTIPLIER) / 100n,
-      fast: (fee * FEE_RATE_FAST_MULTIPLIER) / 100n
+      normal: (fee * FEE_RATE_MULTIPLIER.normal) / 100n,
+      fast: (fee * FEE_RATE_MULTIPLIER.fast) / 100n
     }
   }
 }
