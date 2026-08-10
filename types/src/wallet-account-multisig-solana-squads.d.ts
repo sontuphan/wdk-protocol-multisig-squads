@@ -3,8 +3,9 @@
  * Provides full transaction and message signing operations.
  *
  * @implements {IWalletAccountMultisig}
+ * @implements {IMultisigOwnerManagement}
  */
-export default class WalletAccountMultisigSolanaSquads extends WalletAccountReadOnlyMultisigSolanaSquads implements IWalletAccountMultisig {
+export default class WalletAccountMultisigSolanaSquads extends WalletAccountReadOnlyMultisigSolanaSquads implements IWalletAccountMultisig, IMultisigOwnerManagement {
     /**
      * Creates a new Solana Squads multisig wallet account.
      *
@@ -39,6 +40,15 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     get keyPair(): import("@tetherto/wdk-wallet").KeyPair;
     /**
+     * Returns the address of the signer this account votes and proposes as.
+     *
+     * This is **not** {@link getAddress}, which returns the multisig's own address: the signer
+     * is one of the multisig's members, and every signature this account produces is theirs.
+     *
+     * @returns {Promise<string>} The signer's address.
+     */
+    getSignerAddress(): Promise<string>;
+    /**
      * Signs a message with the signer account.
      *
      * @param {string | Uint8Array} message - The message to sign.
@@ -53,16 +63,16 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * addresses with no private key. Members can approve a message on-chain by wrapping
      * it in a vault transaction, but that yields proof of approval rather than a
      * signature — and the resulting proposal is addressed by transaction index, not by
-     * message hash, so {@link approveMessage} could not find it again.
+     * message hash, so {@link approveMessageProposal} could not find it again.
      *
      * Use {@link sign} to sign a message with this account's own signer key, which proves
      * one member's consent rather than the multisig's.
      *
      * @param {string | Uint8Array} message - The message to propose.
-     * @returns {Promise<MultisigMessageProposal>} The message proposal.
+     * @returns {Promise<MultisigMessageProposal & MultisigSignature>} The message proposal.
      * @throws {NotSupportedError} Always, for the reasons above.
      */
-    proposeMessage(message: string | Uint8Array): Promise<MultisigMessageProposal>;
+    proposeMessage(message: string | Uint8Array): Promise<MultisigMessageProposal & MultisigSignature>;
     /**
      * Approves a pending message proposal.
      *
@@ -70,19 +80,18 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * message-signing primitive, and a message hash cannot be resolved to a Squads
      * account, which are keyed by sequential transaction index.
      *
-     * @param {string} messageHash - The hash of the proposed message.
-     * @returns {Promise<MultisigMessageProposal>} The updated message proposal.
+     * @param {string} messageId - The hash of the proposed message.
+     * @returns {Promise<MultisigMessageProposal & MultisigSignature>} The updated message proposal.
      * @throws {NotSupportedError} Always, for the reasons above.
      */
-    approveMessage(messageHash: string): Promise<MultisigMessageProposal>;
+    approveMessageProposal(messageId: string): Promise<MultisigMessageProposal & MultisigSignature>;
     /**
      * Validates that the signer is a member of the multisig.
      *
      * Checks membership only — not the permission a given operation requires.
      *
      * @returns {Promise<void>}
-     * @throws {Error} If there is no signer, the multisig does not exist, or the signer is
-     *   not one of its members.
+     * @throws {Error} If the multisig does not exist, or the signer is not one of its members.
      */
     validateSignerIsOwner(): Promise<void>;
     /**
@@ -115,42 +124,42 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * first, that index is taken and this call fails; the error is surfaced rather than
      * retried, because retrying would sign and send a second transaction.
      *
-     * @param {SolanaTransaction} tx - The transaction to propose.
-     * @param {MultisigTransactionOptions} [options] - The send options.
-     * @returns {Promise<MultisigTransactionResult>} The proposal result.
      * Setting `autoExecute` approves and executes the proposal in the same transaction, but
      * only where that can work: a threshold of 1, no time lock, and a signer holding all three
      * permissions. Where it cannot, the flag is ignored and the result is an ordinary proposal
-     * — read `executed` rather than assuming it applied.
+     * — read `status` rather than assuming it applied.
      *
+     * @param {SolanaTransaction} tx - The transaction to propose.
+     * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options.
+     * @returns {Promise<SolanaMultisigProposalResult>} The proposal result.
      * @throws {Error} If the multisig does not exist, the signer cannot propose, or the RPC
      *   request fails.
      * @todo Support transaction messages beyond a native transfer.
      */
-    sendTransaction(tx: SolanaTransaction, options?: MultisigTransactionOptions): Promise<MultisigTransactionResult>;
+    propose(tx: SolanaTransaction, transactionOptions?: MultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
     /**
      * Proposes an SPL token transfer to the multisig.
      *
-     * Native SOL transfers go through {@link sendTransaction} instead. Token-2022 mints are
+     * Native SOL transfers go through {@link propose} instead. Token-2022 mints are
      * refused rather than transferred to an address this package cannot derive.
      *
      * Creating the recipient's token account, when it has none, is paid for by the vault at
      * execution rather than by the proposer — so a vault holding enough tokens but too little
      * SOL will propose and collect approvals, then fail to execute.
      *
-     * @param {TransferOptions} transferOptions - The transfer options.
-     * @param {MultisigTransactionOptions} [options] - The send options.
-     * @returns {Promise<MultisigTransactionResult>} The transfer proposal result.
-     * @throws {Error} If the mint or recipient is malformed, the mint does not exist, the
-     *   signer cannot propose, or the quote exceeds `transferMaxFee`.
      * Setting `autoExecute` approves and executes the proposal in the same transaction where
-     * that can work — see {@link sendTransaction}. A transfer that would fail at execution then
+     * that can work — see {@link propose}. A transfer that would fail at execution then
      * fails outright, leaving no proposal behind rather than an unexecutable one.
      *
+     * @param {TransferOptions} transferOptions - The transfer options.
+     * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options.
+     * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result.
+     * @throws {Error} If the mint or recipient is malformed, the mint does not exist, the
+     *   signer cannot propose, or the quote exceeds `transferMaxFee`.
      * @throws {NotSupportedError} If the mint belongs to the Token-2022 program.
      * @todo Support Token-2022 (Token Extensions Program).
      */
-    transfer(transferOptions: TransferOptions, options?: MultisigTransactionOptions): Promise<MultisigTransactionResult>;
+    transfer(transferOptions: TransferOptions, transactionOptions?: MultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
     /**
      * Approves a pending transaction proposal.
      *
@@ -158,18 +167,20 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * member can change their vote. Approving twice is refused.
      *
      * The returned `confirmations` reaching the threshold means the proposal has just become
-     * approved, not that it ran — execution is a separate step, so `executed` is always
-     * `false`.
+     * approved, not that it ran — Squads cannot execute on another member's approval, so
+     * `status` is always `'pending'` and `transaction` is never set. Execution is a separate
+     * step, via {@link executeProposal}.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @param {string} [memo] - An optional note recorded on chain with the vote. It costs
      *   rent, and an empty string is stored as a present-but-empty memo rather than none.
-     * @returns {Promise<MultisigTransactionResult>} The approval result.
-     * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the
-     *   signer cannot vote, the proposal is not open for voting, the signer has already
-     *   approved it, or the RPC request fails.
+     * @returns {Promise<SolanaMultisigProposalResult>} The approval result.
+     * @throws {NoSuchElementError} If no proposal exists at that id.
+     * @throws {Error} If the id is invalid, the multisig does not exist, the signer cannot
+     *   vote, the proposal is not open for voting, the signer has already approved it, or the
+     *   RPC request fails.
      */
-    approveTx(proposalId: number | bigint | string, memo?: string): Promise<MultisigTransactionResult>;
+    approveProposal(proposalId: number | bigint | string, memo?: string): Promise<SolanaMultisigProposalResult>;
     /**
      * Rejects a pending transaction proposal.
      *
@@ -181,17 +192,19 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *
      * Squads ends a proposal once enough members have rejected that the threshold can no longer
      * be reached, which in a multisig requiring unanimity is a single rejection. This does not
-     * report whether that happened — use {@link getProposals} for the resulting status.
+     * report whether that happened — a rejected proposal is still `'pending'`, since it has
+     * not executed. Use {@link getProposal} for the resulting `statusName`.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @param {string} [memo] - An optional note recorded on chain with the vote. It costs
      *   rent, and an empty string is stored as a present-but-empty memo rather than none.
-     * @returns {Promise<MultisigTransactionResult>} The rejection result.
-     * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the
-     *   signer cannot vote, the proposal is not open for voting, the signer has already
-     *   rejected it, or the RPC request fails.
+     * @returns {Promise<SolanaMultisigProposalResult>} The rejection result.
+     * @throws {NoSuchElementError} If no proposal exists at that id.
+     * @throws {Error} If the id is invalid, the multisig does not exist, the signer cannot
+     *   vote, the proposal is not open for voting, the signer has already rejected it, or the
+     *   RPC request fails.
      */
-    rejectTx(proposalId: number | bigint | string, memo?: string): Promise<MultisigTransactionResult>;
+    rejectProposal(proposalId: number | bigint | string, memo?: string): Promise<SolanaMultisigProposalResult>;
     /**
      * Submits an approved proposal for on-chain execution.
      *
@@ -202,23 +215,25 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * vote methods return, matching the interface.
      *
      * Rent is not reclaimed: the transaction and proposal accounts survive execution and keep
-     * holding what {@link quoteSendTransaction} quoted.
+     * holding what {@link quotePropose} quoted.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @returns {Promise<TransactionResult>} The execution transaction's result.
-     * @throws {Error} If the id is invalid, the multisig or proposal does not exist, the signer
-     *   cannot execute, the proposal is not approved, its time lock has not elapsed, a config
-     *   proposal has been invalidated, or the RPC request fails.
+     * @throws {NoSuchElementError} If no proposal exists at that id.
+     * @throws {ValueError} If the proposal has not reached the approval threshold.
+     * @throws {Error} If the id is invalid, the multisig does not exist, the signer cannot
+     *   execute, its time lock has not elapsed, a config proposal has been invalidated, or the
+     *   RPC request fails.
      * @throws {NotImplementedError} If the proposal backs a batch. Batches are a deliberate
      *   scope decision rather than pending work: a batch executes one inner transaction per
      *   call, so it does not fit a method whose result is a single transaction.
      */
-    executeTx(proposalId: number | bigint | string): Promise<TransactionResult>;
+    executeProposal(proposalId: number | bigint | string): Promise<TransactionResult>;
     /**
      * Proposes adding a new member to the multisig.
      *
      * **This does not add the member.** It creates a proposal; the member set changes only once
-     * enough owners approve it and one of them calls {@link executeTx}.
+     * enough owners approve it and one of them calls {@link executeProposal}.
      *
      * The new member is given full permissions, matching {@link deploy}. Pass
      * `options.threshold` to change the approval threshold in the same proposal — doing it as a
@@ -231,18 +246,18 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *
      * @param {string} ownerAddress - The address of the member to add.
      * @param {MultisigOptions} [options] - The operation options.
-     * @returns {Promise<MultisigTransactionResult>} The proposal result.
+     * @returns {Promise<SolanaMultisigProposalResult>} The proposal result.
      * @throws {Error} If the address is malformed or already a member, the threshold is out of
      *   range, the multisig does not exist or is controlled by a configuration authority, the
      *   signer cannot propose, or the RPC request fails.
      * @todo Let the caller choose the new member's permissions.
      */
-    addOwner(ownerAddress: string, options?: MultisigOptions): Promise<MultisigTransactionResult>;
+    addOwner(ownerAddress: string, options?: MultisigOptions): Promise<SolanaMultisigProposalResult>;
     /**
      * Proposes removing a member from the multisig.
      *
      * **This does not remove the member.** It creates a proposal; the member set changes only
-     * once enough owners approve it and one of them calls {@link executeTx}.
+     * once enough owners approve it and one of them calls {@link executeProposal}.
      *
      * A multisig whose threshold equals its number of voting members — the majority of them —
      * cannot remove a voter without lowering the threshold too, since the result would need more
@@ -257,18 +272,18 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *
      * @param {string} ownerAddress - The address of the member to remove.
      * @param {MultisigOptions} [options] - The operation options.
-     * @returns {Promise<MultisigTransactionResult>} The proposal result.
+     * @returns {Promise<SolanaMultisigProposalResult>} The proposal result.
      * @throws {Error} If the address is malformed or not a member, the removal would leave the
      *   multisig with no members or nobody able to vote, propose or execute, the threshold would
      *   exceed the remaining voters, the multisig does not exist or is controlled by a
      *   configuration authority, the signer cannot propose, or the RPC request fails.
      */
-    removeOwner(ownerAddress: string, options?: MultisigOptions): Promise<MultisigTransactionResult>;
+    removeOwner(ownerAddress: string, options?: MultisigOptions): Promise<SolanaMultisigProposalResult>;
     /**
      * Proposes swapping one member for another.
      *
      * **This does not swap the member.** It creates a proposal; the member set changes only once
-     * enough owners approve it and one of them calls {@link executeTx}.
+     * enough owners approve it and one of them calls {@link executeProposal}.
      *
      * The replacement **inherits the permissions of the member it replaces**, so the swap leaves
      * the multisig's voting power unchanged. This differs from {@link addOwner}, which grants
@@ -282,18 +297,18 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {string} oldOwnerAddress - The address of the member to replace.
      * @param {string} newOwnerAddress - The address of the new member.
      * @param {MultisigOptions} [options] - The operation options.
-     * @returns {Promise<MultisigTransactionResult>} The proposal result.
+     * @returns {Promise<SolanaMultisigProposalResult>} The proposal result.
      * @throws {Error} If either address is malformed, they are equal, the old address is not a
      *   member, the new one already is, the threshold would exceed the resulting voters, the
      *   multisig does not exist or is controlled by a configuration authority, the signer cannot
      *   propose, or the RPC request fails.
      */
-    swapOwner(oldOwnerAddress: string, newOwnerAddress: string, options?: MultisigOptions): Promise<MultisigTransactionResult>;
+    swapOwner(oldOwnerAddress: string, newOwnerAddress: string, options?: MultisigOptions): Promise<SolanaMultisigProposalResult>;
     /**
      * Proposes changing the approval threshold of the multisig.
      *
      * **This does not change the threshold.** It creates a proposal; the threshold changes only
-     * once enough owners approve it and one of them calls {@link executeTx}.
+     * once enough owners approve it and one of them calls {@link executeProposal}.
      *
      * The ceiling is the number of owners able to **vote**, not the number of owners — read
      * `masks` from {@link getMultisigInfo} to count them.
@@ -306,12 +321,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * afterwards requires lowering the threshold in the same operation.
      *
      * @param {number} newThreshold - The new threshold.
-     * @returns {Promise<MultisigTransactionResult>} The proposal result.
+     * @returns {Promise<SolanaMultisigProposalResult>} The proposal result.
      * @throws {Error} If the threshold is not an integer between 1 and the number of owners able
      *   to vote, is the threshold already in force, the multisig does not exist or is controlled
      *   by a configuration authority, the signer cannot propose, or the RPC request fails.
      */
-    changeThreshold(newThreshold: number): Promise<MultisigTransactionResult>;
+    changeThreshold(newThreshold: number): Promise<SolanaMultisigProposalResult>;
     /**
      * Returns a read-only view of this account.
      *
@@ -488,10 +503,22 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     private _encodeMultisigCreateV2Data;
 }
 export type IWalletAccountMultisig = import("@tetherto/wdk-wallet/multisig").IWalletAccountMultisig;
-export type MultisigTransactionResult = import("@tetherto/wdk-wallet/multisig").MultisigTransactionResult;
+export type IMultisigOwnerManagement = import("@tetherto/wdk-wallet/multisig").IMultisigOwnerManagement;
+export type MultisigAutoExecuteResult = import("@tetherto/wdk-wallet/multisig").MultisigAutoExecuteResult;
+export type MultisigProposal = import("@tetherto/wdk-wallet/multisig").MultisigProposal;
+/**
+ * `MultisigProposal` widened with the signature and fee of the transaction that carried the
+ * call. The interface's `transaction` reports an auto-execution and is absent without one,
+ * so `hash` is the only handle on a proposal or a vote that did not execute.
+ */
+export type SolanaMultisigProposalResult = MultisigProposal & MultisigAutoExecuteResult & {
+    hash: string;
+    fee: bigint;
+};
 export type MultisigTransactionOptions = import("@tetherto/wdk-wallet/multisig").MultisigTransactionOptions;
 export type MultisigOptions = import("@tetherto/wdk-wallet/multisig").MultisigOptions;
 export type MultisigMessageProposal = import("@tetherto/wdk-wallet/multisig").MultisigMessageProposal;
+export type MultisigSignature = import("@tetherto/wdk-wallet/multisig").MultisigSignature;
 export type TransactionResult = import("@tetherto/wdk-wallet").TransactionResult;
 export type TransferOptions = import("@tetherto/wdk-wallet").TransferOptions;
 export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;

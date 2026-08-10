@@ -14,7 +14,7 @@
 
 'use strict'
 
-import { WalletAccountReadOnly } from '@tetherto/wdk-wallet'
+import { NoSuchElementError, WalletAccountReadOnly } from '@tetherto/wdk-wallet'
 
 import FailoverProvider from '@tetherto/wdk-failover-provider'
 
@@ -43,13 +43,15 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
  *   `owners`. The interface pins `owners` to `string[]`, so the masks travel alongside rather
  *   than inside it, and as bare numbers rather than repeating the addresses.
  */
-/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessage} MultisigMessage */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessageProposal} MultisigMessageProposal */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
- * @typedef {MultisigProposal & { status: string, approved: string[], rejected: string[], cancelled: string[] }} SolanaMultisigProposal
- *   `MultisigProposal` widened with the proposal's Squads status and its vote lists. Without
- *   `status` a caller cannot tell an approved proposal from an executed or rejected one.
+ * @typedef {MultisigProposal & { statusName: string, approved: string[], rejected: string[], cancelled: string[] }} SolanaMultisigProposal
+ *   `MultisigProposal` widened with the proposal's Squads status and its vote lists. The
+ *   interface's `status` collapses to `'pending'` or `'executed'`, so without `statusName` a
+ *   caller cannot tell an approved proposal from a rejected or cancelled one.
  */
+/** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
 
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
@@ -126,6 +128,7 @@ const PROPOSAL_STATUS_OFFSET = 48
 const PROPOSAL_STATUS_TIMESTAMP_OFFSET = 49
 const PROPOSAL_STATUS_APPROVED = 3
 const PROPOSAL_STATUS_EXECUTING = 4
+const PROPOSAL_STATUS_EXECUTED = 5
 const PROPOSAL_STATUS_NAMES = [
   'Draft',
   'Active',
@@ -264,15 +267,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     this._rpc = Array.isArray(provider)
       ? this._createFailoverRpc(provider, retries)
       : createSolanaRpc(provider)
-  }
-
-  /**
-   * Returns the signer's address.
-   *
-   * @returns {Promise<string | null>} The signer's address.
-   */
-  async getSignerAddress () {
-    return this._signerAddress
   }
 
   /**
@@ -628,27 +622,30 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the proposals at the given ids, in the same order.
+   * Returns the proposals at the given ids, keyed by id.
    *
-   * A proposal's id is its transaction index. Entries are `null` where no proposal
-   * exists at that id, so the result stays positionally aligned with the input.
+   * A proposal's id is its transaction index. Keys are the ids in canonical decimal form,
+   * so an id passed as `5`, `5n` or `'005'` is keyed as `'5'`. Values are `null` where no
+   * proposal exists at that id.
    *
    * Note that `confirmations >= threshold` does **not** mean a proposal can be
    * executed: it must also be in the approved status, not invalidated by a later
    * configuration change, and past any time lock. Use {@link isReadyToExecute}.
    *
-   * `status` is the Squads status name — `Draft`, `Active`, `Rejected`, `Approved`,
-   * `Executing`, `Executed` or `Cancelled` — and `approved`, `rejected` and `cancelled` list
-   * the members who cast each kind of vote. `confirmations` is `approved.length`.
+   * `status` is `'executed'` once the proposal has run on-chain and `'pending'` otherwise,
+   * which cannot distinguish a rejected proposal from one still collecting votes — read
+   * `statusName` for the Squads status: `Draft`, `Active`, `Rejected`, `Approved`,
+   * `Executing`, `Executed` or `Cancelled`. `approved`, `rejected` and `cancelled` list
+   * the members who cast each kind of vote, and `confirmations` is `approved.length`.
    *
    * @param {Array<number | bigint | string>} proposalIds - The proposal (transaction index) ids.
-   * @returns {Promise<Array<SolanaMultisigProposal | null>>} For each id, the proposal, or
-   *   null if no proposal exists at that id.
+   * @returns {Promise<Record<string, SolanaMultisigProposal | null>>} For each id, the
+   *   proposal, or null if no proposal exists at that id.
    * @throws {Error} If an id is not a non-negative integer, or if the RPC request fails.
    */
   async getProposals (proposalIds) {
     if (!proposalIds.length) {
-      return []
+      return {}
     }
 
     const { address: multisigPda, threshold, isCreated } = await this.getMultisigInfo()
@@ -664,7 +661,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       indices.map((index) => this._getProposalPda(multisigPda, index))
     )
 
-    const proposals = []
+    const proposals = {}
 
     for (let offset = 0; offset < proposalPdas.length; offset += MAX_MULTIPLE_ACCOUNTS) {
       const { value } = await this._rpc
@@ -675,13 +672,30 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
         .send()
 
       value.forEach((account, i) => {
-        proposals.push(
-          this._toProposal(proposalPdas[offset + i], account, indices[offset + i], threshold)
-        )
+        const index = indices[offset + i]
+
+        proposals[index.toString()] =
+          this._toProposal(proposalPdas[offset + i], account, index, threshold)
       })
     }
 
     return proposals
+  }
+
+  /**
+   * Returns the proposal at the given id, or `null` if none exists there.
+   *
+   * A single-id {@link getProposals}, which documents the fields of the result.
+   *
+   * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
+   * @returns {Promise<SolanaMultisigProposal | null>} The proposal, or null if no proposal
+   *   exists at that id.
+   * @throws {Error} If the id is not a non-negative integer, or if the RPC request fails.
+   */
+  async getProposal (proposalId) {
+    const proposals = await this.getProposals([proposalId])
+
+    return proposals[this._toProposalIndex(proposalId).toString()]
   }
 
   /**
@@ -770,14 +784,31 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * rather than a signature, and Squads keys its accounts by sequential transaction
    * index rather than by message hash, so a hash cannot be resolved to an account.
    *
-   * @param {string[]} messageHashes - The message hashes.
-   * @returns {Promise<Array<MultisigMessage | null>>} For each hash, the message proposal,
-   *   or null if it has not been found.
+   * @param {string[]} messageIds - The message hashes.
+   * @returns {Promise<Record<string, MultisigMessageProposal | null>>} For each hash, the
+   *   message proposal, or null if it has not been found.
    * @throws {NotSupportedError} Always, for the reasons above.
    */
-  async getMessages (messageHashes) {
+  async getMessageProposals (messageIds) {
     throw new NotSupportedError(
-      'getMessages(messageHashes)',
+      'getMessageProposals(messageIds)',
+      'Squads has no message-signing primitive, and its accounts are keyed by sequential transaction index rather than by message hash'
+    )
+  }
+
+  /**
+   * Returns the signed-message proposal for the given message hash.
+   *
+   * **Not supported, and not pending work.** See {@link getMessageProposals}.
+   *
+   * @param {string} messageId - The message's hash.
+   * @returns {Promise<MultisigMessageProposal | null>} The message proposal, or null if it
+   *   has not been found.
+   * @throws {NotSupportedError} Always, for the reasons above.
+   */
+  async getMessageProposal (messageId) {
+    throw new NotSupportedError(
+      'getMessageProposal(messageId)',
       'Squads has no message-signing primitive, and its accounts are keyed by sequential transaction index rather than by message hash'
     )
   }
@@ -840,7 +871,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If the multisig does not exist, the transaction is malformed, or the
    *   RPC request fails.
    */
-  async quoteSendTransaction (tx, config) {
+  async quotePropose (tx, config) {
     const account = this._withConfig(config)
     const { address: multisigPda, owners, isCreated } = await account.getMultisigInfo()
 
@@ -907,6 +938,38 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     ])
 
     return { fee: transactionRent + proposalRent + SIGNATURE_BASE_FEE }
+  }
+
+  /**
+   * Quotes the cost of executing a pending proposal.
+   *
+   * This is what the **executor** is debited: the base fee for the single signature the
+   * execution transaction carries. Squads creates no account at execution, and the rent it
+   * already holds for the proposal and transaction accounts is not spent again — nor is it
+   * reclaimed, since neither account is closed.
+   *
+   * Two costs the executor may still pay are excluded, because neither is decidable from
+   * the proposal alone: priority fees, which the sender chooses, and the rent for an
+   * account the wrapped instructions create, such as a spending limit added by a
+   * configuration proposal. A transfer's recipient token account is paid for by the vault
+   * rather than the executor, so it is excluded on both counts.
+   *
+   * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
+   * @returns {Promise<Omit<TransactionResult, 'hash'>>} The execution quote, in lamports.
+   * @throws {NoSuchElementError} If no proposal exists at that id.
+   * @throws {Error} If the id is invalid, no address is configured, or the RPC request fails.
+   */
+  async quoteExecuteProposal (proposalId) {
+    const index = this._toProposalIndex(proposalId)
+    const { multisig, proposal } = await this._getMultisigAndProposal(index)
+
+    if (!proposal.exists) {
+      throw new NoSuchElementError(
+        `The multisig ${multisig.address} has no proposal at index ${index}.`
+      )
+    }
+
+    return { fee: SIGNATURE_BASE_FEE }
   }
 
   /**
@@ -1559,7 +1622,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       proposalId: index.toString(),
       confirmations: proposal.approved.length,
       threshold,
-      status: proposal.statusName,
+      status: proposal.status === PROPOSAL_STATUS_EXECUTED ? 'executed' : 'pending',
+      statusName: proposal.statusName,
       approved: proposal.approved,
       rejected: proposal.rejected,
       cancelled: proposal.cancelled

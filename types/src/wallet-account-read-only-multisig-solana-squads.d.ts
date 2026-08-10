@@ -9,13 +9,15 @@
  *   `owners`. The interface pins `owners` to `string[]`, so the masks travel alongside rather
  *   than inside it, and as bare numbers rather than repeating the addresses.
  */
-/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessage} MultisigMessage */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessageProposal} MultisigMessageProposal */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
- * @typedef {MultisigProposal & { status: string, approved: string[], rejected: string[], cancelled: string[] }} SolanaMultisigProposal
- *   `MultisigProposal` widened with the proposal's Squads status and its vote lists. Without
- *   `status` a caller cannot tell an approved proposal from an executed or rejected one.
+ * @typedef {MultisigProposal & { statusName: string, approved: string[], rejected: string[], cancelled: string[] }} SolanaMultisigProposal
+ *   `MultisigProposal` widened with the proposal's Squads status and its vote lists. The
+ *   interface's `status` collapses to `'pending'` or `'executed'`, so without `statusName` a
+ *   caller cannot tell an approved proposal from a rejected or cancelled one.
  */
+/** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
 /**
@@ -104,12 +106,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @type {SolanaRpc}
      */
     protected _rpc: SolanaRpc;
-    /**
-     * Returns the signer's address.
-     *
-     * @returns {Promise<string | null>} The signer's address.
-     */
-    getSignerAddress(): Promise<string | null>;
     /**
      * Returns whether the multisig account exists on-chain.
      *
@@ -267,25 +263,39 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     verify(message: string | Uint8Array, signature: string | Uint8Array): Promise<boolean>;
     /**
-     * Returns the proposals at the given ids, in the same order.
+     * Returns the proposals at the given ids, keyed by id.
      *
-     * A proposal's id is its transaction index. Entries are `null` where no proposal
-     * exists at that id, so the result stays positionally aligned with the input.
+     * A proposal's id is its transaction index. Keys are the ids in canonical decimal form,
+     * so an id passed as `5`, `5n` or `'005'` is keyed as `'5'`. Values are `null` where no
+     * proposal exists at that id.
      *
      * Note that `confirmations >= threshold` does **not** mean a proposal can be
      * executed: it must also be in the approved status, not invalidated by a later
      * configuration change, and past any time lock. Use {@link isReadyToExecute}.
      *
-     * `status` is the Squads status name — `Draft`, `Active`, `Rejected`, `Approved`,
-     * `Executing`, `Executed` or `Cancelled` — and `approved`, `rejected` and `cancelled` list
-     * the members who cast each kind of vote. `confirmations` is `approved.length`.
+     * `status` is `'executed'` once the proposal has run on-chain and `'pending'` otherwise,
+     * which cannot distinguish a rejected proposal from one still collecting votes — read
+     * `statusName` for the Squads status: `Draft`, `Active`, `Rejected`, `Approved`,
+     * `Executing`, `Executed` or `Cancelled`. `approved`, `rejected` and `cancelled` list
+     * the members who cast each kind of vote, and `confirmations` is `approved.length`.
      *
      * @param {Array<number | bigint | string>} proposalIds - The proposal (transaction index) ids.
-     * @returns {Promise<Array<SolanaMultisigProposal | null>>} For each id, the proposal, or
-     *   null if no proposal exists at that id.
+     * @returns {Promise<Record<string, SolanaMultisigProposal | null>>} For each id, the
+     *   proposal, or null if no proposal exists at that id.
      * @throws {Error} If an id is not a non-negative integer, or if the RPC request fails.
      */
-    getProposals(proposalIds: Array<number | bigint | string>): Promise<Array<SolanaMultisigProposal | null>>;
+    getProposals(proposalIds: Array<number | bigint | string>): Promise<Record<string, SolanaMultisigProposal | null>>;
+    /**
+     * Returns the proposal at the given id, or `null` if none exists there.
+     *
+     * A single-id {@link getProposals}, which documents the fields of the result.
+     *
+     * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
+     * @returns {Promise<SolanaMultisigProposal | null>} The proposal, or null if no proposal
+     *   exists at that id.
+     * @throws {Error} If the id is not a non-negative integer, or if the RPC request fails.
+     */
+    getProposal(proposalId: number | bigint | string): Promise<SolanaMultisigProposal | null>;
     /**
      * Returns whether a proposal can be executed right now.
      *
@@ -314,12 +324,23 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * rather than a signature, and Squads keys its accounts by sequential transaction
      * index rather than by message hash, so a hash cannot be resolved to an account.
      *
-     * @param {string[]} messageHashes - The message hashes.
-     * @returns {Promise<Array<MultisigMessage | null>>} For each hash, the message proposal,
-     *   or null if it has not been found.
+     * @param {string[]} messageIds - The message hashes.
+     * @returns {Promise<Record<string, MultisigMessageProposal | null>>} For each hash, the
+     *   message proposal, or null if it has not been found.
      * @throws {NotSupportedError} Always, for the reasons above.
      */
-    getMessages(messageHashes: string[]): Promise<Array<MultisigMessage | null>>;
+    getMessageProposals(messageIds: string[]): Promise<Record<string, MultisigMessageProposal | null>>;
+    /**
+     * Returns the signed-message proposal for the given message hash.
+     *
+     * **Not supported, and not pending work.** See {@link getMessageProposals}.
+     *
+     * @param {string} messageId - The message's hash.
+     * @returns {Promise<MultisigMessageProposal | null>} The message proposal, or null if it
+     *   has not been found.
+     * @throws {NotSupportedError} Always, for the reasons above.
+     */
+    getMessageProposal(messageId: string): Promise<MultisigMessageProposal | null>;
     /**
      * Quotes the cost of deploying (creating) the multisig.
      *
@@ -362,7 +383,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @throws {Error} If the multisig does not exist, the transaction is malformed, or the
      *   RPC request fails.
      */
-    quoteSendTransaction(tx: SolanaTransaction, config?: SolanaMultisigSquadsConfig): Promise<{
+    quotePropose(tx: SolanaTransaction, config?: SolanaMultisigSquadsConfig): Promise<{
         fee: bigint;
     }>;
     /**
@@ -390,6 +411,26 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     quoteTransfer(transferOptions: import("@tetherto/wdk-wallet").TransferOptions, config?: SolanaMultisigSquadsConfig): Promise<{
         fee: bigint;
     }>;
+    /**
+     * Quotes the cost of executing a pending proposal.
+     *
+     * This is what the **executor** is debited: the base fee for the single signature the
+     * execution transaction carries. Squads creates no account at execution, and the rent it
+     * already holds for the proposal and transaction accounts is not spent again — nor is it
+     * reclaimed, since neither account is closed.
+     *
+     * Two costs the executor may still pay are excluded, because neither is decidable from
+     * the proposal alone: priority fees, which the sender chooses, and the rent for an
+     * account the wrapped instructions create, such as a spending limit added by a
+     * configuration proposal. A transfer's recipient token account is paid for by the vault
+     * rather than the executor, so it is excluded on both counts.
+     *
+     * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
+     * @returns {Promise<Omit<TransactionResult, 'hash'>>} The execution quote, in lamports.
+     * @throws {NoSuchElementError} If no proposal exists at that id.
+     * @throws {Error} If the id is invalid, no address is configured, or the RPC request fails.
+     */
+    quoteExecuteProposal(proposalId: number | bigint | string): Promise<Omit<TransactionResult, "hash">>;
     /**
      * Reads and decodes the multisig account, keeping every field it holds.
      *
@@ -544,18 +585,20 @@ export type MultisigInfo = import("@tetherto/wdk-wallet/multisig").MultisigInfo;
 export type SolanaMultisigInfo = MultisigInfo & {
     masks: number[];
 };
-export type MultisigMessage = import("@tetherto/wdk-wallet/multisig").MultisigMessage;
+export type MultisigMessageProposal = import("@tetherto/wdk-wallet/multisig").MultisigMessageProposal;
 export type MultisigProposal = import("@tetherto/wdk-wallet/multisig").MultisigProposal;
 /**
- * `MultisigProposal` widened with the proposal's Squads status and its vote lists. Without
- * `status` a caller cannot tell an approved proposal from an executed or rejected one.
+ * `MultisigProposal` widened with the proposal's Squads status and its vote lists. The
+ * interface's `status` collapses to `'pending'` or `'executed'`, so without `statusName` a
+ * caller cannot tell an approved proposal from a rejected or cancelled one.
  */
 export type SolanaMultisigProposal = MultisigProposal & {
-    status: string;
+    statusName: string;
     approved: string[];
     rejected: string[];
     cancelled: string[];
 };
+export type TransactionResult = import("@tetherto/wdk-wallet").TransactionResult;
 export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
 export type SolanaTransactionReceipt = import("@tetherto/wdk-wallet-solana").SolanaTransactionReceipt;
 export type SolanaMultisigSquadsCommonConfig = {

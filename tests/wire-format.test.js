@@ -77,7 +77,7 @@ describe('wire format', () => {
   })
 
   describe('spending limit address', () => {
-    // executeTx derives this to pass through as a remaining account, so a wrong seed fails
+    // executeProposal derives this to pass through as a remaining account, so a wrong seed fails
     // only on chain. The SDK is the oracle.
     it.each([
       ['11111111111111111111111111111111', '2JvLzXomThTBMSj2YQY3wE21kiaSpwGyJ17nm9xiLMsE'],
