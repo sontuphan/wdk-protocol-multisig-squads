@@ -90,8 +90,7 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
    * @example
    * // Returns the account with derivation path m/44'/501'/1'/0'
    * const account = await wallet.getAccount(1);
-   * @param {number | string} [indexOrSignerName] - The index of the account to get
-   *   (default: 0). A registered signer name is not supported.
+   * @param {number | string} [indexOrSignerName] - The index of the account to get (default: 0). A registered signer name is not supported.
    * @returns {Promise<WalletAccountMultisigSolanaSquads>} The account.
    * @throws {NotSupportedError} If a signer name is given.
    */

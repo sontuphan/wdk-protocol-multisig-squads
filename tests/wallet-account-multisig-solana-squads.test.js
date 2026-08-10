@@ -22,6 +22,7 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
 
 import WalletManagerMultisigSolanaSquads, {
   WalletAccountReadOnlyMultisigSolanaSquads,
+  PERMISSION,
   SQUADS_PROGRAM_ADDRESS,
   NotSupportedError
 } from '@tetherto/wdk-protocol-multisig-squads'
@@ -1125,6 +1126,74 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(data[12]).toBe(0)
       expect(getBase58Decoder().decode(data.subarray(13, 45))).toBe(OTHER_MEMBER)
       expect(data[45]).toBe(7)
+    })
+
+    it.each([
+      ['propose only', PERMISSION.initiate, 1],
+      ['vote only', PERMISSION.vote, 2],
+      ['execute only', PERMISSION.execute, 4],
+      ['propose and vote', PERMISSION.initiate | PERMISSION.vote, 3],
+      ['everything but the vote', PERMISSION.initiate | PERMISSION.execute, 5]
+    ])('encodes a mask granting %s', async (_label, mask, encoded) => {
+      const { account, sendTransaction } = await configuringAccount()
+
+      await account.addOwner(OTHER_MEMBER, { mask })
+
+      const { data } = sendTransaction.mock.calls[0][0].instructions[0]
+
+      expect(data).toHaveLength(47)
+      expect(getBase58Decoder().decode(data.subarray(13, 45))).toBe(OTHER_MEMBER)
+      expect(data[45]).toBe(encoded)
+    })
+
+    it('adds a member holding a partial mask alongside a threshold change', async () => {
+      const { account, sendTransaction } = await configuringAccount({
+        members: [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+        threshold: 1
+      })
+
+      await account.addOwner(THIRD_MEMBER, { mask: PERMISSION.vote, threshold: 3 })
+
+      const { data } = sendTransaction.mock.calls[0][0].instructions[0]
+
+      expect(data).toHaveLength(50)
+      expect(new DataView(data.buffer).getUint32(8, true)).toBe(2)
+      expect(data[45]).toBe(2)
+      expect(new DataView(data.buffer).getUint16(47, true)).toBe(3)
+    })
+
+    it('counts a new voter towards the threshold ceiling', async () => {
+      const { account } = await configuringAccount()
+
+      await expect(account.addOwner(OTHER_MEMBER, { mask: PERMISSION.vote, threshold: 2 }))
+        .resolves.toEqual({
+          proposalId: '5',
+          hash: 'facade',
+          fee: 5000n,
+          confirmations: 0,
+          threshold: 1,
+          status: 'pending'
+        })
+    })
+
+    it('refuses a threshold the granted mask cannot reach', async () => {
+      // Adding a non-voter leaves one voter, so a threshold of 2 is impossible. It would be
+      // reachable if the mask were ignored and full permissions granted instead.
+      const { account, sendTransaction } = await configuringAccount()
+
+      await expect(account.addOwner(OTHER_MEMBER, { mask: PERMISSION.initiate, threshold: 2 }))
+        .rejects.toThrow(/number of owners able to vote \(1\)/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it.each([[0], [8], [-1], [1.5], ['7']])('refuses a mask of %s before any RPC call', async (mask) => {
+      const { account, sendTransaction } = await configuringAccount()
+
+      await expect(account.addOwner(OTHER_MEMBER, { mask })).rejects.toThrow(
+        `Invalid permission mask ${mask}. It must be an integer between 1 and 7, a bitwise OR of initiate (1), vote (2) and execute (4).`
+      )
+      expect(account._rpc.getAccountInfo).not.toHaveBeenCalled()
+      expect(sendTransaction).not.toHaveBeenCalled()
     })
 
     it('proposes at the next transaction index', async () => {
