@@ -38,8 +38,9 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountReadOnlyMultisig} IWalletAccountReadOnlyMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInfo} MultisigInfo */
 /**
- * @typedef {MultisigInfo & { masks: number[] }} SolanaMultisigInfo
- *   `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`.
+ * @typedef {MultisigInfo & { masks: number[], isCreated: boolean }} SolanaMultisigInfo
+ *   `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`,
+ *   and whether the multisig account exists on-chain.
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessageProposal} MultisigMessageProposal */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
@@ -73,6 +74,118 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
 /** @typedef {SolanaMultisigSquadsCommonConfig & SolanaMultisigSquadsSigningConfig} SolanaMultisigSquadsConfig */
 
 /** @typedef {SolanaMultisigSquadsCommonConfig} SolanaMultisigSquadsReadOnlyConfig */
+
+/**
+ * A member of a Squads multisig, as stored on-chain.
+ *
+ * @typedef {Object} SquadsMember
+ * @property {string} address - The member's address.
+ * @property {number} mask - The member's permission bitmask: 1 initiate, 2 vote, 4 execute.
+ */
+
+/**
+ * A decoded Squads multisig account. When `isCreated` is false the account does not exist
+ * on-chain and every other field holds a placeholder.
+ *
+ * @typedef {Object} SquadsMultisigAccount
+ * @property {string} address - The multisig address the account was read from.
+ * @property {boolean} isCreated - Whether the account exists on-chain.
+ * @property {string | null} configAuthority - The authority that alone may change the members
+ *   and threshold, or null when the multisig votes on its own configuration.
+ * @property {number} threshold - The number of approvals a proposal needs to be executable.
+ * @property {number} timeLock - Seconds an approved proposal must wait before it can execute.
+ * @property {bigint} transactionIndex - The index of the most recently created transaction.
+ * @property {bigint} staleTransactionIndex - Proposals at or below this index were invalidated
+ *   by a later configuration change and can no longer be voted on or executed.
+ * @property {string | null} rentCollector - The address that reclaims rent when a proposal's
+ *   accounts are closed, or null when the multisig collects none.
+ * @property {SquadsMember[]} members - The members, in on-chain order.
+ */
+
+/**
+ * A decoded Squads proposal account. When `exists` is false no proposal has been created at
+ * that transaction index and every other field holds a placeholder.
+ *
+ * @typedef {Object} SquadsProposalAccount
+ * @property {Address} address - The proposal's program-derived address.
+ * @property {boolean} exists - Whether a proposal has been created at that index.
+ * @property {number} status - The raw status discriminant, or -1 when the proposal is absent.
+ * @property {string | null} statusName - The status as a name, e.g. `'Active'`.
+ * @property {string | null} statusPhrase - The status as a sentence fragment, for error messages.
+ * @property {bigint | null} statusTimestamp - The Unix timestamp the status was set at, or null
+ *   while the proposal is executing, the one status Squads stores without a timestamp.
+ * @property {string[]} approved - The members that have approved.
+ * @property {string[]} rejected - The members that have rejected.
+ * @property {string[]} cancelled - The members that have cancelled.
+ */
+
+/**
+ * A lookup a stored transaction message makes into an address lookup table.
+ *
+ * @typedef {Object} SquadsAddressTableLookup
+ * @property {string} accountKey - The lookup table's address.
+ * @property {number[]} writableIndexes - The table indexes loaded as writable accounts.
+ * @property {number[]} readonlyIndexes - The table indexes loaded as read-only accounts.
+ */
+
+/**
+ * The message a vault transaction executes, decoded far enough to rebuild its account list.
+ *
+ * @typedef {Object} SquadsTransactionMessage
+ * @property {number} numSigners - How many leading account keys are signers.
+ * @property {number} numWritableSigners - How many of those leading signers are writable.
+ * @property {number} numWritableNonSigners - How many non-signers after them are writable.
+ * @property {string[]} accountKeys - The statically listed addresses, in message order.
+ * @property {SquadsAddressTableLookup[]} addressTableLookups - The lookup table references.
+ */
+
+/** @typedef {'AddMember' | 'RemoveMember' | 'ChangeThreshold' | 'SetTimeLock' | 'AddSpendingLimit' | 'RemoveSpendingLimit' | 'SetRentCollector'} SquadsConfigActionKind */
+
+/**
+ * A configuration change a config transaction applies. `createKey` and `spendingLimit` name the
+ * spending limit account the executor has to pass through, and are null for every other kind.
+ *
+ * @typedef {Object} SquadsConfigAction
+ * @property {SquadsConfigActionKind} kind - The change the action applies.
+ * @property {string | null} createKey - The key the spending limit to create derives from.
+ * @property {string | null} spendingLimit - The address of the spending limit to close.
+ */
+
+/**
+ * A decoded Squads transaction account backing a proposal. When `exists` is false no
+ * transaction has been created at that index and every other field holds a placeholder.
+ *
+ * @typedef {Object} SquadsTransactionAccount
+ * @property {Address} address - The transaction's program-derived address.
+ * @property {boolean} exists - Whether a transaction has been created at that index.
+ * @property {'vault' | 'config' | 'batch' | null} kind - The transaction kind, null when the
+ *   account is absent or holds a kind this package cannot decode.
+ * @property {number} vaultIndex - The vault the message spends from; 0 for non-vault kinds.
+ * @property {number} ephemeralSignerCount - The ephemeral signers the message expects.
+ * @property {SquadsTransactionMessage | null} message - The stored message, vault kind only.
+ * @property {SquadsConfigAction[]} actions - The configuration actions, config kind only.
+ */
+
+/**
+ * The Squads program config: the fee it charges to create a multisig, and the treasury that
+ * collects it.
+ *
+ * @typedef {Object} SquadsProgramConfig
+ * @property {Address} programConfigPda - The program config's program-derived address.
+ * @property {bigint} creationFee - The fee charged per multisig creation, in lamports.
+ * @property {string} treasury - The address the creation fee is paid to.
+ */
+
+/**
+ * A multisig, one of its proposals, the transaction that proposal backs, and the cluster clock,
+ * read together so an execution can be checked against a single consistent snapshot.
+ *
+ * @typedef {Object} SquadsProposalContext
+ * @property {SquadsMultisigAccount} multisig - The decoded multisig account.
+ * @property {SquadsProposalAccount} proposal - The decoded proposal account.
+ * @property {SquadsTransactionAccount} transaction - The decoded transaction account.
+ * @property {bigint} now - The cluster's current Unix timestamp, read from the clock sysvar.
+ */
 
 export const SQUADS_PROGRAM_ADDRESS = 'SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf'
 
@@ -813,8 +926,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * Reads and decodes the multisig account, keeping every field it holds.
    *
    * @protected
-   * @returns {Promise<{ address: string, isCreated: boolean, configAuthority: string | null, threshold: number, timeLock: number, transactionIndex: bigint, staleTransactionIndex: bigint, rentCollector: string | null, members: Array<{ address: string, mask: number }> }>}
-   *   The decoded account. When `isCreated` is false every other field is a placeholder.
+   * @returns {Promise<SquadsMultisigAccount>} The decoded account.
    * @throws {Error} If the address holds a non-Squads account, or if the RPC request fails.
    */
   async _getMultisigAccount () {
@@ -835,9 +947,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @protected
    * @param {bigint} index - The proposal (transaction index) id.
-   * @returns {Promise<{ multisig: Awaited<ReturnType<WalletAccountReadOnlyMultisigSolanaSquads['_getMultisigAccount']>>, proposal: { address: Address, exists: boolean, status: number, statusName: string | null, approved: string[], rejected: string[], cancelled: string[] } }>}
-   *   The decoded accounts. `proposal.exists` is false when no proposal has been created
-   *   at that index, in which case its other fields are placeholders.
+   * @returns {Promise<Pick<SquadsProposalContext, 'multisig' | 'proposal'>>} The decoded
+   *   multisig and proposal accounts.
    * @throws {Error} If the multisig address holds a non-Squads account, or if the RPC
    *   request fails.
    */
@@ -863,8 +974,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @protected
    * @param {bigint} index - The proposal (transaction index) id.
-   * @returns {Promise<{ multisig: Object, proposal: Object, transaction: Object, now: bigint }>}
-   *   The decoded accounts and the cluster's current Unix timestamp.
+   * @returns {Promise<SquadsProposalContext>} The decoded accounts and the cluster's current
+   *   Unix timestamp.
    * @throws {Error} If the multisig address holds a non-Squads account, the clock cannot be
    *   read, or the RPC request fails.
    */
@@ -903,8 +1014,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * Reads the Squads program config account.
    *
    * @protected
-   * @returns {Promise<{ programConfigPda: Address, creationFee: bigint, treasury: string }>}
-   *   The program config address, its multisig creation fee, and its treasury address.
+   * @returns {Promise<SquadsProgramConfig>} The program config address, its multisig creation
+   *   fee, and its treasury address.
    * @throws {Error} If the account is missing or is not a program config.
    */
   async _getProgramConfig () {
@@ -939,6 +1050,115 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     }
   }
 
+  /**
+   * Normalizes a proposal id into the Squads transaction index it refers to.
+   *
+   * @protected
+   * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
+   * @returns {bigint} The transaction index.
+   * @throws {Error} If the id is not an integer between 0 and 18446744073709551615.
+   */
+  _toProposalIndex (proposalId) {
+    let index = null
+
+    try {
+      index = BigInt(proposalId)
+    } catch {}
+
+    if (index === null || index < 0n || index > MAX_PROPOSAL_INDEX) {
+      throw new Error(
+        `Invalid proposal id ${proposalId}. It must be an integer between 0 and ${MAX_PROPOSAL_INDEX}.`
+      )
+    }
+
+    return index
+  }
+
+  /**
+   * Derives the address of the transaction account stored at the given index.
+   *
+   * @protected
+   * @param {string} multisigPda - The multisig address the transaction belongs to.
+   * @param {bigint} index - The transaction index.
+   * @returns {Promise<Address>} The transaction address.
+   */
+  async _getTransactionPda (multisigPda, index) {
+    const [transactionPda] = await getProgramDerivedAddress({
+      programAddress: this._programId,
+      seeds: this._getTransactionSeeds(multisigPda, index)
+    })
+
+    return transactionPda
+  }
+
+  /**
+   * Derives the address of the proposal account that votes on the transaction at the given
+   * index.
+   *
+   * @protected
+   * @param {string} multisigPda - The multisig address the proposal belongs to.
+   * @param {bigint} index - The transaction index the proposal votes on.
+   * @returns {Promise<Address>} The proposal address.
+   */
+  async _getProposalPda (multisigPda, index) {
+    const [proposalPda] = await getProgramDerivedAddress({
+      programAddress: this._programId,
+      seeds: [...this._getTransactionSeeds(multisigPda, index), SEED_PROPOSAL]
+    })
+
+    return proposalPda
+  }
+
+  /**
+   * Derives the ephemeral signer addresses a stored transaction's message expects.
+   *
+   * @protected
+   * @param {string} transactionPda - The transaction address the signers are derived from.
+   * @param {number} count - How many the message needs.
+   * @returns {Promise<Address[]>} The ephemeral signer addresses, in index order.
+   */
+  async _getEphemeralSignerPdas (transactionPda, count) {
+    const encoder = getAddressEncoder()
+
+    return Promise.all(
+      Array.from({ length: count }, async (_unused, index) => {
+        const [pda] = await getProgramDerivedAddress({
+          programAddress: this._programId,
+          seeds: [
+            SEED_PREFIX,
+            encoder.encode(address(transactionPda)),
+            SEED_EPHEMERAL_SIGNER,
+            Uint8Array.of(index)
+          ]
+        })
+
+        return pda
+      })
+    )
+  }
+
+  /**
+   * Derives a spending limit's address from the create key its action carries.
+   *
+   * @protected
+   * @param {string} multisigPda - The multisig address.
+   * @param {string} createKey - The action's `createKey`.
+   * @returns {Promise<Address>} The spending limit address.
+   */
+  async _getSpendingLimitPda (multisigPda, createKey) {
+    const [spendingLimitPda] = await getProgramDerivedAddress({
+      programAddress: this._programId,
+      seeds: [
+        SEED_PREFIX,
+        getAddressEncoder().encode(address(multisigPda)),
+        SEED_SPENDING_LIMIT,
+        getAddressEncoder().encode(address(createKey))
+      ]
+    })
+
+    return spendingLimitPda
+  }
+
   /** @private */
   _createFailoverRpc (urls, retries) {
     const failoverProvider = new FailoverProvider({ retries })
@@ -970,23 +1190,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     } catch {
       return false
     }
-  }
-
-  /** @private */
-  _toProposalIndex (proposalId) {
-    let index = null
-
-    try {
-      index = BigInt(proposalId)
-    } catch {}
-
-    if (index === null || index < 0n || index > MAX_PROPOSAL_INDEX) {
-      throw new Error(
-        `Invalid proposal id ${proposalId}. It must be an integer between 0 and ${MAX_PROPOSAL_INDEX}.`
-      )
-    }
-
-    return index
   }
 
   /** @private */
@@ -1054,76 +1257,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       SEED_TRANSACTION,
       transactionIndex
     ]
-  }
-
-  /** @private */
-  async _getTransactionPda (multisigPda, index) {
-    const [transactionPda] = await getProgramDerivedAddress({
-      programAddress: this._programId,
-      seeds: this._getTransactionSeeds(multisigPda, index)
-    })
-
-    return transactionPda
-  }
-
-  /**
-   * Derives the ephemeral signer addresses a stored transaction's message expects.
-   *
-   * @protected
-   * @param {string} transactionPda - The transaction address the signers are derived from.
-   * @param {number} count - How many the message needs.
-   * @returns {Promise<Address[]>} The ephemeral signer addresses, in index order.
-   */
-  async _getEphemeralSignerPdas (transactionPda, count) {
-    const encoder = getAddressEncoder()
-
-    return Promise.all(
-      Array.from({ length: count }, async (_unused, index) => {
-        const [pda] = await getProgramDerivedAddress({
-          programAddress: this._programId,
-          seeds: [
-            SEED_PREFIX,
-            encoder.encode(address(transactionPda)),
-            SEED_EPHEMERAL_SIGNER,
-            Uint8Array.of(index)
-          ]
-        })
-
-        return pda
-      })
-    )
-  }
-
-  /**
-   * Derives a spending limit's address from the create key its action carries.
-   *
-   * @protected
-   * @param {string} multisigPda - The multisig address.
-   * @param {string} createKey - The action's `createKey`.
-   * @returns {Promise<Address>} The spending limit address.
-   */
-  async _getSpendingLimitPda (multisigPda, createKey) {
-    const [spendingLimitPda] = await getProgramDerivedAddress({
-      programAddress: this._programId,
-      seeds: [
-        SEED_PREFIX,
-        getAddressEncoder().encode(address(multisigPda)),
-        SEED_SPENDING_LIMIT,
-        getAddressEncoder().encode(address(createKey))
-      ]
-    })
-
-    return spendingLimitPda
-  }
-
-  /** @private */
-  async _getProposalPda (multisigPda, index) {
-    const [proposalPda] = await getProgramDerivedAddress({
-      programAddress: this._programId,
-      seeds: [...this._getTransactionSeeds(multisigPda, index), SEED_PROPOSAL]
-    })
-
-    return proposalPda
   }
 
   /** @private */

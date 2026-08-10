@@ -43,6 +43,19 @@
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigProposal} SolanaMultisigProposal */
 /** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigProposalResult} SolanaMultisigProposalResult */
 
+// The decoded Squads account shapes the protected methods return. They are reachable only
+// from here: the package's `exports` map blocks a deep import of `src/`.
+/** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsMember} SquadsMember */
+/** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsMultisigAccount} SquadsMultisigAccount */
+/** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsProposalAccount} SquadsProposalAccount */
+/** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsAddressTableLookup} SquadsAddressTableLookup */
+/** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsTransactionMessage} SquadsTransactionMessage */
+/** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsConfigActionKind} SquadsConfigActionKind */
+/** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsConfigAction} SquadsConfigAction */
+/** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsTransactionAccount} SquadsTransactionAccount */
+/** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsProgramConfig} SquadsProgramConfig */
+/** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsProposalContext} SquadsProposalContext */
+
 // ============================================
 // Export classes and constants
 // ============================================

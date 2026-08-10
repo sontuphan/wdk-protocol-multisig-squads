@@ -17,4 +17,14 @@ export type SolanaMultisigSquadsReadOnlyConfig = import("./src/wallet-account-re
 export type SolanaMultisigInfo = import("./src/wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigInfo;
 export type SolanaMultisigProposal = import("./src/wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigProposal;
 export type SolanaMultisigProposalResult = import("./src/wallet-account-multisig-solana-squads.js").SolanaMultisigProposalResult;
+export type SquadsMember = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsMember;
+export type SquadsMultisigAccount = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsMultisigAccount;
+export type SquadsProposalAccount = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsProposalAccount;
+export type SquadsAddressTableLookup = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsAddressTableLookup;
+export type SquadsTransactionMessage = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsTransactionMessage;
+export type SquadsConfigActionKind = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsConfigActionKind;
+export type SquadsConfigAction = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsConfigAction;
+export type SquadsTransactionAccount = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsTransactionAccount;
+export type SquadsProgramConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsProgramConfig;
+export type SquadsProposalContext = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsProposalContext;
 export { default as WalletAccountReadOnlyMultisigSolanaSquads, SQUADS_PROGRAM_ADDRESS } from "./src/wallet-account-read-only-multisig-solana-squads.js";
