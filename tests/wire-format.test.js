@@ -17,7 +17,7 @@
 // Diffs the instruction data this package builds against @sqds/multisig, which defines the
 // on-chain wire format. The SDK is a dev-time reference only; it is never imported by src.
 
-import { describe, it, expect, beforeEach } from '@jest/globals'
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals'
 
 import * as multisig from '@sqds/multisig'
 import { generated, utils } from '@sqds/multisig'
@@ -36,10 +36,14 @@ import WalletManagerMultisigSolanaSquads, {
   SQUADS_PROGRAM_ADDRESS
 } from '@tetherto/wdk-protocol-multisig-squads'
 
+import { lookupTableAccount, multipleAccounts, stubSolanaRpc } from './helpers/rpc.js'
+
 const TEST_SEED_PHRASE =
   'test walk nut penalty hip pave soap entry language right filter choice'
 
 const TEST_MULTISIG = '11111111111111111111111111111111'
+
+const ADDRESS_LOOKUP_TABLE_PROGRAM = 'AddressLookupTab1e1111111111111111111111111'
 
 const OWNERS = [
   '3uXqWpwgqKVdiHAwF6Vmu4G4vdQzpR66xjPkz1G7zMKE',
@@ -74,6 +78,10 @@ describe('wire format', () => {
       createKeySecret: getBase58Decoder().decode(new Uint8Array(32).fill(9))
     })
     account = await wallet.getAccount(0)
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
   })
 
   describe('spending limit address', () => {
@@ -534,25 +542,18 @@ describe('wire format', () => {
       expect(decoded.message.addressTableLookups).toHaveLength(1)
       expect(decoded.message.addressTableLookups[0].accountKey).toBe(tableKey.toBase58())
 
-      // Serve the table the way the chain does: 56 bytes of metadata, then the addresses.
-      const raw = new Uint8Array(56 + extra.length * 32)
-      extra.forEach((key, i) => raw.set(key.toBytes(), 56 + i * 32))
-
-      account._rpc = {
-        getMultipleAccounts: () => ({
-          send: async () => ({
-            value: [{
-              owner: 'AddressLookupTab1e1111111111111111111111111',
-              data: [Buffer.from(raw).toString('base64'), 'base64'],
-              executable: false,
-              lamports: 2039280n,
-              space: BigInt(raw.length)
-            }]
-          })
-        })
-      }
+      const fetchMock = stubSolanaRpc({
+        getMultipleAccounts: () => multipleAccounts([
+          lookupTableAccount(ADDRESS_LOOKUP_TABLE_PROGRAM, extra.map((key) => key.toBytes()))
+        ])
+      })
 
       const mine = flatten(await account._resolveExecutionAccounts(decoded, vault))
+
+      // The table was read by address, and read once.
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body).params[0])
+        .toEqual([tableKey.toBase58()])
 
       expect(mine).toEqual(await reference(storedMessage, vault, [{ account: table }]))
 
@@ -619,9 +620,7 @@ describe('wire format', () => {
       const { account: stored } = storedTransaction(message, vault, [{ account: table }])
       const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
 
-      account._rpc = {
-        getMultipleAccounts: () => ({ send: async () => ({ value: [null] }) })
-      }
+      stubSolanaRpc({ getMultipleAccounts: () => multipleAccounts([null]) })
 
       await expect(account._resolveExecutionAccounts(decoded, vault))
         .rejects.toThrow(/no longer be executed/)
@@ -645,22 +644,11 @@ describe('wire format', () => {
       const { account: stored } = storedTransaction(message, vault, [{ account: table }])
       const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
 
-      const raw = new Uint8Array(56 + extra.length * 32)
-      extra.forEach((key, i) => raw.set(key.toBytes(), 56 + i * 32))
-
-      account._rpc = {
-        getMultipleAccounts: () => ({
-          send: async () => ({
-            value: [{
-              owner: SQUADS_PROGRAM_ADDRESS,
-              data: [Buffer.from(raw).toString('base64'), 'base64'],
-              executable: false,
-              lamports: 2039280n,
-              space: BigInt(raw.length)
-            }]
-          })
-        })
-      }
+      stubSolanaRpc({
+        getMultipleAccounts: () => multipleAccounts([
+          lookupTableAccount(SQUADS_PROGRAM_ADDRESS, extra.map((key) => key.toBytes()))
+        ])
+      })
 
       await expect(account._resolveExecutionAccounts(decoded, vault))
         .rejects.toThrow(/does not exist/)

@@ -20,6 +20,8 @@ import WalletManagerMultisigSolanaSquads, {
   WalletAccountMultisigSolanaSquads
 } from '@tetherto/wdk-protocol-multisig-squads'
 
+import { stubSolanaRpc } from './helpers/rpc.js'
+
 const TEST_SEED_PHRASE =
   'test walk nut penalty hip pave soap entry language right filter choice'
 const TEST_RPC_URL = 'https://mock-url.com'
@@ -33,6 +35,10 @@ describe('WalletManagerMultisigSolanaSquads', () => {
       provider: TEST_RPC_URL,
       commitment: 'confirmed'
     })
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
   })
 
   describe('Constructor', () => {
@@ -123,31 +129,14 @@ describe('WalletManagerMultisigSolanaSquads', () => {
   })
 
   describe('getFeeRates', () => {
-    let mockRpc
-    let originalRpc
-
-    beforeEach(() => {
-      originalRpc = wallet._rpc
-
-      mockRpc = {
-        getRecentPrioritizationFees: jest.fn()
-      }
-    })
-
-    afterEach(() => {
-      wallet._rpc = originalRpc
-    })
-
     it('should return fee rates with normal and fast', async () => {
-      mockRpc.getRecentPrioritizationFees.mockReturnValue({
-        send: jest.fn().mockResolvedValue([
+      stubSolanaRpc({
+        getRecentPrioritizationFees: () => [
           { slot: 1, prioritizationFee: 1000 },
           { slot: 2, prioritizationFee: 2000 },
           { slot: 3, prioritizationFee: 3000 }
-        ])
+        ]
       })
-
-      wallet._rpc = mockRpc
 
       const feeRates = await wallet.getFeeRates()
 
@@ -159,11 +148,7 @@ describe('WalletManagerMultisigSolanaSquads', () => {
     })
 
     it('should calculate normal rate as 110% of max fee', async () => {
-      mockRpc.getRecentPrioritizationFees.mockReturnValue({
-        send: jest.fn().mockResolvedValue([{ slot: 1, prioritizationFee: 1000 }])
-      })
-
-      wallet._rpc = mockRpc
+      stubSolanaRpc({ getRecentPrioritizationFees: () => [{ slot: 1, prioritizationFee: 1000 }] })
 
       const feeRates = await wallet.getFeeRates()
 
@@ -171,11 +156,7 @@ describe('WalletManagerMultisigSolanaSquads', () => {
     })
 
     it('should calculate fast rate as 200% of max fee', async () => {
-      mockRpc.getRecentPrioritizationFees.mockReturnValue({
-        send: jest.fn().mockResolvedValue([{ slot: 1, prioritizationFee: 1000 }])
-      })
-
-      wallet._rpc = mockRpc
+      stubSolanaRpc({ getRecentPrioritizationFees: () => [{ slot: 1, prioritizationFee: 1000 }] })
 
       const feeRates = await wallet.getFeeRates()
 
@@ -183,15 +164,13 @@ describe('WalletManagerMultisigSolanaSquads', () => {
     })
 
     it('should use highest prioritization fee when multiple fees returned', async () => {
-      mockRpc.getRecentPrioritizationFees.mockReturnValue({
-        send: jest.fn().mockResolvedValue([
+      stubSolanaRpc({
+        getRecentPrioritizationFees: () => [
           { slot: 1, prioritizationFee: 1000 },
           { slot: 2, prioritizationFee: 5000 },
           { slot: 3, prioritizationFee: 3000 }
-        ])
+        ]
       })
-
-      wallet._rpc = mockRpc
 
       const feeRates = await wallet.getFeeRates()
 
@@ -200,15 +179,13 @@ describe('WalletManagerMultisigSolanaSquads', () => {
     })
 
     it('should filter out zero fees', async () => {
-      mockRpc.getRecentPrioritizationFees.mockReturnValue({
-        send: jest.fn().mockResolvedValue([
+      stubSolanaRpc({
+        getRecentPrioritizationFees: () => [
           { slot: 1, prioritizationFee: 0 },
           { slot: 2, prioritizationFee: 0 },
           { slot: 3, prioritizationFee: 2000 }
-        ])
+        ]
       })
-
-      wallet._rpc = mockRpc
 
       const feeRates = await wallet.getFeeRates()
 
@@ -217,14 +194,12 @@ describe('WalletManagerMultisigSolanaSquads', () => {
     })
 
     it('should use default fee when all fees are zero', async () => {
-      mockRpc.getRecentPrioritizationFees.mockReturnValue({
-        send: jest.fn().mockResolvedValue([
+      stubSolanaRpc({
+        getRecentPrioritizationFees: () => [
           { slot: 1, prioritizationFee: 0 },
           { slot: 2, prioritizationFee: 0 }
-        ])
+        ]
       })
-
-      wallet._rpc = mockRpc
 
       const feeRates = await wallet.getFeeRates()
 
@@ -233,11 +208,7 @@ describe('WalletManagerMultisigSolanaSquads', () => {
     })
 
     it('should use default fee when no fees returned', async () => {
-      mockRpc.getRecentPrioritizationFees.mockReturnValue({
-        send: jest.fn().mockResolvedValue([])
-      })
-
-      wallet._rpc = mockRpc
+      stubSolanaRpc({ getRecentPrioritizationFees: () => [] })
 
       const feeRates = await wallet.getFeeRates()
 
@@ -254,11 +225,9 @@ describe('WalletManagerMultisigSolanaSquads', () => {
     })
 
     it('should handle RPC errors gracefully', async () => {
-      mockRpc.getRecentPrioritizationFees.mockReturnValue({
-        send: jest.fn().mockRejectedValue(new Error('RPC connection failed'))
+      stubSolanaRpc({
+        getRecentPrioritizationFees: () => { throw new Error('RPC connection failed') }
       })
-
-      wallet._rpc = mockRpc
 
       await expect(wallet.getFeeRates()).rejects.toThrow('RPC connection failed')
     })
