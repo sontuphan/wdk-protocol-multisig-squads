@@ -29,6 +29,17 @@ const TEST_RPC_URL_FALLBACK = 'https://mock-url-fallback.com'
 
 const DUMMY_FEES = [{ slot: 1, prioritizationFee: 1000 }]
 
+// The signer keys TEST_SEED_PHRASE derives at each path.
+const SIGNER_0 = '3uXqWpwgqKVdiHAwF6Vmu4G4vdQzpR66xjPkz1G7zMKE'
+const SIGNER_1 = 'CfGcujEkPVDx7yGyn1PUjxn2e353MXbLk8ixzwuJUktK'
+const SIGNER_0_0 = 'DPGHHHMaayXkaThUJCUnUAJCdgc9sxNh1UEGa6vJximM'
+const SIGNER_0_1 = 'jbhYXhWfRPqPvaKqaWCJEgBdZMquFxUvjWaWLEH3YCz'
+
+// Ed25519 is deterministic, so SIGNER_0 signing 'after dispose' is a fixed value.
+const SIGNATURE_0 =
+  '5dfaad6f72a44da4eb77af48def5476a64aeaa720be3a2be87151c6f08537a9b' +
+  'd63c7f4ffa218d93b36a4457b2ba0d64907c1bc5ed31a2fdc3c1bd990dffa70c'
+
 describe('WalletManagerMultisigSolanaSquads', () => {
   let wallet
 
@@ -111,12 +122,9 @@ describe('WalletManagerMultisigSolanaSquads', () => {
       expect(account.path).toBe("m/44'/501'/0'/0'")
     })
 
-    it('should return different accounts for different indices', async () => {
-      const account0 = await wallet.getAccount(0)
-      const account1 = await wallet.getAccount(1)
-
-      expect(account0).not.toBe(account1)
-      expect(await account0.getSignerAddress()).not.toBe(await account1.getSignerAddress())
+    it('should derive a different signer for each index', async () => {
+      expect(await (await wallet.getAccount(0)).getSignerAddress()).toBe(SIGNER_0)
+      expect(await (await wallet.getAccount(1)).getSignerAddress()).toBe(SIGNER_1)
     })
 
     it('should handle large index numbers', async () => {
@@ -126,8 +134,8 @@ describe('WalletManagerMultisigSolanaSquads', () => {
       expect(account.path).toBe("m/44'/501'/999'/0'")
     })
 
-    it('should cache accounts by derivation path', async () => {
-      expect(await wallet.getAccount(0)).toBe(await wallet.getAccountByPath("0'/0'"))
+    it('should return the same account for the same index', async () => {
+      expect(await wallet.getAccount(0)).toBe(await wallet.getAccount(0))
     })
   })
 
@@ -139,18 +147,21 @@ describe('WalletManagerMultisigSolanaSquads', () => {
       expect(account.path).toBe("m/44'/501'/0'/0'/0'")
     })
 
-    it('should return different accounts for different paths', async () => {
-      const account1 = await wallet.getAccountByPath("0'/0'/0'")
-      const account2 = await wallet.getAccountByPath("0'/0'/1'")
+    it('should return the same account for the same path', async () => {
+      expect(await wallet.getAccountByPath("0'/0'")).toBe(await wallet.getAccountByPath("0'/0'"))
+    })
 
-      expect(account1).not.toBe(account2)
-      expect(await account1.getSignerAddress()).not.toBe(await account2.getSignerAddress())
+    it('should derive a different signer for each path', async () => {
+      expect(await (await wallet.getAccountByPath("0'/0'/0'")).getSignerAddress())
+        .toBe(SIGNER_0_0)
+      expect(await (await wallet.getAccountByPath("0'/0'/1'")).getSignerAddress())
+        .toBe(SIGNER_0_1)
     })
   })
 
   describe('getFeeRates', () => {
     it('should return fee rates with normal and fast', async () => {
-      stubSolanaRpc({
+      const fetchMock = stubSolanaRpc({
         getRecentPrioritizationFees: () => [
           { slot: 1, prioritizationFee: 1000 },
           { slot: 2, prioritizationFee: 2000 },
@@ -158,13 +169,15 @@ describe('WalletManagerMultisigSolanaSquads', () => {
         ]
       })
 
-      const feeRates = await wallet.getFeeRates()
+      // The highest of the three fees, at 110% and 200%.
+      expect(await wallet.getFeeRates()).toEqual({ normal: 3300n, fast: 6000n })
 
-      expect(feeRates).toBeDefined()
-      expect(feeRates.normal).toBeDefined()
-      expect(feeRates.fast).toBeDefined()
-      expect(typeof feeRates.normal).toBe('bigint')
-      expect(typeof feeRates.fast).toBe('bigint')
+      // …from one query for the whole cluster's recent fees, not a per-account one.
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      const { method, params } = JSON.parse(fetchMock.mock.calls[0][1].body)
+
+      expect({ method, params }).toEqual({ method: 'getRecentPrioritizationFees', params: [] })
     })
 
     it('should calculate normal rate as 110% of max fee', async () => {
@@ -254,14 +267,23 @@ describe('WalletManagerMultisigSolanaSquads', () => {
   })
 
   describe('dispose', () => {
-    it('should dispose the derived accounts and clear the cache', async () => {
+    it('should dispose the accounts it derived', async () => {
       const account = await wallet.getAccount()
-      const dispose = jest.spyOn(account, 'dispose')
 
       wallet.dispose()
 
-      expect(dispose).toHaveBeenCalled()
-      expect(await wallet.getAccount()).not.toBe(account)
+      await expect(account.sign('after dispose'))
+        .rejects.toThrow('The wallet account has been disposed.')
+    })
+
+    it('should clear the account cache', async () => {
+      await wallet.getAccount()
+
+      wallet.dispose()
+
+      // A cached account would be the disposed one, and signing with it throws rather than
+      // returning this signature.
+      expect(await (await wallet.getAccount()).sign('after dispose')).toBe(SIGNATURE_0)
     })
   })
 })

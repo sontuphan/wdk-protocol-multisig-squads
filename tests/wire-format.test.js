@@ -83,6 +83,9 @@ const NEXT_TRANSACTION =
 const NEXT_PROPOSAL =
   multisig.getProposalPda({ multisigPda: ownMultisigKey, transactionIndex: 1n })[0].toBase58()
 
+const TEST_TRANSACTION =
+  multisig.getTransactionPda({ multisigPda: ownMultisigKey, index: 7n })[0].toBase58()
+
 const CREATE_KEY = 'J2xccRtuG43drESLYznHhLhQkLTdfepcKYbiQ9BsJVaf'
 const PROGRAM_CONFIG = 'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr'
 const TREASURY = 'AXTwLwzYaRVKymrgpXQpgz4L9tazBjuQqJRQqZgLKKfC'
@@ -559,7 +562,7 @@ describe('wire format', () => {
     async function reference (stored, vault, lookups, ephemeralSignerBumps = []) {
       const { accountMetas } = await utils.accountsForTransactionExecute({
         connection: null,
-        transactionPda: new PublicKey(TEST_MULTISIG),
+        transactionPda: new PublicKey(TEST_TRANSACTION),
         vaultPda: new PublicKey(vault),
         message: stored,
         ephemeralSignerBumps,
@@ -606,7 +609,7 @@ describe('wire format', () => {
         : await splMessage(vault, createAta)
 
       const { account: stored, message: storedMessage } = storedTransaction(message, vault)
-      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
+      const decoded = account._decodeTransactionAccount(TEST_TRANSACTION, stored)
 
       expect(decoded.kind).toBe('vault')
       expect(decoded.vaultIndex).toBe(0)
@@ -629,7 +632,7 @@ describe('wire format', () => {
         })]
       })
       const { account: stored } = storedTransaction(message, vault)
-      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
+      const decoded = account._decodeTransactionAccount(TEST_TRANSACTION, stored)
       const resolved = await account._resolveExecutionAccounts(decoded, vault)
       const vaultMeta = resolved.find((a) => a.address === vault)
 
@@ -641,7 +644,7 @@ describe('wire format', () => {
       const vault = TEST_OWN_VAULT
       const message = await splMessage(vault, true)
       const { account: stored, message: storedMessage } = storedTransaction(message, vault)
-      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
+      const decoded = account._decodeTransactionAccount(TEST_TRANSACTION, stored)
 
       expect(decoded.message.accountKeys)
         .toEqual(storedMessage.accountKeys.map((k) => k.toBase58()))
@@ -679,7 +682,7 @@ describe('wire format', () => {
 
       const { account: stored, message: storedMessage } =
         storedTransaction(message, vault, [{ account: table }])
-      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
+      const decoded = account._decodeTransactionAccount(TEST_TRANSACTION, stored)
 
       expect(decoded.message.addressTableLookups).toHaveLength(1)
       expect(decoded.message.addressTableLookups[0].accountKey).toBe(tableKey.toBase58())
@@ -707,7 +710,7 @@ describe('wire format', () => {
     it('matches the SDK when the message needs ephemeral signers', async () => {
       const vault = TEST_OWN_VAULT
       const [ephemeral] = multisig.getEphemeralSignerPda({
-        transactionPda: new PublicKey(TEST_MULTISIG),
+        transactionPda: new PublicKey(TEST_TRANSACTION),
         ephemeralSignerIndex: 0
       })
 
@@ -724,9 +727,10 @@ describe('wire format', () => {
 
       const { account: stored, message: storedMessage } =
         storedTransaction(message, vault, [], [255])
-      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
+      const decoded = account._decodeTransactionAccount(TEST_TRANSACTION, stored)
 
       expect(decoded.ephemeralSignerCount).toBe(1)
+      expect(decoded.address).toBe(TEST_TRANSACTION)
 
       const mine = flatten(await account._resolveExecutionAccounts(decoded, vault))
 
@@ -736,10 +740,10 @@ describe('wire format', () => {
     })
 
     it('derives ephemeral signer addresses the SDK agrees with', async () => {
-      const mine = await account._getEphemeralSignerPdas(TEST_MULTISIG, 3)
+      const mine = await account._getEphemeralSignerPdas(TEST_TRANSACTION, 3)
 
       expect(mine).toEqual([0, 1, 2].map((i) => multisig.getEphemeralSignerPda({
-        transactionPda: new PublicKey(TEST_MULTISIG),
+        transactionPda: new PublicKey(TEST_TRANSACTION),
         ephemeralSignerIndex: i
       })[0].toBase58()))
     })
@@ -760,7 +764,7 @@ describe('wire format', () => {
         })]
       })
       const { account: stored } = storedTransaction(message, vault, [{ account: table }])
-      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
+      const decoded = account._decodeTransactionAccount(TEST_TRANSACTION, stored)
 
       stubSolanaRpc({ getMultipleAccounts: () => multipleAccounts([null]) })
 
@@ -784,7 +788,7 @@ describe('wire format', () => {
         })]
       })
       const { account: stored } = storedTransaction(message, vault, [{ account: table }])
-      const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
+      const decoded = account._decodeTransactionAccount(TEST_TRANSACTION, stored)
 
       stubSolanaRpc({
         getMultipleAccounts: () => multipleAccounts([
