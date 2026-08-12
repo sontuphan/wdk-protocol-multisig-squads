@@ -14,15 +14,18 @@
 
 'use strict'
 
-// Diffs the instruction data this package builds against @sqds/multisig, which defines the
-// on-chain wire format. The SDK is a dev-time reference only; it is never imported by src.
+// Everything this package puts on the wire, checked two ways. `instruction data` and the
+// blocks around it diff the encoders against @sqds/multisig, which defines the format; the
+// `instruction assembly` block drives the public API and reads the submitted transaction back,
+// so a byte-perfect encoder called with the wrong arguments still fails. The SDK is a dev-time
+// reference only; it is never imported by src.
 
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals'
 
 import * as multisig from '@sqds/multisig'
 import { generated, utils } from '@sqds/multisig'
 import { PublicKey, TransactionMessage, SystemProgram } from '@solana/web3.js'
-import { getBase58Decoder } from '@solana/codecs'
+import { getBase58Decoder, getBase58Encoder } from '@solana/codecs'
 
 import { address } from '@solana/addresses'
 import {
@@ -32,16 +35,26 @@ import {
   TOKEN_PROGRAM_ADDRESS
 } from '@solana-program/token'
 
+import { NotImplementedError } from '@tetherto/wdk-wallet'
+
 import WalletManagerMultisigSolanaSquads, {
   SQUADS_PROGRAM_ADDRESS
 } from '@tetherto/wdk-protocol-multisig-squads'
 
 import { lookupTableAccount, multipleAccounts, stubSolanaRpc } from './helpers/rpc.js'
+import { instructionShape, submittedInstructions } from './helpers/transaction.js'
 
 const TEST_SEED_PHRASE =
   'test walk nut penalty hip pave soap entry language right filter choice'
 
 const TEST_MULTISIG = '11111111111111111111111111111111'
+
+// The multisig and vault the `beforeEach` account resolves to, derived from its
+// `createKeySecret` (32 bytes of 9) with the SDK's `getMultisigPda` / `getVaultPda` rather
+// than with the code under test. The `address derivation` block is what ties them back to it,
+// so the 11 message tests can use the constant and still fail if the derivation breaks.
+const TEST_OWN_MULTISIG = '7jmBsJmAV5aAwEQkw3AybYgTMHVUzbWgWMGvyMjhSEDQ'
+const TEST_OWN_VAULT = '46t5cnapyYC1RNVCgezqxNssv65qnF3FgddyG86egHL1'
 
 const ADDRESS_LOOKUP_TABLE_PROGRAM = 'AddressLookupTab1e1111111111111111111111111'
 
@@ -50,6 +63,122 @@ const OWNERS = [
   '2JvLzXomThTBMSj2YQY3wE21kiaSpwGyJ17nm9xiLMsE',
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 ]
+
+// The first owner is the account's own signer; the other two stand in for a co-owner and a
+// transfer target.
+const SIGNER = OWNERS[0]
+const SECOND_OWNER = OWNERS[1]
+const PAYEE = OWNERS[2]
+
+const SYSTEM_PROGRAM = '11111111111111111111111111111111'
+const CLOCK_SYSVAR = 'SysvarC1ock11111111111111111111111111111111'
+
+const DUMMY_BLOCKHASH = 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N'
+const DUMMY_SIGNATURE = '4'.repeat(87)
+
+// PDAs from the SDK, so a wrong derivation in this package fails rather than cancels out.
+const ownMultisigKey = new PublicKey(TEST_OWN_MULTISIG)
+const NEXT_TRANSACTION =
+  multisig.getTransactionPda({ multisigPda: ownMultisigKey, index: 1n })[0].toBase58()
+const NEXT_PROPOSAL =
+  multisig.getProposalPda({ multisigPda: ownMultisigKey, transactionIndex: 1n })[0].toBase58()
+
+const CREATE_KEY = 'J2xccRtuG43drESLYznHhLhQkLTdfepcKYbiQ9BsJVaf'
+const PROGRAM_CONFIG = 'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr'
+const TREASURY = 'AXTwLwzYaRVKymrgpXQpgz4L9tazBjuQqJRQqZgLKKfC'
+
+const MULTISIG_DISCRIMINATOR = [224, 116, 121, 186, 68, 161, 79, 236]
+const PROPOSAL_DISCRIMINATOR = [26, 94, 189, 187, 116, 136, 53, 33]
+const PROGRAM_CONFIG_DISCRIMINATOR = [196, 210, 90, 231, 144, 149, 140, 63]
+
+const ALMIGHTY = 7
+const PROPOSAL_STATUS_ACTIVE = 1
+
+/**
+ * Wraps account data the way a Solana RPC serves it.
+ *
+ * @param {Buffer} data - The account's data.
+ * @param {string} [owner] - The owning program.
+ * @returns {Object} The account.
+ */
+function rpcAccount (data, owner = SQUADS_PROGRAM_ADDRESS) {
+  return {
+    owner,
+    data: [data.toString('base64'), 'base64'],
+    executable: false,
+    lamports: 2039280,
+    rentEpoch: 0,
+    space: data.length
+  }
+}
+
+/**
+ * Builds a Squads multisig account.
+ *
+ * @param {Object} [options] - `owners`, `threshold`, `timeLock` and `transactionIndex`.
+ * @returns {Object} The account, as the RPC serves it.
+ */
+function multisigAccount ({ owners = [SIGNER], threshold = 1, timeLock = 0, transactionIndex = 0n } = {}) {
+  const header = Buffer.alloc(96)
+  const members = Buffer.concat(owners.map((owner) => Buffer.concat([
+    Buffer.from(getBase58Encoder().encode(owner)),
+    Buffer.from([ALMIGHTY])
+  ])))
+
+  Buffer.from(MULTISIG_DISCRIMINATOR).copy(header, 0)
+  header.writeUInt16LE(threshold, 72)
+  header.writeUInt32LE(timeLock, 74)
+  header.writeBigUInt64LE(transactionIndex, 78)
+  header.writeBigUInt64LE(0n, 86)
+  header.writeUInt8(0, 94) // rent_collector: None
+  header.writeUInt8(254, 95) // bump
+
+  const count = Buffer.alloc(4)
+  count.writeUInt32LE(owners.length)
+
+  return rpcAccount(Buffer.concat([header, count, members]))
+}
+
+/**
+ * Builds a Squads proposal account.
+ *
+ * @param {Object} [options] - `status` and `approved`.
+ * @returns {Object} The account, as the RPC serves it.
+ */
+function proposalAccount ({ status = PROPOSAL_STATUS_ACTIVE, approved = [] } = {}) {
+  const head = Buffer.alloc(58)
+
+  Buffer.from(PROPOSAL_DISCRIMINATOR).copy(head, 0)
+  head.writeBigUInt64LE(1n, 40) // transaction_index
+  head.writeUInt8(status, 48)
+  head.writeBigInt64LE(0n, 49) // status timestamp
+  head.writeUInt8(254, 57) // bump
+
+  const votes = Buffer.alloc(4)
+  votes.writeUInt32LE(approved.length)
+
+  return rpcAccount(Buffer.concat([
+    head,
+    votes,
+    ...approved.map((voter) => Buffer.from(getBase58Encoder().encode(voter))),
+    Buffer.alloc(8) // empty rejected and cancelled vectors
+  ]))
+}
+
+/**
+ * Builds the Squads program config account, holding the creation fee and the treasury.
+ *
+ * @returns {Object} The account, as the RPC serves it.
+ */
+function programConfigAccount () {
+  const data = Buffer.alloc(80)
+
+  Buffer.from(PROGRAM_CONFIG_DISCRIMINATOR).copy(data, 0)
+  data.writeBigUInt64LE(1000n, 40) // creation fee
+  Buffer.from(getBase58Encoder().encode(TREASURY)).copy(data, 48)
+
+  return rpcAccount(data)
+}
 
 /**
  * Converts a kit instruction to the web3.js shape the SDK helpers expect.
@@ -74,7 +203,7 @@ describe('wire format', () => {
 
   beforeEach(async () => {
     const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
-      provider: 'https://mock-url.com',
+      provider: 'https://dummy-url.com',
       createKeySecret: getBase58Decoder().decode(new Uint8Array(32).fill(9))
     })
     account = await wallet.getAccount(0)
@@ -82,6 +211,19 @@ describe('wire format', () => {
 
   afterEach(() => {
     jest.restoreAllMocks()
+  })
+
+  // The only place the account's own derivation is checked. Every other test in this file
+  // takes the vault as a given, so without these two a wrong PDA would cancel out: the
+  // message and the SDK's reference message would both be built for the same wrong address.
+  describe('address derivation', () => {
+    it('derives the multisig address the SDK derives from the same create key', async () => {
+      expect(await account.getAddress()).toBe(TEST_OWN_MULTISIG)
+    })
+
+    it('derives the vault address the SDK derives from that multisig', async () => {
+      expect(await account.getVaultAddress()).toBe(TEST_OWN_VAULT)
+    })
   })
 
   describe('spending limit address', () => {
@@ -450,7 +592,7 @@ describe('wire format', () => {
       ['an SPL transfer', false],
       ['an SPL transfer creating the recipient account', true]
     ])('matches the SDK for %s', async (_label, createAta) => {
-      const vault = await account.getVaultAddress()
+      const vault = TEST_OWN_VAULT
       const message = createAta === null
         ? new TransactionMessage({
           payerKey: new PublicKey(vault),
@@ -476,7 +618,7 @@ describe('wire format', () => {
     })
 
     it('marks the vault writable but not a signer', async () => {
-      const vault = await account.getVaultAddress()
+      const vault = TEST_OWN_VAULT
       const message = new TransactionMessage({
         payerKey: new PublicKey(vault),
         recentBlockhash: '11111111111111111111111111111111',
@@ -496,7 +638,7 @@ describe('wire format', () => {
     })
 
     it('decodes the message account keys the SDK stored', async () => {
-      const vault = await account.getVaultAddress()
+      const vault = TEST_OWN_VAULT
       const message = await splMessage(vault, true)
       const { account: stored, message: storedMessage } = storedTransaction(message, vault)
       const decoded = account._decodeTransactionAccount(TEST_MULTISIG, stored)
@@ -510,7 +652,7 @@ describe('wire format', () => {
     })
 
     it('matches the SDK when the message uses an address lookup table', async () => {
-      const vault = await account.getVaultAddress()
+      const vault = TEST_OWN_VAULT
       const extra = OWNERS.map((o) => new PublicKey(o))
       const tableKey = new PublicKey('7Np41oeYqPefeNQEHSv1UDhYrehxin3NStELsSKCT4K2')
       const table = {
@@ -563,7 +705,7 @@ describe('wire format', () => {
     })
 
     it('matches the SDK when the message needs ephemeral signers', async () => {
-      const vault = await account.getVaultAddress()
+      const vault = TEST_OWN_VAULT
       const [ephemeral] = multisig.getEphemeralSignerPda({
         transactionPda: new PublicKey(TEST_MULTISIG),
         ephemeralSignerIndex: 0
@@ -603,7 +745,7 @@ describe('wire format', () => {
     })
 
     it('refuses a lookup table that no longer exists', async () => {
-      const vault = await account.getVaultAddress()
+      const vault = TEST_OWN_VAULT
       const extra = OWNERS.map((o) => new PublicKey(o))
       const table = {
         key: new PublicKey('7Np41oeYqPefeNQEHSv1UDhYrehxin3NStELsSKCT4K2'),
@@ -627,7 +769,7 @@ describe('wire format', () => {
     })
 
     it('refuses an account at the lookup table address that is not a lookup table', async () => {
-      const vault = await account.getVaultAddress()
+      const vault = TEST_OWN_VAULT
       const extra = OWNERS.map((o) => new PublicKey(o))
       const table = {
         key: new PublicKey('7Np41oeYqPefeNQEHSv1UDhYrehxin3NStELsSKCT4K2'),
@@ -693,7 +835,7 @@ describe('wire format', () => {
     it.each([1n, 1000000n, 18446744073709551615n])(
       'matches the SDK for a transfer of %s lamports',
       async (value) => {
-        const vault = await account.getVaultAddress()
+        const vault = TEST_OWN_VAULT
 
         expect(Array.from(account._encodeTransactionMessage(vault, { to: RECIPIENT, value }).bytes))
           .toEqual(reference(vault, value))
@@ -701,17 +843,12 @@ describe('wire format', () => {
     )
 
     it('is 120 bytes for a native transfer', async () => {
-      const vault = await account.getVaultAddress()
+      const vault = TEST_OWN_VAULT
 
       expect(account._encodeTransactionMessage(vault, { to: RECIPIENT, value: 1n }).bytes)
         .toHaveLength(120)
     })
 
-    it('rejects anything but a native transfer', async () => {
-      const vault = await account.getVaultAddress()
-
-      expect(() => account._encodeTransactionMessage(vault, { instructions: [] })).toThrow()
-    })
   })
 
   describe('spl transfer message', () => {
@@ -755,7 +892,7 @@ describe('wire format', () => {
       ['the recipient already holds the token', false, 150],
       ['the recipient token account must be created', true, 289]
     ])('matches the SDK when %s', async (_label, createAta, size) => {
-      const vault = await account.getVaultAddress()
+      const vault = TEST_OWN_VAULT
       const instructions = await buildInstructions(vault, createAta)
 
       const mine = account._compileTransactionMessage(address(vault), instructions).bytes
@@ -770,6 +907,274 @@ describe('wire format', () => {
 
       expect(mine).toHaveLength(size)
       expect(Array.from(mine)).toEqual(Array.from(reference))
+    })
+  })
+
+  // The other half of the same subject: the encoders above are diffed against the SDK, and
+    // these assert that the public methods actually call them — with which arguments, in which
+    // order, over which accounts. An encoder can be byte-perfect and still be wired up wrong.
+  describe('instruction assembly', () => {
+      let sent
+
+      beforeEach(() => {
+        sent = []
+      })
+
+    /**
+     * Serves the reads a write path makes and records what it submits.
+     *
+     * @param {Object} [accounts] - The account each address resolves to, keyed by address.
+     * @returns {Object} The `fetch` mock.
+     */
+    function serve (accounts = {}) {
+      return stubSolanaRpc({
+        getAccountInfo: ([address]) => ({ context: { slot: 1 }, value: accounts[address] ?? null }),
+        getMultipleAccounts: ([addresses]) => ({
+          context: { slot: 1 },
+          value: addresses.map((address) => accounts[address] ?? null)
+        }),
+        getMinimumBalanceForRentExemption: () => 1000000,
+        getLatestBlockhash: () => ({
+          context: { slot: 1 },
+          value: { blockhash: DUMMY_BLOCKHASH, lastValidBlockHeight: 100 }
+        }),
+        getFeeForMessage: () => ({ context: { slot: 1 }, value: 5000 }),
+        sendTransaction: ([transaction]) => {
+          sent.push(transaction)
+
+          return DUMMY_SIGNATURE
+        }
+      })
+    }
+
+    /**
+     * Returns the instructions of the single transaction submitted so far.
+     *
+     * @returns {Object[]} The decoded instructions.
+     */
+    function submitted () {
+      expect(sent).toHaveLength(1)
+
+      return submittedInstructions(sent[0])
+    }
+
+    /**
+     * Returns the shape of the single transaction's instructions.
+     *
+     * @returns {Object[]} Each instruction's program, discriminator and accounts.
+     */
+    function submittedShapes () {
+      return submitted().map(instructionShape)
+    }
+
+    /**
+     * Names an account the way the decoded instructions report it.
+     *
+     * @param {string} address - The account's address.
+     * @param {Object} [roles] - `signer` and `writable`.
+     * @returns {Object} The expected account.
+     */
+    function role (address, { signer = false, writable = false } = {}) {
+      return { address, signer, writable }
+    }
+
+    describe('deploy', () => {
+      it('submits one multisigCreateV2 over the program config, treasury, multisig, create key and creator', async () => {
+        serve({ [PROGRAM_CONFIG]: programConfigAccount() })
+
+        await account.deploy([SIGNER], 1)
+
+        const [instruction, ...rest] = submittedShapes()
+
+        expect(rest).toEqual([])
+        expect(instruction.programAddress).toBe(SQUADS_PROGRAM_ADDRESS)
+        expect(instruction.discriminator)
+          .toEqual([...generated.multisigCreateV2InstructionDiscriminator])
+        expect(instruction.accounts.map(({ address }) => address)).toEqual([
+          PROGRAM_CONFIG,
+          TREASURY,
+          TEST_OWN_MULTISIG,
+          CREATE_KEY,
+          SIGNER,
+          SYSTEM_PROGRAM
+        ])
+        expect(instruction.accounts.filter(({ signer }) => signer).map(({ address }) => address))
+          .toEqual([CREATE_KEY, SIGNER])
+      })
+    })
+
+    describe('propose', () => {
+      it('submits vaultTransactionCreate then proposalCreate at the next index', async () => {
+        serve({ [TEST_OWN_MULTISIG]: multisigAccount() })
+
+        await account.propose({ to: PAYEE, value: 1000n })
+
+        const [create, propose, ...rest] = submittedShapes()
+
+        expect(rest).toEqual([])
+        expect(create.discriminator)
+          .toEqual([...generated.vaultTransactionCreateInstructionDiscriminator])
+        expect(create.accounts).toEqual([
+          role(TEST_OWN_MULTISIG, { writable: true }),
+          role(NEXT_TRANSACTION, { writable: true }),
+          role(SIGNER, { signer: true, writable: true }),
+          role(SIGNER, { signer: true, writable: true }),
+          role(SYSTEM_PROGRAM)
+        ])
+
+        expect(propose.discriminator).toEqual([...generated.proposalCreateInstructionDiscriminator])
+        expect(propose.accounts).toEqual([
+          role(TEST_OWN_MULTISIG, { writable: true }),
+          role(NEXT_PROPOSAL, { writable: true }),
+          role(SIGNER, { signer: true, writable: true }),
+          role(SIGNER, { signer: true, writable: true }),
+          role(SYSTEM_PROGRAM)
+        ])
+      })
+
+      it('submits the vaultTransactionCreate args the SDK builds, in full', async () => {
+        serve({ [TEST_OWN_MULTISIG]: multisigAccount() })
+
+        await account.propose({ to: PAYEE, value: 1000n })
+
+        const reference = multisig.instructions.vaultTransactionCreate({
+          multisigPda: ownMultisigKey,
+          transactionIndex: 1n,
+          creator: new PublicKey(SIGNER),
+          vaultIndex: 0,
+          ephemeralSigners: 0,
+          transactionMessage: new TransactionMessage({
+            payerKey: new PublicKey(TEST_OWN_VAULT),
+            recentBlockhash: DUMMY_BLOCKHASH,
+            instructions: [SystemProgram.transfer({
+              fromPubkey: new PublicKey(TEST_OWN_VAULT),
+              toPubkey: new PublicKey(PAYEE),
+              lamports: 1000
+            })]
+          })
+        })
+
+        expect(submitted()[0].data).toEqual(Buffer.from(reference.data))
+      })
+
+      it('appends proposalApprove and vaultTransactionExecute when auto-executing', async () => {
+        serve({ [TEST_OWN_MULTISIG]: multisigAccount() })
+
+        await account.propose({ to: PAYEE, value: 1000n }, { autoExecute: true })
+
+        const instructions = submittedShapes()
+
+        expect(instructions.map(({ discriminator }) => discriminator)).toEqual([
+          [...generated.vaultTransactionCreateInstructionDiscriminator],
+          [...generated.proposalCreateInstructionDiscriminator],
+          [...generated.proposalApproveInstructionDiscriminator],
+          [...generated.vaultTransactionExecuteInstructionDiscriminator]
+        ])
+
+        const execute = instructions[3]
+
+        // One role per account per message, unioned across instructions: the multisig and the
+        // transaction are writable because the two create instructions ahead of this one need
+        // them so, even though execute alone would take both read-only.
+        expect(execute.accounts.slice(0, 4)).toEqual([
+          role(TEST_OWN_MULTISIG, { writable: true }),
+          role(NEXT_PROPOSAL, { writable: true }),
+          role(NEXT_TRANSACTION, { writable: true }),
+          role(SIGNER, { signer: true, writable: true })
+        ])
+        expect(execute.accounts.slice(4).map(({ address }) => address))
+          .toEqual([TEST_OWN_VAULT, PAYEE, SYSTEM_PROGRAM])
+      })
+
+      it('refuses a transaction that is not a native transfer', async () => {
+      const error = await account.propose({ instructions: [] }).catch((thrown) => thrown)
+
+      expect(error).toBeInstanceOf(NotImplementedError)
+      expect(error.message)
+        .toBe("Method 'propose(tx) for anything but a native transfer' must be implemented.")
+    })
+
+    it('leaves the flag inert above threshold 1', async () => {
+        serve({ [TEST_OWN_MULTISIG]: multisigAccount({ owners: [SIGNER, SECOND_OWNER], threshold: 2 }) })
+
+        await account.propose({ to: PAYEE, value: 1000n }, { autoExecute: true })
+
+        expect(submittedShapes()).toHaveLength(2)
+      })
+    })
+
+    describe('changeThreshold', () => {
+      it('submits configTransactionCreate then proposalCreate', async () => {
+        serve({ [TEST_OWN_MULTISIG]: multisigAccount({ owners: [SIGNER, SECOND_OWNER], threshold: 1 }) })
+
+        await account.changeThreshold(2)
+
+        const [create, propose, ...rest] = submittedShapes()
+
+        expect(rest).toEqual([])
+        expect(create.discriminator)
+          .toEqual([...generated.configTransactionCreateInstructionDiscriminator])
+        expect(create.accounts).toEqual([
+          role(TEST_OWN_MULTISIG, { writable: true }),
+          role(NEXT_TRANSACTION, { writable: true }),
+          role(SIGNER, { signer: true, writable: true }),
+          role(SIGNER, { signer: true, writable: true }),
+          role(SYSTEM_PROGRAM)
+        ])
+        expect(propose.discriminator).toEqual([...generated.proposalCreateInstructionDiscriminator])
+      })
+    })
+
+    describe('approveProposal', () => {
+      it('submits one proposalApprove over the multisig, member and proposal', async () => {
+        serve({ [TEST_OWN_MULTISIG]: multisigAccount(), [NEXT_PROPOSAL]: proposalAccount() })
+
+        await account.approveProposal(1)
+
+        const [instruction, ...rest] = submittedShapes()
+
+        expect(rest).toEqual([])
+        expect(instruction.discriminator)
+          .toEqual([...generated.proposalApproveInstructionDiscriminator])
+        expect(instruction.accounts).toEqual([
+          role(TEST_OWN_MULTISIG),
+          role(SIGNER, { signer: true, writable: true }),
+          role(NEXT_PROPOSAL, { writable: true })
+        ])
+      })
+    })
+
+    describe('rejectProposal', () => {
+      it('submits one proposalReject over the same accounts', async () => {
+        serve({ [TEST_OWN_MULTISIG]: multisigAccount(), [NEXT_PROPOSAL]: proposalAccount() })
+
+        await account.rejectProposal(1)
+
+        const [instruction, ...rest] = submittedShapes()
+
+        expect(rest).toEqual([])
+        expect(instruction.discriminator)
+          .toEqual([...generated.proposalRejectInstructionDiscriminator])
+        expect(instruction.accounts).toEqual([
+          role(TEST_OWN_MULTISIG),
+          role(SIGNER, { signer: true, writable: true }),
+          role(NEXT_PROPOSAL, { writable: true })
+        ])
+      })
+    })
+
+    it('keeps the clock sysvar out of the instructions it submits', async () => {
+      serve({
+        [TEST_OWN_MULTISIG]: multisigAccount(),
+        [NEXT_PROPOSAL]: proposalAccount(),
+        [CLOCK_SYSVAR]: rpcAccount(Buffer.alloc(40), SYSTEM_PROGRAM)
+      })
+
+      await account.approveProposal(1)
+
+      for (const instruction of submittedShapes()) {
+        expect(instruction.accounts.map(({ address }) => address)).not.toContain(CLOCK_SYSVAR)
+      }
     })
   })
 })

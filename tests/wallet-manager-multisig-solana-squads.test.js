@@ -27,6 +27,8 @@ const TEST_SEED_PHRASE =
 const TEST_RPC_URL = 'https://mock-url.com'
 const TEST_RPC_URL_FALLBACK = 'https://mock-url-fallback.com'
 
+const DUMMY_FEES = [{ slot: 1, prioritizationFee: 1000 }]
+
 describe('WalletManagerMultisigSolanaSquads', () => {
   let wallet
 
@@ -42,9 +44,11 @@ describe('WalletManagerMultisigSolanaSquads', () => {
   })
 
   describe('Constructor', () => {
-    it('should create wallet manager with valid config', () => {
-      expect(wallet).toBeInstanceOf(WalletManagerMultisigSolanaSquads)
-      expect(wallet._rpc).toBeDefined()
+    it('should send requests to the configured provider', async () => {
+      const fetchMock = stubSolanaRpc({ getRecentPrioritizationFees: () => DUMMY_FEES })
+
+      expect(await wallet.getFeeRates()).toEqual({ normal: 1100n, fast: 2000n })
+      expect(String(fetchMock.mock.calls[0][0])).toBe(TEST_RPC_URL)
     })
 
     it('should create wallet manager with string seed phrase', () => {
@@ -61,18 +65,34 @@ describe('WalletManagerMultisigSolanaSquads', () => {
       })).toThrow('The seed phrase is invalid.')
     })
 
-    it('should create a failover RPC client from a list of providers', () => {
+    it('should send requests to the first of several providers', async () => {
+      const newWallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: [TEST_RPC_URL, TEST_RPC_URL_FALLBACK]
+      })
+      const fetchMock = stubSolanaRpc({ getRecentPrioritizationFees: () => DUMMY_FEES })
+
+      await newWallet.getFeeRates()
+
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([TEST_RPC_URL])
+    })
+
+    // Pins REVIEW.logic.md L23: the failover proxy wraps the request builder, not the `.send()`
+    // that performs the call, so the second provider is never tried. Delete the `.failing` when
+    // that is fixed — this test then reports the fix by failing.
+    it.failing('should fall back when the first provider is unreachable', async () => {
       const newWallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
         provider: [TEST_RPC_URL, TEST_RPC_URL_FALLBACK]
       })
 
-      expect(newWallet._rpc).toBeDefined()
-    })
+      jest.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+        if (String(url) === TEST_RPC_URL) {
+          throw new Error('the first provider is unreachable')
+        }
 
-    it('should leave the RPC client unset without a provider', () => {
-      const newWallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE)
+        return Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body).id, result: DUMMY_FEES })
+      })
 
-      expect(newWallet._rpc).toBeUndefined()
+      expect(await newWallet.getFeeRates()).toEqual({ normal: 1100n, fast: 2000n })
     })
   })
 
@@ -148,7 +168,7 @@ describe('WalletManagerMultisigSolanaSquads', () => {
     })
 
     it('should calculate normal rate as 110% of max fee', async () => {
-      stubSolanaRpc({ getRecentPrioritizationFees: () => [{ slot: 1, prioritizationFee: 1000 }] })
+      stubSolanaRpc({ getRecentPrioritizationFees: () => DUMMY_FEES })
 
       const feeRates = await wallet.getFeeRates()
 
@@ -156,7 +176,7 @@ describe('WalletManagerMultisigSolanaSquads', () => {
     })
 
     it('should calculate fast rate as 200% of max fee', async () => {
-      stubSolanaRpc({ getRecentPrioritizationFees: () => [{ slot: 1, prioritizationFee: 1000 }] })
+      stubSolanaRpc({ getRecentPrioritizationFees: () => DUMMY_FEES })
 
       const feeRates = await wallet.getFeeRates()
 
