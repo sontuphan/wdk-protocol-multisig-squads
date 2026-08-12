@@ -24,8 +24,8 @@ import { stubSolanaRpc } from './helpers/rpc.js'
 
 const TEST_SEED_PHRASE =
   'test walk nut penalty hip pave soap entry language right filter choice'
-const TEST_RPC_URL = 'https://mock-url.com'
-const TEST_RPC_URL_FALLBACK = 'https://mock-url-fallback.com'
+const TEST_RPC_URL = 'https://dummy-url.com'
+const TEST_RPC_URL_FALLBACK = 'https://dummy-url-fallback.com'
 
 const DUMMY_FEES = [{ slot: 1, prioritizationFee: 1000 }]
 
@@ -160,14 +160,26 @@ describe('WalletManagerMultisigSolanaSquads', () => {
   })
 
   describe('getFeeRates', () => {
+    const DUMMY_ASCENDING_FEES = [
+      { slot: 1, prioritizationFee: 1000 },
+      { slot: 2, prioritizationFee: 2000 },
+      { slot: 3, prioritizationFee: 3000 }
+    ]
+
+    // The highest fee is in the middle, so taking the last one would look right at a glance.
+    const DUMMY_UNSORTED_FEES = [
+      { slot: 1, prioritizationFee: 1000 },
+      { slot: 2, prioritizationFee: 5000 },
+      { slot: 3, prioritizationFee: 3000 }
+    ]
+
+    const DUMMY_ZERO_FEES = [
+      { slot: 1, prioritizationFee: 0 },
+      { slot: 2, prioritizationFee: 0 }
+    ]
+
     it('should return fee rates with normal and fast', async () => {
-      const fetchMock = stubSolanaRpc({
-        getRecentPrioritizationFees: () => [
-          { slot: 1, prioritizationFee: 1000 },
-          { slot: 2, prioritizationFee: 2000 },
-          { slot: 3, prioritizationFee: 3000 }
-        ]
-      })
+      const fetchMock = stubSolanaRpc({ getRecentPrioritizationFees: () => DUMMY_ASCENDING_FEES })
 
       // The highest of the three fees, at 110% and 200%.
       expect(await wallet.getFeeRates()).toEqual({ normal: 3300n, fast: 6000n })
@@ -180,30 +192,8 @@ describe('WalletManagerMultisigSolanaSquads', () => {
       expect({ method, params }).toEqual({ method: 'getRecentPrioritizationFees', params: [] })
     })
 
-    it('should calculate normal rate as 110% of max fee', async () => {
-      stubSolanaRpc({ getRecentPrioritizationFees: () => DUMMY_FEES })
-
-      const feeRates = await wallet.getFeeRates()
-
-      expect(feeRates.normal).toBe(1100n)
-    })
-
-    it('should calculate fast rate as 200% of max fee', async () => {
-      stubSolanaRpc({ getRecentPrioritizationFees: () => DUMMY_FEES })
-
-      const feeRates = await wallet.getFeeRates()
-
-      expect(feeRates.fast).toBe(2000n)
-    })
-
     it('should use highest prioritization fee when multiple fees returned', async () => {
-      stubSolanaRpc({
-        getRecentPrioritizationFees: () => [
-          { slot: 1, prioritizationFee: 1000 },
-          { slot: 2, prioritizationFee: 5000 },
-          { slot: 3, prioritizationFee: 3000 }
-        ]
-      })
+      stubSolanaRpc({ getRecentPrioritizationFees: () => DUMMY_UNSORTED_FEES })
 
       const feeRates = await wallet.getFeeRates()
 
@@ -211,28 +201,10 @@ describe('WalletManagerMultisigSolanaSquads', () => {
       expect(feeRates.fast).toBe(10000n)
     })
 
-    it('should filter out zero fees', async () => {
-      stubSolanaRpc({
-        getRecentPrioritizationFees: () => [
-          { slot: 1, prioritizationFee: 0 },
-          { slot: 2, prioritizationFee: 0 },
-          { slot: 3, prioritizationFee: 2000 }
-        ]
-      })
-
-      const feeRates = await wallet.getFeeRates()
-
-      expect(feeRates.normal).toBe(2200n)
-      expect(feeRates.fast).toBe(4000n)
-    })
-
+    // The only test that shows the zero filter doing anything: with any non-zero fee present
+    // the maximum is the same filtered or not, so a fixture like [0, 0, 2000] cannot tell.
     it('should use default fee when all fees are zero', async () => {
-      stubSolanaRpc({
-        getRecentPrioritizationFees: () => [
-          { slot: 1, prioritizationFee: 0 },
-          { slot: 2, prioritizationFee: 0 }
-        ]
-      })
+      stubSolanaRpc({ getRecentPrioritizationFees: () => DUMMY_ZERO_FEES })
 
       const feeRates = await wallet.getFeeRates()
 

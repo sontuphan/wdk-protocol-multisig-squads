@@ -44,6 +44,21 @@ export function stubSolanaRpc (handlers) {
 }
 
 /**
+ * Returns the `params` of every request made for one RPC method, in call order, so a test can
+ * assert which accounts were read without reaching for the client.
+ *
+ * @param {Object} fetchMock - The mock `stubSolanaRpc` returned.
+ * @param {string} method - The RPC method name.
+ * @returns {Array[]} For each matching request, its `params` array.
+ */
+export function rpcRequests (fetchMock, method) {
+  return fetchMock.mock.calls
+    .map(([, init]) => JSON.parse(init.body))
+    .filter((request) => request.method === method)
+    .map((request) => request.params)
+}
+
+/**
  * Wraps a `getMultipleAccounts` result the way the RPC does, with the context the real
  * response carries.
  *
