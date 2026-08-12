@@ -362,7 +362,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the address of the Squads multisig account.
+   * Returns the address of the Squads multisig account. A configured `multisigPda` wins over a
+   * configured `createKey`, which is only derived from when no address is configured.
    *
    * @returns {Promise<string>} The multisig address.
    * @throws {Error} If neither `multisigPda` nor `createKey` is configured.
@@ -880,7 +881,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If the multisig does not exist, the transaction is malformed, or the RPC request fails.
    */
   async quotePropose (tx, config) {
-    const account = this._withConfig(config)
+    const account = await this._withConfig(config)
     const { address: multisigPda, owners, isCreated } = await account.getMultisigInfo()
 
     if (!isCreated) {
@@ -927,7 +928,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     const mint = address(transferOptions.token)
     const recipient = address(transferOptions.recipient)
 
-    const account = this._withConfig(config)
+    const account = await this._withConfig(config)
     const { address: multisigPda, owners, isCreated } = await account.getMultisigInfo()
 
     if (!isCreated) {
@@ -1233,19 +1234,28 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /** @private */
-  _withConfig (config) {
+  async _withConfig (config) {
     if (!config) {
       return this
     }
 
+    let identity = {}
+
+    if (!config.multisigPda && !config.createKey) {
+      await this.getAddress()
+
+      identity = this._config.multisigPda
+        ? { multisigPda: this._config.multisigPda }
+        : { createKey: this._createKey }
+    } else if (!config.multisigPda) {
+      identity = { multisigPda: undefined }
+    }
+
     const account = new WalletAccountReadOnlyMultisigSolanaSquads(this._signerAddress, {
       ...this._config,
+      ...identity,
       ...config
     })
-
-    if (!config.provider) {
-      account._rpc = this._rpc
-    }
 
     return account
   }

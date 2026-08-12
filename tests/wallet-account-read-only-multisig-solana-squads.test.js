@@ -2160,7 +2160,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
 
       const { fee } = await account.quotePropose(TX, { multisigPda: TEST_DERIVED_PDA })
 
-      // The override reuses this account's transport, and reads the multisig it names.
+      // The override keeps this account's provider, and reads the multisig it names.
       expect(rpcRequests(rpc, 'getAccountInfo')[0][0]).toBe(TEST_DERIVED_PDA)
       expect(fee).toBe(5148440n)
     })

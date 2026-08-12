@@ -34,6 +34,13 @@ const TEST_SEED_PHRASE =
 const TEST_RPC_URL = 'https://dummy-url.com'
 const TEST_MULTISIG_PDA = '11111111111111111111111111111111'
 
+// A fixed 32-byte create key secret, so the derived multisig address is stable.
+const CREATE_KEY_SECRET = getBase58Decoder().decode(new Uint8Array(32).fill(9))
+
+// What CREATE_KEY_SECRET derives to, and the multisig PDA the SDK derives from it.
+const CREATE_KEY = 'J2xccRtuG43drESLYznHhLhQkLTdfepcKYbiQ9BsJVaf'
+const DERIVED_MULTISIG_PDA = '7jmBsJmAV5aAwEQkw3AybYgTMHVUzbWgWMGvyMjhSEDQ'
+
 // PDAs of TEST_MULTISIG_PDA, from the SDK's `getProposalPda` / `getSpendingLimitPda` rather
 // than from the code under test, so a broken derivation fails instead of cancelling out.
 const TEST_PROPOSAL_PDA_3 = '4Eroat41yAUnTi5FJsjWDocy5jBZT1VuaxEvmgyVeB26'
@@ -490,13 +497,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
   describe('deploy', () => {
     // Program-derived, so identical on every cluster.
     const PROGRAM_CONFIG_PDA = 'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr'
-
-    // A fixed 32-byte create key secret, so the derived multisig address is stable.
-    const CREATE_KEY_SECRET = getBase58Decoder().decode(new Uint8Array(32).fill(9))
-
-    // What CREATE_KEY_SECRET derives to, and the multisig PDA the SDK derives from it.
-    const CREATE_KEY = 'J2xccRtuG43drESLYznHhLhQkLTdfepcKYbiQ9BsJVaf'
-    const DERIVED_MULTISIG_PDA = '7jmBsJmAV5aAwEQkw3AybYgTMHVUzbWgWMGvyMjhSEDQ'
 
     /**
      * Builds a deploying account whose RPC and send are stubbed.
@@ -2455,6 +2455,91 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         status: 'executed',
         transaction: { hash: DUMMY_TRANSFER_HASH, fee: DUMMY_FEE }
       })
+    })
+  })
+
+  describe('quotes under a config override', () => {
+    const TX = { to: OTHER_MEMBER, value: 1000000n }
+    const OPTIONS = { token: THIRD_MEMBER, recipient: OTHER_MEMBER, amount: 1000n }
+
+    /**
+     * Builds an account that only knows its create key secret, as a deploying wallet does,
+     * and serves the multisig at the address that secret derives.
+     *
+     * @param {Object} [config] - Configuration replacing the create key secret.
+     * @returns {Promise<{ account: Object, rpc: Object }>}
+     */
+    async function quotingAccount (config = { createKeySecret: CREATE_KEY_SECRET }) {
+      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: TEST_RPC_URL,
+        commitment: 'confirmed',
+        ...config
+      })
+      const account = await wallet.getAccount(0)
+
+      const rpc = stubSolanaRpc({
+        getAccountInfo: ([queried]) => serveValue(
+          queried === DERIVED_MULTISIG_PDA
+            ? multisigAccountValue([{ address: TEST_SIGNER }], { threshold: 1 })
+            : null
+        ),
+        // The real rent formula: (128 + size) * 6960 lamports.
+        getMinimumBalanceForRentExemption: ([size]) => (128n + BigInt(size)) * 6960n
+      })
+
+      return { account, rpc }
+    }
+
+    it('reads the multisig the create key derives, under the overridden commitment', async () => {
+      const { account, rpc } = await quotingAccount()
+
+      // 221 B tx rent + 166 B proposal rent + 5000
+      expect(await account.quotePropose(TX, { commitment: 'processed' }))
+        .toEqual({ fee: 4480280n })
+      expect(rpcRequests(rpc, 'getAccountInfo')[0])
+        .toEqual([DERIVED_MULTISIG_PDA, { commitment: 'processed', encoding: 'base64' }])
+    })
+
+    it('quotes a transfer the same way', async () => {
+      const { account, rpc } = await quotingAccount()
+
+      // 395 B tx rent + 166 B proposal rent + 5000
+      expect(await account.quoteTransfer(OPTIONS, { commitment: 'processed' }))
+        .toEqual({ fee: 5691320n })
+      expect(rpcRequests(rpc, 'getAccountInfo')[0])
+        .toEqual([DERIVED_MULTISIG_PDA, { commitment: 'processed', encoding: 'base64' }])
+    })
+
+    it('lets the override name a different multisig', async () => {
+      const { account, rpc } = await quotingAccount()
+
+      // The named multisig is absent, so the quote refuses rather than quoting the derived one.
+      await expect(account.quotePropose(TX, { multisigPda: TEST_MULTISIG_PDA }))
+        .rejects.toThrow(`The multisig account ${TEST_MULTISIG_PDA} does not exist.`)
+      expect(rpcRequests(rpc, 'getAccountInfo')[0][0]).toBe(TEST_MULTISIG_PDA)
+    })
+
+    it('lets an override name a create key over the configured address', async () => {
+      const { account, rpc } = await quotingAccount({ multisigPda: TEST_MULTISIG_PDA })
+
+      expect(await account.quotePropose(TX, { createKey: CREATE_KEY }))
+        .toEqual({ fee: 4480280n })
+      expect(rpcRequests(rpc, 'getAccountInfo')[0][0]).toBe(DERIVED_MULTISIG_PDA)
+    })
+
+    it('keeps the configured address for the account the override was taken from', async () => {
+      const { account } = await quotingAccount({ multisigPda: TEST_MULTISIG_PDA })
+
+      await account.quotePropose(TX, { createKey: CREATE_KEY })
+
+      expect(await account.getAddress()).toBe(TEST_MULTISIG_PDA)
+    })
+
+    it('resolves the create key without an override too', async () => {
+      const { account } = await quotingAccount()
+
+      expect(await account.getAddress()).toBe(DERIVED_MULTISIG_PDA)
+      expect(await account.quotePropose(TX)).toEqual({ fee: 4480280n })
     })
   })
 })

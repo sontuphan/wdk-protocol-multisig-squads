@@ -213,7 +213,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     protected _rpc: SolanaRpc | undefined;
     /**
-     * Returns the address of the Squads multisig account.
+     * Returns the address of the Squads multisig account. A configured `multisigPda` wins over a
+     * configured `createKey`, which is only derived from when no address is configured.
      *
      * @returns {Promise<string>} The multisig address.
      * @throws {Error} If neither `multisigPda` nor `createKey` is configured.
