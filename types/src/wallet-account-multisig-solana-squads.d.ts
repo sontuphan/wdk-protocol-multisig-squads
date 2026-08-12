@@ -207,9 +207,11 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     changeThreshold(newThreshold: number): Promise<SolanaMultisigProposalResult>;
     /**
-     * Returns a read-only copy of the account.
+     * Returns a read-only copy of the account. The multisig address is resolved first, since the
+     * copy carries no `createKeySecret` to resolve it from.
      *
      * @returns {Promise<WalletAccountReadOnlyMultisigSolanaSquads>} The read-only account.
+     * @throws {Error} If the multisig address cannot be resolved.
      */
     toReadOnlyAccount(): Promise<WalletAccountReadOnlyMultisigSolanaSquads>;
     /**

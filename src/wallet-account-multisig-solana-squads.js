@@ -167,7 +167,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    */
   async getAddress () {
     if (!this._multisigPda && !this._createKey && this._config.createKeySecret) {
-      this._createKey = (await this._getCreateKeySigner()).address
+      const { address } = await this._getCreateKeySigner()
+      this._createKey = address
     }
 
     return super.getAddress()
@@ -747,11 +748,15 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /**
-   * Returns a read-only copy of the account.
+   * Returns a read-only copy of the account. The multisig address is resolved first, since the
+   * copy carries no `createKeySecret` to resolve it from.
    *
    * @returns {Promise<WalletAccountReadOnlyMultisigSolanaSquads>} The read-only account.
+   * @throws {Error} If the multisig address cannot be resolved.
    */
   async toReadOnlyAccount () {
+    await this.getAddress()
+
     const { createKeySecret, ...config } = this._config
 
     return new WalletAccountReadOnlyMultisigSolanaSquads(this._signerAddress, {

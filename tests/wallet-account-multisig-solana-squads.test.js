@@ -426,6 +426,27 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     const readOnly = await account.toReadOnlyAccount()
 
     expect(readOnly).toBeInstanceOf(WalletAccountReadOnlyMultisigSolanaSquads)
+    expect(await readOnly.getAddress()).toBe(TEST_MULTISIG_PDA)
+  })
+
+  // The copy carries no createKeySecret, so an address it cannot name here it can never name.
+  it('resolves the address into a read-only view of a create-key-secret account', async () => {
+    const deploying = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+      provider: TEST_RPC_URL,
+      createKeySecret: CREATE_KEY_SECRET
+    })
+    const readOnly = await (await deploying.getAccount(0)).toReadOnlyAccount()
+
+    expect(await readOnly.getAddress()).toBe(DERIVED_MULTISIG_PDA)
+  })
+
+  it('refuses a read-only view of an account that names no multisig', async () => {
+    const nameless = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+      provider: TEST_RPC_URL
+    })
+
+    await expect((await nameless.getAccount(0)).toReadOnlyAccount())
+      .rejects.toThrow('No multisig address is configured. Provide `multisigPda` or `createKey` in the config.')
   })
 
   it('throws NotImplementedError for messages beyond a native transfer', async () => {
