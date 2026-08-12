@@ -29,16 +29,8 @@ const TEST_RPC_URL_FALLBACK = 'https://dummy-url-fallback.com'
 
 const DUMMY_FEES = [{ slot: 1, prioritizationFee: 1000 }]
 
-// The signer keys TEST_SEED_PHRASE derives at each path.
+// The signer key TEST_SEED_PHRASE derives at 0'/0', which three suites need.
 const SIGNER_0 = '3uXqWpwgqKVdiHAwF6Vmu4G4vdQzpR66xjPkz1G7zMKE'
-const SIGNER_1 = 'CfGcujEkPVDx7yGyn1PUjxn2e353MXbLk8ixzwuJUktK'
-const SIGNER_0_0 = 'DPGHHHMaayXkaThUJCUnUAJCdgc9sxNh1UEGa6vJximM'
-const SIGNER_0_1 = 'jbhYXhWfRPqPvaKqaWCJEgBdZMquFxUvjWaWLEH3YCz'
-
-// Ed25519 is deterministic, so SIGNER_0 signing 'after dispose' is a fixed value.
-const SIGNATURE_0 =
-  '5dfaad6f72a44da4eb77af48def5476a64aeaa720be3a2be87151c6f08537a9b' +
-  'd63c7f4ffa218d93b36a4457b2ba0d64907c1bc5ed31a2fdc3c1bd990dffa70c'
 
 describe('WalletManagerMultisigSolanaSquads', () => {
   let wallet
@@ -108,6 +100,8 @@ describe('WalletManagerMultisigSolanaSquads', () => {
   })
 
   describe('getAccount', () => {
+    const SIGNER_1 = 'CfGcujEkPVDx7yGyn1PUjxn2e353MXbLk8ixzwuJUktK'
+
     it('should return account at index 0', async () => {
       const account = await wallet.getAccount(0)
 
@@ -140,6 +134,9 @@ describe('WalletManagerMultisigSolanaSquads', () => {
   })
 
   describe('getAccountByPath', () => {
+    const SIGNER_0_0 = 'DPGHHHMaayXkaThUJCUnUAJCdgc9sxNh1UEGa6vJximM'
+    const SIGNER_0_1 = 'jbhYXhWfRPqPvaKqaWCJEgBdZMquFxUvjWaWLEH3YCz'
+
     it("should return account for path \"0'/0'/0'\"", async () => {
       const account = await wallet.getAccountByPath("0'/0'/0'")
 
@@ -239,6 +236,11 @@ describe('WalletManagerMultisigSolanaSquads', () => {
   })
 
   describe('dispose', () => {
+    // Ed25519 is deterministic, so SIGNER_0 signing 'after dispose' is a fixed value.
+    const SIGNATURE_0 =
+      '5dfaad6f72a44da4eb77af48def5476a64aeaa720be3a2be87151c6f08537a9b' +
+      'd63c7f4ffa218d93b36a4457b2ba0d64907c1bc5ed31a2fdc3c1bd990dffa70c'
+
     it('should dispose the accounts it derived', async () => {
       const account = await wallet.getAccount()
 

@@ -39,8 +39,27 @@ export function stubSolanaRpc (handlers) {
       throw new Error(`Unexpected Solana RPC call: ${method} at ${url}`)
     }
 
-    return Response.json({ jsonrpc: '2.0', id, result: handler(params) })
+    return new Response(encode({ jsonrpc: '2.0', id, result: handler(params) }), {
+      headers: { 'content-type': 'application/json' }
+    })
   })
+}
+
+/**
+ * Serializes a response body the way a validator does. `JSON.stringify` throws on a BigInt, and
+ * a `u64` past `Number.MAX_SAFE_INTEGER` cannot survive a round trip through a JS number — so
+ * bigints are written as unquoted numerals, which is what the wire carries and what
+ * `@solana/rpc` parses back losslessly.
+ *
+ * @param {Object} payload - The JSON-RPC response.
+ * @returns {string} The response body.
+ */
+function encode (payload) {
+  const MARKER = '__bigint__'
+
+  return JSON.stringify(payload, (_key, value) =>
+    typeof value === 'bigint' ? `${value}${MARKER}` : value
+  ).replace(new RegExp(`"(\\d+)${MARKER}"`, 'g'), '$1')
 }
 
 /**

@@ -14,11 +14,13 @@
 
 'use strict'
 
-import { describe, it, expect, jest } from '@jest/globals'
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals'
 
 import { getBase58Decoder, getBase58Encoder, getBase64Decoder, getBase64Encoder } from '@solana/codecs'
 
 import { NoSuchElementError, NotImplementedError } from '@tetherto/wdk-wallet'
+
+import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 
 import {
   WalletAccountReadOnlyMultisigSolanaSquads,
@@ -26,7 +28,7 @@ import {
   NotSupportedError
 } from '@tetherto/wdk-protocol-multisig-squads'
 
-const TEST_RPC_URL = 'https://mock-url.com'
+const TEST_RPC_URL = 'https://dummy-url.com'
 const TEST_MULTISIG_PDA = 'EEPqJbpYrwqisgoPt3Vu74YBqRji8mFrRxQdARVfDuNG'
 const SYSTEM_PROGRAM_ADDRESS = '11111111111111111111111111111111'
 
@@ -118,8 +120,8 @@ function multisigAccountValue (options) {
     owner: SQUADS_PROGRAM_ADDRESS,
     data: [encodeMultisigAccount(options), 'base64'],
     executable: false,
-    lamports: 2039280n,
-    space: 165n
+    lamports: 2039280,
+    space: 165
   }
 }
 
@@ -128,7 +130,7 @@ function multisigAccountValue (options) {
  *
  * @param {Object|null} value - The `value` field of the RPC response.
  * @param {Object} [config] - Extra config for the account.
- * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getAccountInfo: Function }}
+ * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, rpc: Object }}
  */
 function mockAccount (value, config = { multisigPda: TEST_MULTISIG_PDA }) {
   const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
@@ -137,24 +139,23 @@ function mockAccount (value, config = { multisigPda: TEST_MULTISIG_PDA }) {
     ...config
   })
 
-  const getAccountInfo = jest.fn(() => ({ send: async () => ({ value }) }))
+  const rpc = stubSolanaRpc({ getAccountInfo: () => ({ context: { slot: 1 }, value }) })
 
-  account._rpc = { getAccountInfo }
-
-  return { account, getAccountInfo }
+  return { account, rpc }
 }
 
 // Vault PDAs for TEST_MULTISIG_PDA, derived independently of the code under test
 // and cross-checked against `getVaultPda` from @sqds/multisig.
 const TEST_VAULT_0 = '6soQChwEoXXbAo17wNPdfLFaxzrAjiAxPif9nbJkDXCm'
 const TEST_VAULT_3 = '9tyW4GZWSMPZj8KSsVKsVjJvnVaE4mJjsg77TznzQfcs'
+const TEST_VAULT_255 = '486r7kq6wj3j84WvhD19SZRCNZbaDFXomiawL7yNfN9s'
 
 /**
  * Builds a read-only account whose RPC returns a fixed `getBalance` result.
  *
  * @param {bigint} lamports - The balance to report.
  * @param {Object} [config] - Extra config for the account.
- * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getBalance: Function }}
+ * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, rpc: Object }}
  */
 function mockBalanceAccount (lamports, config = { multisigPda: TEST_MULTISIG_PDA }) {
   const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
@@ -163,11 +164,9 @@ function mockBalanceAccount (lamports, config = { multisigPda: TEST_MULTISIG_PDA
     ...config
   })
 
-  const getBalance = jest.fn(() => ({ send: async () => ({ value: lamports }) }))
+  const rpc = stubSolanaRpc({ getBalance: () => ({ context: { slot: 1 }, value: lamports }) })
 
-  account._rpc = { getBalance }
-
-  return { account, getBalance }
+  return { account, rpc }
 }
 
 // Real mint addresses, and the legacy-SPL associated token accounts they derive to
@@ -175,6 +174,7 @@ function mockBalanceAccount (lamports, config = { multisigPda: TEST_MULTISIG_PDA
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 const USDC_ATA_VAULT_0 = 'HjTmApEb1hKe9snNpoqkv8HrXaEDSvhEJbsDVtBwZTsA'
 const USDC_ATA_VAULT_3 = 'AAd5adJNrMXHupG13WMvDzenYdVua77LEAbnJ89yRBwS'
+const TOKEN_2022_ATA_VAULT_0 = 'mKKRTmYrT4YywefDUvszdEqz7nm1oddDd6QRXn1snfz'
 // A real Token-2022 mint. See the @todo on getTokenBalance.
 const TOKEN_2022_MINT = '7atgF8KQo4wJrD5ATGX7t1V2zVvykPJbFfNeVf1icFv1'
 
@@ -184,7 +184,7 @@ const TOKEN_2022_MINT = '7atgF8KQo4wJrD5ATGX7t1V2zVvykPJbFfNeVf1icFv1'
  * @param {string|null} amount - The token amount as the RPC reports it, or null for
  *   a non-existent account.
  * @param {Object} [config] - Extra config for the account.
- * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getAccountInfo: Function }}
+ * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, rpc: Object }}
  */
 function mockTokenAccount (amount, config = { multisigPda: TEST_MULTISIG_PDA }) {
   const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
@@ -199,20 +199,19 @@ function mockTokenAccount (amount, config = { multisigPda: TEST_MULTISIG_PDA }) 
         owner: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
         data: { parsed: { info: { tokenAmount: { amount, decimals: 6 } } }, program: 'spl-token' },
         executable: false,
-        lamports: 2039280n,
-        space: 165n
+        lamports: 2039280,
+        space: 165
       }
 
-  const getAccountInfo = jest.fn(() => ({ send: async () => ({ value }) }))
+  const rpc = stubSolanaRpc({ getAccountInfo: () => ({ context: { slot: 1 }, value }) })
 
-  account._rpc = { getAccountInfo }
-
-  return { account, getAccountInfo }
+  return { account, rpc }
 }
 
 // Proposal PDAs for TEST_MULTISIG_PDA at transaction indices 1..3, cross-checked
 // against `getProposalPda` from @sqds/multisig.
 const PROPOSAL_PDA_1 = 'AhijzMHF6KLNfJpPvAwVZFDhY55MqPR3DGv1EMGVuKzF'
+const TRANSACTION_PDA_1 = 'F5HSv8x8sVPUuDc9CfG9mm6fFSReXfd5xz6Nage658nb'
 const PROPOSAL_PDA_2 = '5cA2xHRERqHDFnrsP6M6Mfx9rZ725o1qcQVjtFSq45mZ'
 const PROPOSAL_DISCRIMINATOR = [26, 94, 189, 187, 116, 136, 53, 33]
 
@@ -293,8 +292,8 @@ function proposalAccountValue (options) {
     owner: SQUADS_PROGRAM_ADDRESS,
     data: [encodeProposalAccount(options), 'base64'],
     executable: false,
-    lamports: 2039280n,
-    space: 454n
+    lamports: 2039280,
+    space: 454
   }
 }
 
@@ -304,7 +303,7 @@ function proposalAccountValue (options) {
  * @param {Array<Object|null>} proposals - The `getMultipleAccounts` entries to return,
  *   in order across all chunks.
  * @param {Object} [multisig] - The multisig account, or null to report it missing.
- * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getMultipleAccounts: Function, getAccountInfo: Function }}
+ * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, rpc: Object }}
  */
 function mockProposals (proposals, multisig = multisigAccountValue({
   members: [{ address: MEMBER_A }, { address: MEMBER_B }],
@@ -316,15 +315,16 @@ function mockProposals (proposals, multisig = multisigAccountValue({
     multisigPda: TEST_MULTISIG_PDA
   })
 
-  const getAccountInfo = jest.fn(() => ({ send: async () => ({ value: multisig }) }))
   const remaining = [...proposals]
-  const getMultipleAccounts = jest.fn((addresses) => ({
-    send: async () => ({ value: remaining.splice(0, addresses.length) })
-  }))
+  const rpc = stubSolanaRpc({
+    getAccountInfo: () => ({ context: { slot: 1 }, value: multisig }),
+    getMultipleAccounts: ([addresses]) => ({
+      context: { slot: 1 },
+      value: remaining.splice(0, addresses.length)
+    })
+  })
 
-  account._rpc = { getAccountInfo, getMultipleAccounts }
-
-  return { account, getMultipleAccounts, getAccountInfo }
+  return { account, rpc }
 }
 
 const VAULT_TRANSACTION_DISCRIMINATOR = [168, 250, 162, 100, 81, 14, 162, 207]
@@ -348,8 +348,8 @@ function transactionAccountValue (discriminator) {
     owner: SQUADS_PROGRAM_ADDRESS,
     data: [getBase64Decoder().decode(data), 'base64'],
     executable: false,
-    lamports: 2039280n,
-    space: 8n
+    lamports: 2039280,
+    space: 8
   }
 }
 
@@ -368,8 +368,8 @@ function clockAccountValue (unixTimestamp) {
     owner: 'Sysvar1111111111111111111111111111111111111',
     data: [getBase64Decoder().decode(data), 'base64'],
     executable: false,
-    lamports: 1169280n,
-    space: 40n
+    lamports: 1169280,
+    space: 40
   }
 }
 
@@ -386,7 +386,7 @@ function clockAccountValue (unixTimestamp) {
  * @param {number[]} [options.transactionType] - The transaction account discriminator.
  * @param {boolean} [options.proposalExists=true] - Whether the proposal account exists.
  * @param {boolean} [options.transactionExists=true] - Whether the transaction exists.
- * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getMultipleAccounts: Function }}
+ * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, rpc: Object }}
  */
 function mockExecutable ({
   status = PROPOSAL_STATUS.Approved,
@@ -418,11 +418,11 @@ function mockExecutable ({
     clockAccountValue(now)
   ]
 
-  const getMultipleAccounts = jest.fn(() => ({ send: async () => ({ value }) }))
+  const rpc = stubSolanaRpc({
+    getMultipleAccounts: () => ({ context: { slot: 1 }, value })
+  })
 
-  account._rpc = { getMultipleAccounts }
-
-  return { account, getMultipleAccounts }
+  return { account, rpc }
 }
 
 /**
@@ -433,7 +433,7 @@ function mockExecutable ({
  * @param {bigint} [options.rent=2039280n] - The rent-exempt minimum to report.
  * @param {number[]} [options.discriminator] - An override for the account discriminator.
  * @param {boolean} [options.exists=true] - Whether the program config account exists.
- * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getAccountInfo: Function, getMinimumBalanceForRentExemption: Function }}
+ * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, rpc: Object }}
  */
 function mockDeployQuote ({
   creationFee = 0n,
@@ -458,17 +458,17 @@ function mockDeployQuote ({
         owner: SQUADS_PROGRAM_ADDRESS,
         data: [getBase64Decoder().decode(data), 'base64'],
         executable: false,
-        lamports: 1893120n,
-        space: 144n
+        lamports: 1893120,
+        space: 144
       }
     : null
 
-  const getAccountInfo = jest.fn(() => ({ send: async () => ({ value }) }))
-  const getMinimumBalanceForRentExemption = jest.fn(() => ({ send: async () => rent }))
+  const rpc = stubSolanaRpc({
+    getAccountInfo: () => ({ context: { slot: 1 }, value }),
+    getMinimumBalanceForRentExemption: () => rent
+  })
 
-  account._rpc = { getAccountInfo, getMinimumBalanceForRentExemption }
-
-  return { account, getAccountInfo, getMinimumBalanceForRentExemption }
+  return { account, rpc }
 }
 
 /**
@@ -483,22 +483,24 @@ function mockFailingAccount (error) {
     multisigPda: TEST_MULTISIG_PDA
   })
 
-  account._rpc = {
-    getAccountInfo: () => ({ send: async () => { throw error } })
-  }
+  stubSolanaRpc({ getAccountInfo: () => { throw error } })
 
   return account
 }
 
 describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
   describe('isDeployed', () => {
     it('returns true for an existing Multisig account', async () => {
       const { account } = mockAccount({
         owner: SQUADS_PROGRAM_ADDRESS,
         data: [toBase64(MULTISIG_DISCRIMINATOR), 'base64'],
         executable: false,
-        lamports: 1893120n,
-        space: 144n
+        lamports: 1893120,
+        space: 144
       })
 
       expect(await account.isDeployed()).toBe(true)
@@ -518,8 +520,8 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         owner: SYSTEM_PROGRAM_ADDRESS,
         data: ['', 'base64'],
         executable: false,
-        lamports: 1n,
-        space: 0n
+        lamports: 1,
+        space: 0
       })
 
       expect(await account.isDeployed()).toBe(false)
@@ -530,8 +532,8 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         owner: SQUADS_PROGRAM_ADDRESS,
         data: [toBase64(PROGRAM_CONFIG_DISCRIMINATOR), 'base64'],
         executable: false,
-        lamports: 1893120n,
-        space: 144n
+        lamports: 1893120,
+        space: 144
       })
 
       expect(await account.isDeployed()).toBe(false)
@@ -542,8 +544,8 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         owner: SYSTEM_PROGRAM_ADDRESS,
         data: [toBase64(MULTISIG_DISCRIMINATOR), 'base64'],
         executable: false,
-        lamports: 1893120n,
-        space: 144n
+        lamports: 1893120,
+        space: 144
       })
 
       expect(await account.isDeployed()).toBe(false)
@@ -555,8 +557,8 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
           owner: SQUADS_PROGRAM_ADDRESS,
           data: [toBase64(MULTISIG_DISCRIMINATOR), 'base64'],
           executable: false,
-          lamports: 1893120n,
-          space: 144n
+          lamports: 1893120,
+          space: 144
         },
         { multisigPda: TEST_MULTISIG_PDA, programId: SYSTEM_PROGRAM_ADDRESS }
       )
@@ -573,18 +575,14 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('requests only the 8-byte discriminator', async () => {
-      const { account, getAccountInfo } = mockAccount(null)
+      const { account, rpc } = mockAccount(null)
 
       await account.isDeployed()
 
-      expect(getAccountInfo).toHaveBeenCalledWith(
+      expect(rpcRequests(rpc, 'getAccountInfo')[0]).toEqual([
         TEST_MULTISIG_PDA,
-        expect.objectContaining({
-          commitment: 'confirmed',
-          encoding: 'base64',
-          dataSlice: { offset: 0, length: 8 }
-        })
-      )
+        { commitment: 'confirmed', encoding: 'base64', dataSlice: { offset: 0, length: 8 } }
+      ])
     })
   })
 
@@ -645,17 +643,17 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('delegates to getMultisigInfo with a single account read', async () => {
-      const { account, getAccountInfo } = mockAccount(multisigAccountValue({
+      const { account, rpc } = mockAccount(multisigAccountValue({
         members: [{ address: MEMBER_A }]
       }))
 
       await account.getOwners()
 
-      expect(getAccountInfo).toHaveBeenCalledTimes(1)
-      expect(getAccountInfo).toHaveBeenCalledWith(
+      expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(1)
+      expect(rpcRequests(rpc, 'getAccountInfo')[0]).toEqual([
         TEST_MULTISIG_PDA,
-        expect.not.objectContaining({ dataSlice: expect.anything() })
-      )
+        { commitment: 'confirmed', encoding: 'base64' }
+      ])
     })
 
     it('throws when the multisig does not exist', async () => {
@@ -691,8 +689,38 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
   })
 
   describe('getMultisigInfo', () => {
+    it('reads the threshold as a u16, not into the time lock beside it', async () => {
+      // `time_lock` is the u32 immediately after the u16 threshold, so a wrong width reads
+      // both as one number. Only a non-zero time lock can tell the two apart.
+      const { account } = mockAccount(multisigAccountValue({
+        members: [{ address: MEMBER_A }, { address: MEMBER_B }],
+        threshold: 2,
+        timeLock: 3600
+      }))
+
+      expect((await account.getMultisigInfo()).threshold).toBe(2)
+    })
+
+    it('reads at the confirmed commitment when the config names none', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
+      const rpc = stubSolanaRpc({
+        getAccountInfo: () => ({
+          context: { slot: 1 },
+          value: multisigAccountValue({ members: [{ address: MEMBER_A }] })
+        })
+      })
+
+      await account.getMultisigInfo()
+
+      expect(rpcRequests(rpc, 'getAccountInfo')[0])
+        .toEqual([TEST_MULTISIG_PDA, { commitment: 'confirmed', encoding: 'base64' }])
+    })
+
     it('returns address, owners, masks, threshold and isCreated from one read', async () => {
-      const { account, getAccountInfo } = mockAccount(multisigAccountValue({
+      const { account, rpc } = mockAccount(multisigAccountValue({
         members: [{ address: MEMBER_A }, { address: MEMBER_B }],
         threshold: 2
       }))
@@ -704,7 +732,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         threshold: 2,
         isCreated: true
       })
-      expect(getAccountInfo).toHaveBeenCalledTimes(1)
+      expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(1)
     })
 
     it('decodes correctly when rentCollector is set', async () => {
@@ -779,13 +807,16 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     it('sets isCreated explicitly rather than leaving it undefined', async () => {
       // `undefined` is falsy, so an omitted flag would make a real multisig read
       // as absent to `if (!info.isCreated)`.
+      // The transport is global, so each half configures its own cluster state in turn.
       const { account: missing } = mockAccount(null)
+
+      expect(Object.keys(await missing.getMultisigInfo())).toContain('isCreated')
+      expect((await missing.getMultisigInfo()).isCreated).toBe(false)
+
       const { account: present } = mockAccount(multisigAccountValue({
         members: [{ address: MEMBER_A }]
       }))
 
-      expect(Object.keys(await missing.getMultisigInfo())).toContain('isCreated')
-      expect((await missing.getMultisigInfo()).isCreated).toBe(false)
       expect((await present.getMultisigInfo()).isCreated).toBe(true)
     })
 
@@ -881,18 +912,18 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('delegates to getMultisigInfo with a single account read', async () => {
-      const { account, getAccountInfo } = mockAccount(multisigAccountValue({
+      const { account, rpc } = mockAccount(multisigAccountValue({
         members: [{ address: MEMBER_A }],
         threshold: 1
       }))
 
       await account.getThreshold()
 
-      expect(getAccountInfo).toHaveBeenCalledTimes(1)
-      expect(getAccountInfo).toHaveBeenCalledWith(
+      expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(1)
+      expect(rpcRequests(rpc, 'getAccountInfo')[0]).toEqual([
         TEST_MULTISIG_PDA,
-        expect.not.objectContaining({ dataSlice: expect.anything() })
-      )
+        { commitment: 'confirmed', encoding: 'base64' }
+      ])
     })
 
     it('throws when the multisig does not exist', async () => {
@@ -937,7 +968,6 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       const nonce = await account.getNonce()
 
       expect(nonce).toBe(238n)
-      expect(typeof nonce).toBe('bigint')
     })
 
     it('returns 0n for a multisig with no transactions yet', async () => {
@@ -971,6 +1001,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('does not confuse the threshold with the transaction index', async () => {
+      // The two differ, so reading the wrong field returns the wrong number.
       const { account } = mockAccount(multisigAccountValue({
         members: [{ address: MEMBER_A }, { address: MEMBER_B }],
         threshold: 2,
@@ -978,7 +1009,6 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       }))
 
       expect(await account.getNonce()).toBe(9n)
-      expect(await account.getThreshold()).toBe(2)
     })
 
     it('decodes a response truncated to the requested 86 bytes', async () => {
@@ -994,24 +1024,24 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         owner: SQUADS_PROGRAM_ADDRESS,
         data: [truncated, 'base64'],
         executable: false,
-        lamports: 2039280n,
-        space: 165n
+        lamports: 2039280,
+        space: 165
       })
 
       expect(await account.getNonce()).toBe(238n)
     })
 
     it('reads only the bytes up to the transaction index field', async () => {
-      const { account, getAccountInfo } = mockAccount(multisigAccountValue({
+      const { account, rpc } = mockAccount(multisigAccountValue({
         members: [{ address: MEMBER_A }]
       }))
 
       await account.getNonce()
 
-      expect(getAccountInfo).toHaveBeenCalledWith(
+      expect(rpcRequests(rpc, 'getAccountInfo')[0]).toEqual([
         TEST_MULTISIG_PDA,
-        expect.objectContaining({ dataSlice: { offset: 0, length: 86 } })
-      )
+        { commitment: 'confirmed', encoding: 'base64', dataSlice: { offset: 0, length: 86 } }
+      ])
     })
 
     it('throws when the multisig does not exist', async () => {
@@ -1052,28 +1082,42 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         proposalAccountValue({ approved: [MEMBER_A, MEMBER_B] })
       ])
 
-      expect(await account.getProposals([1])).toMatchObject({
-        1: { proposalId: '1', confirmations: 2, threshold: 2 }
+      // Every field `SolanaMultisigProposal` carries, so nothing is asserted by omission.
+      expect(await account.getProposals([1])).toEqual({
+        1: {
+          proposalId: '1',
+          confirmations: 2,
+          threshold: 2,
+          status: 'pending',
+          statusName: 'Active',
+          approved: [MEMBER_A, MEMBER_B],
+          rejected: [],
+          cancelled: []
+        }
       })
     })
 
-    it('reports the Squads status name', async () => {
-      for (const [name, status] of Object.entries(PROPOSAL_STATUS)) {
+    // The `it.each` blocks below enumerate this map, so pin it once: a status dropped from it
+    // would otherwise shrink those suites silently.
+    it('covers every status Squads defines', () => {
+      expect(Object.keys(PROPOSAL_STATUS)).toEqual(['Draft', 'Active', 'Rejected', 'Approved', 'Executing', 'Executed', 'Cancelled'])
+    })
+
+    it.each(Object.entries(PROPOSAL_STATUS))(
+      'reports the Squads status name %s', async (name, status) => {
         const { account } = mockProposals([proposalAccountValue({ status, approved: [MEMBER_A] })])
         const { 1: proposal } = await account.getProposals([1])
 
         expect(proposal.statusName).toBe(name)
-      }
-    })
+      })
 
-    it('reports status as executed only once the proposal has run', async () => {
-      for (const [name, status] of Object.entries(PROPOSAL_STATUS)) {
+    it.each(Object.entries(PROPOSAL_STATUS))(
+      'reports status as executed only for %s when it has run', async (name, status) => {
         const { account } = mockProposals([proposalAccountValue({ status })])
         const { 1: proposal } = await account.getProposals([1])
 
         expect(proposal.status).toBe(name === 'Executed' ? 'executed' : 'pending')
-      }
-    })
+      })
 
     it('lists who voted, each way', async () => {
       const { account } = mockProposals([
@@ -1089,17 +1133,17 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('derives the proposal address from the transaction index', async () => {
-      const { account, getMultipleAccounts } = mockProposals([
+      const { account, rpc } = mockProposals([
         proposalAccountValue({}),
         proposalAccountValue({})
       ])
 
       await account.getProposals([1, 2])
 
-      expect(getMultipleAccounts).toHaveBeenCalledWith(
+      expect(rpcRequests(rpc, 'getMultipleAccounts')[0]).toEqual([
         [PROPOSAL_PDA_1, PROPOSAL_PDA_2],
-        expect.anything()
-      )
+        { commitment: 'confirmed', encoding: 'base64' }
+      ])
     })
 
     it('returns null for an id with no proposal, keeping every id keyed', async () => {
@@ -1111,10 +1155,28 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
 
       const proposals = await account.getProposals([1, 2, 3])
 
-      expect(proposals).toMatchObject({
-        1: { proposalId: '1', confirmations: 1, threshold: 2 },
+      expect(proposals).toEqual({
+        1: {
+          proposalId: '1',
+          confirmations: 1,
+          threshold: 2,
+          status: 'pending',
+          statusName: 'Active',
+          approved: [MEMBER_A],
+          rejected: [],
+          cancelled: []
+        },
         2: null,
-        3: { proposalId: '3', confirmations: 2, threshold: 2 }
+        3: {
+          proposalId: '3',
+          confirmations: 2,
+          threshold: 2,
+          status: 'pending',
+          statusName: 'Active',
+          approved: [MEMBER_A, MEMBER_B],
+          rejected: [],
+          cancelled: []
+        }
       })
     })
 
@@ -1128,24 +1190,63 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         })
       ])
 
-      expect(await account.getProposals([1])).toMatchObject({
-        1: { proposalId: '1', confirmations: 2, threshold: 2, statusName: 'Executing' }
+      expect(await account.getProposals([1])).toEqual({
+        1: {
+          proposalId: '1',
+          confirmations: 2,
+          threshold: 2,
+          status: 'pending',
+          statusName: 'Executing',
+          approved: [MEMBER_A, MEMBER_B],
+          rejected: [],
+          cancelled: []
+        }
       })
     })
 
-    it('counts approvals correctly for every other status', async () => {
-      for (const [name, status] of Object.entries(PROPOSAL_STATUS)) {
-        if (status === PROPOSAL_STATUS.Executing) continue
-
+    it.each(Object.entries(PROPOSAL_STATUS).filter(([, status]) => status !== PROPOSAL_STATUS.Executing))(
+      'counts approvals correctly for %s', async (name, status) => {
         const { account } = mockProposals([
           proposalAccountValue({ status, approved: [MEMBER_A] })
         ])
 
-        expect(await account.getProposals([1])).toMatchObject({
-          1: { proposalId: '1', confirmations: 1, threshold: 2, statusName: name }
+        expect(await account.getProposals([1])).toEqual({
+          1: {
+            proposalId: '1',
+            confirmations: 1,
+            threshold: 2,
+            status: status === PROPOSAL_STATUS.Executed ? 'executed' : 'pending',
+            statusName: name,
+            approved: [MEMBER_A],
+            rejected: [],
+            cancelled: []
+          }
         })
-        expect(name).toBeTruthy()
-      }
+      })
+
+    it('reports the cancelled voters of a cancelled proposal', async () => {
+      // The third and last vote vector: nothing else in the file populates it, so a decoder
+      // that stopped after `rejected` would look correct.
+      const { account } = mockProposals([
+        proposalAccountValue({
+          status: PROPOSAL_STATUS.Cancelled,
+          approved: [MEMBER_A, MEMBER_B],
+          cancelled: [MEMBER_A]
+        })
+      ])
+
+      expect(await account.getProposals([1])).toEqual({
+        1: {
+          proposalId: '1',
+          confirmations: 2,
+          threshold: 2,
+          status: 'pending',
+          statusName: 'Cancelled',
+          approved: [MEMBER_A, MEMBER_B],
+          rejected: [],
+          cancelled: [MEMBER_A]
+        }
+      })
     })
 
     it('reports zero confirmations for a rejected-only proposal', async () => {
@@ -1154,8 +1255,17 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         proposalAccountValue({ approved: [], rejected: [MEMBER_A] })
       ])
 
-      expect(await account.getProposals([1])).toMatchObject({
-        1: { proposalId: '1', confirmations: 0, threshold: 2 }
+      expect(await account.getProposals([1])).toEqual({
+        1: {
+          proposalId: '1',
+          confirmations: 0,
+          threshold: 2,
+          status: 'pending',
+          statusName: 'Active',
+          approved: [],
+          rejected: [MEMBER_A],
+          cancelled: []
+        }
       })
     })
 
@@ -1164,8 +1274,17 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         proposalAccountValue({ approved: [MEMBER_A], slack: 320 })
       ])
 
-      expect(await account.getProposals([1])).toMatchObject({
-        1: { proposalId: '1', confirmations: 1, threshold: 2 }
+      expect(await account.getProposals([1])).toEqual({
+        1: {
+          proposalId: '1',
+          confirmations: 1,
+          threshold: 2,
+          status: 'pending',
+          statusName: 'Active',
+          approved: [MEMBER_A],
+          rejected: [],
+          cancelled: []
+        }
       })
     })
 
@@ -1184,7 +1303,18 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     it('keys an id by its canonical decimal form', async () => {
       const { account } = mockProposals([proposalAccountValue({})])
 
-      expect(await account.getProposals(['007'])).toMatchObject({ 7: { proposalId: '7' } })
+      expect(await account.getProposals(['007'])).toEqual({
+        7: {
+          proposalId: '7',
+          confirmations: 0,
+          threshold: 2,
+          status: 'pending',
+          statusName: 'Active',
+          approved: [],
+          rejected: [],
+          cancelled: []
+        }
+      })
     })
 
     it('returns null rather than decoding another Squads account type', async () => {
@@ -1205,42 +1335,39 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
 
     it('chunks requests at 100 addresses', async () => {
       const proposals = Array.from({ length: 150 }, () => proposalAccountValue({ approved: [MEMBER_A] }))
-      const { account, getMultipleAccounts } = mockProposals(proposals)
+      const { account, rpc } = mockProposals(proposals)
 
       const result = await account.getProposals(Array.from({ length: 150 }, (_, i) => i + 1))
 
       expect(Object.keys(result)).toHaveLength(150)
-      expect(getMultipleAccounts).toHaveBeenCalledTimes(2)
-      expect(getMultipleAccounts.mock.calls[0][0]).toHaveLength(100)
-      expect(getMultipleAccounts.mock.calls[1][0]).toHaveLength(50)
+      expect(rpcRequests(rpc, 'getMultipleAccounts')).toHaveLength(2)
+      expect(rpcRequests(rpc, 'getMultipleAccounts')[0][0]).toHaveLength(100)
+      expect(rpcRequests(rpc, 'getMultipleAccounts')[1][0]).toHaveLength(50)
     })
 
     it('reads many proposals without one request per id', async () => {
       const proposals = Array.from({ length: 40 }, () => proposalAccountValue({}))
-      const { account, getMultipleAccounts, getAccountInfo } = mockProposals(proposals)
+      const { account, rpc } = mockProposals(proposals)
 
       await account.getProposals(Array.from({ length: 40 }, (_, i) => i + 1))
 
-      expect(getMultipleAccounts).toHaveBeenCalledTimes(1)
-      expect(getAccountInfo).toHaveBeenCalledTimes(1)
+      expect(rpcRequests(rpc, 'getMultipleAccounts')).toHaveLength(1)
+      expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(1)
     })
 
     it('returns an empty record without any RPC call', async () => {
-      const { account, getMultipleAccounts, getAccountInfo } = mockProposals([])
+      const { account, rpc } = mockProposals([])
 
       expect(await account.getProposals([])).toEqual({})
-      expect(getMultipleAccounts).not.toHaveBeenCalled()
-      expect(getAccountInfo).not.toHaveBeenCalled()
+      expect(rpcRequests(rpc, 'getMultipleAccounts')).toHaveLength(0)
+      expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(0)
     })
 
-    it('throws naming the offending id', async () => {
+    it.each([[-1], [1.5], ['abc']])('throws naming the offending id %s', async (bad) => {
       const { account } = mockProposals([proposalAccountValue({})])
 
-      for (const bad of [-1, 1.5, 'abc']) {
-        await expect(account.getProposals([bad])).rejects.toThrow(
-          new RegExp(`Invalid proposal id ${bad === 'abc' ? 'abc' : bad}`.replace('.', '\\.'))
-        )
-      }
+      await expect(account.getProposals([bad]))
+        .rejects.toThrow(`Invalid proposal id ${bad}. It must be an integer between 0 and 18446744073709551615.`)
     })
 
     it('throws when the multisig does not exist', async () => {
@@ -1251,8 +1378,10 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
 
     it('propagates RPC failures', async () => {
       const { account } = mockProposals([proposalAccountValue({})])
-      account._rpc.getMultipleAccounts = () => ({
-        send: async () => { throw new Error('503 Service Unavailable') }
+
+      stubSolanaRpc({
+        getAccountInfo: () => ({ context: { slot: 1 }, value: multisigAccountValue({ members: [{ address: MEMBER_A }] }) }),
+        getMultipleAccounts: () => { throw new Error('503 Service Unavailable') }
       })
 
       await expect(account.getProposals([1])).rejects.toThrow('503 Service Unavailable')
@@ -1263,10 +1392,15 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     it('returns the proposal at the given id', async () => {
       const { account } = mockProposals([proposalAccountValue({ approved: [MEMBER_A] })])
 
-      expect(await account.getProposal(1)).toMatchObject({
+      expect(await account.getProposal(1)).toEqual({
         proposalId: '1',
         confirmations: 1,
-        threshold: 2
+        threshold: 2,
+        status: 'pending',
+        statusName: 'Active',
+        approved: [MEMBER_A],
+        rejected: [],
+        cancelled: []
       })
     })
 
@@ -1279,16 +1413,25 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     it('resolves an id given as a string', async () => {
       const { account } = mockProposals([proposalAccountValue({})])
 
-      expect(await account.getProposal('007')).toMatchObject({ proposalId: '7' })
+      expect(await account.getProposal('007')).toEqual({
+        proposalId: '7',
+        confirmations: 0,
+        threshold: 2,
+        status: 'pending',
+        statusName: 'Active',
+        approved: [],
+        rejected: [],
+        cancelled: []
+      })
     })
 
     it('reads one proposal in a single request', async () => {
-      const { account, getMultipleAccounts } = mockProposals([proposalAccountValue({})])
+      const { account, rpc } = mockProposals([proposalAccountValue({})])
 
       await account.getProposal(1)
 
-      expect(getMultipleAccounts).toHaveBeenCalledTimes(1)
-      expect(getMultipleAccounts.mock.calls[0][0]).toHaveLength(1)
+      expect(rpcRequests(rpc, 'getMultipleAccounts')).toHaveLength(1)
+      expect(rpcRequests(rpc, 'getMultipleAccounts')[0][0]).toHaveLength(1)
     })
 
     it('throws naming the offending id', async () => {
@@ -1305,16 +1448,12 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       expect(await account.isReadyToExecute(1)).toBe(true)
     })
 
-    it('returns false for every status other than approved', async () => {
-      for (const [name, status] of Object.entries(PROPOSAL_STATUS)) {
-        if (status === PROPOSAL_STATUS.Approved) continue
-
+    it.each(Object.entries(PROPOSAL_STATUS).filter(([, status]) => status !== PROPOSAL_STATUS.Approved))(
+      'returns false for %s', async (_name, status) => {
         const { account } = mockExecutable({ status })
 
         expect(await account.isReadyToExecute(1)).toBe(false)
-        expect(name).toBeTruthy()
-      }
-    })
+      })
 
     it('returns false while the time lock has not elapsed', async () => {
       const { account } = mockExecutable({ approvedAt: 1000n, now: 1059n, timeLock: 60 })
@@ -1397,40 +1536,39 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         provider: TEST_RPC_URL,
         multisigPda: TEST_MULTISIG_PDA
       })
-      account._rpc = {
+      stubSolanaRpc({
         getMultipleAccounts: () => ({
-          send: async () => ({
-            value: [
-              multisigAccountValue({ members: [{ address: MEMBER_A }] }),
-              proposalAccountValue({
-                status: PROPOSAL_STATUS.Approved,
-                discriminator: MULTISIG_DISCRIMINATOR
-              }),
-              transactionAccountValue(VAULT_TRANSACTION_DISCRIMINATOR),
-              clockAccountValue(1000n)
-            ]
-          })
+          context: { slot: 1 },
+          value: [
+            multisigAccountValue({ members: [{ address: MEMBER_A }] }),
+            proposalAccountValue({
+              status: PROPOSAL_STATUS.Approved,
+              discriminator: MULTISIG_DISCRIMINATOR
+            }),
+            transactionAccountValue(VAULT_TRANSACTION_DISCRIMINATOR),
+            clockAccountValue(1000n)
+          ]
         })
-      }
+      })
 
       expect(await account.isReadyToExecute(1)).toBe(false)
     })
 
     it('reads the multisig, proposal, transaction and clock in one request', async () => {
-      const { account, getMultipleAccounts } = mockExecutable()
+      const { account, rpc } = mockExecutable()
 
       await account.isReadyToExecute(1)
 
-      expect(getMultipleAccounts).toHaveBeenCalledTimes(1)
+      expect(rpcRequests(rpc, 'getMultipleAccounts')).toHaveLength(1)
 
-      const [addresses] = getMultipleAccounts.mock.calls[0]
+      const [addresses] = rpcRequests(rpc, 'getMultipleAccounts')[0]
 
       expect(addresses).toHaveLength(4)
       expect(addresses[0]).toBe(TEST_MULTISIG_PDA)
       expect(addresses[1]).toBe(PROPOSAL_PDA_1)
       expect(addresses[3]).toBe(CLOCK_SYSVAR_ADDRESS)
-      // The transaction account is a different PDA from the proposal.
-      expect(addresses[2]).not.toBe(PROPOSAL_PDA_1)
+      // The transaction account is its own PDA, not the proposal's.
+      expect(addresses[2]).toBe(TRANSACTION_PDA_1)
     })
 
     it('accepts ids as number, bigint and string', async () => {
@@ -1442,10 +1580,10 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('throws on an invalid id', async () => {
-      const { account, getMultipleAccounts } = mockExecutable()
+      const { account, rpc } = mockExecutable()
 
       await expect(account.isReadyToExecute(-1)).rejects.toThrow(/Invalid proposal id/)
-      expect(getMultipleAccounts).not.toHaveBeenCalled()
+      expect(rpcRequests(rpc, 'getMultipleAccounts')).toHaveLength(0)
     })
 
     it('propagates RPC failures', async () => {
@@ -1453,11 +1591,9 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         provider: TEST_RPC_URL,
         multisigPda: TEST_MULTISIG_PDA
       })
-      account._rpc = {
-        getMultipleAccounts: () => ({
-          send: async () => { throw new Error('503 Service Unavailable') }
-        })
-      }
+      stubSolanaRpc({
+        getMultipleAccounts: () => { throw new Error('503 Service Unavailable') }
+      })
 
       await expect(account.isReadyToExecute(1)).rejects.toThrow('503 Service Unavailable')
     })
@@ -1465,14 +1601,14 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
 
   describe('getTransactionReceipt', () => {
     // A well-formed 64-byte signature, and a 32-byte address that must be rejected.
-    const SIGNATURE = getBase58Decoder().decode(new Uint8Array(64).fill(7))
-    const RECEIPT = {
+    const DUMMY_SIGNATURE = getBase58Decoder().decode(new Uint8Array(64).fill(7))
+    const DUMMY_RECEIPT = {
       blockTime: 1785346451n,
       slot: 435990582n,
       version: 0n,
       transactionIndex: 12n,
       meta: { err: null, fee: 6890n },
-      transaction: { signatures: [SIGNATURE] }
+      transaction: { signatures: [DUMMY_SIGNATURE] }
     }
 
     /**
@@ -1480,7 +1616,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
      *
      * @param {Object|null} value - The receipt to return.
      * @param {Object} [config] - Extra config for the account.
-     * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getTransaction: Function }}
+     * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, rpc: Object }}
      */
     function mockReceipt (value, config = {}) {
       const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
@@ -1489,92 +1625,98 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         ...config
       })
 
-      const getTransaction = jest.fn(() => ({ send: async () => value }))
+      const rpc = stubSolanaRpc({ getTransaction: () => value })
 
-      account._rpc = { getTransaction }
-
-      return { account, getTransaction }
+      return { account, rpc }
     }
 
     it('returns the receipt unchanged', async () => {
-      const { account } = mockReceipt(RECEIPT)
+      const { account } = mockReceipt(DUMMY_RECEIPT)
 
-      expect(await account.getTransactionReceipt(SIGNATURE)).toBe(RECEIPT)
+      // Equality, not identity: the receipt is decoded from the response rather than passed
+      // through, so the method's contract is that it adds and removes nothing.
+      expect(await account.getTransactionReceipt(DUMMY_SIGNATURE)).toEqual(DUMMY_RECEIPT)
     })
 
     it('returns null when the transaction is not found', async () => {
       const { account } = mockReceipt(null)
 
-      expect(await account.getTransactionReceipt(SIGNATURE)).toBeNull()
+      expect(await account.getTransactionReceipt(DUMMY_SIGNATURE)).toBeNull()
     })
 
     it('returns the receipt of a failed transaction rather than throwing', async () => {
       // A failed transaction is still in a block and still has a receipt; callers
       // must check meta.err themselves.
-      const failed = { ...RECEIPT, meta: { err: { InstructionError: [0, 'Custom'] }, fee: 5000n } }
+      const failed = { ...DUMMY_RECEIPT, meta: { err: { InstructionError: [0, 'Custom'] }, fee: 5000 } }
       const { account } = mockReceipt(failed)
 
-      const receipt = await account.getTransactionReceipt(SIGNATURE)
+      const receipt = await account.getTransactionReceipt(DUMMY_SIGNATURE)
 
-      expect(receipt).toBe(failed)
+      // The client upcasts every integer in the response, including the ones inside `err`.
+      expect(receipt).toEqual({
+        ...failed,
+        meta: { err: { InstructionError: [0n, 'Custom'] }, fee: 5000n }
+      })
       expect(receipt.meta.err).not.toBeNull()
     })
 
     it('requests support for versioned transactions', async () => {
       // Squads executes v0 transactions; without this the RPC refuses them outright,
       // so the method would fail on exactly the transactions it exists to report on.
-      const { account, getTransaction } = mockReceipt(RECEIPT)
+      const { account, rpc } = mockReceipt(DUMMY_RECEIPT)
 
-      await account.getTransactionReceipt(SIGNATURE)
+      await account.getTransactionReceipt(DUMMY_SIGNATURE)
 
-      expect(getTransaction).toHaveBeenCalledWith(
-        SIGNATURE,
-        expect.objectContaining({ maxSupportedTransactionVersion: 0 })
-      )
+      expect(rpcRequests(rpc, 'getTransaction')[0]).toEqual([
+        DUMMY_SIGNATURE,
+        { commitment: 'confirmed', encoding: 'json', maxSupportedTransactionVersion: 0 }
+      ])
     })
 
     it('raises a processed commitment to confirmed', async () => {
       // getTransaction rejects anything below confirmed.
-      const { account, getTransaction } = mockReceipt(RECEIPT, { commitment: 'processed' })
+      const { account, rpc } = mockReceipt(DUMMY_RECEIPT, { commitment: 'processed' })
 
-      await account.getTransactionReceipt(SIGNATURE)
+      await account.getTransactionReceipt(DUMMY_SIGNATURE)
 
-      expect(getTransaction).toHaveBeenCalledWith(
-        SIGNATURE,
-        expect.objectContaining({ commitment: 'confirmed' })
-      )
+      expect(rpcRequests(rpc, 'getTransaction')[0]).toEqual([
+        DUMMY_SIGNATURE,
+        { commitment: 'confirmed', encoding: 'json', maxSupportedTransactionVersion: 0 }
+      ])
     })
 
     it('does not lower a finalized commitment', async () => {
-      const { account, getTransaction } = mockReceipt(RECEIPT, { commitment: 'finalized' })
+      const { account, rpc } = mockReceipt(DUMMY_RECEIPT, { commitment: 'finalized' })
 
-      await account.getTransactionReceipt(SIGNATURE)
+      await account.getTransactionReceipt(DUMMY_SIGNATURE)
 
-      expect(getTransaction).toHaveBeenCalledWith(
-        SIGNATURE,
-        expect.objectContaining({ commitment: 'finalized' })
-      )
+      // `finalized` is the RPC's own default, so the client drops it from the request rather
+      // than sending it — the commitment is not lowered, it is simply implicit.
+      expect(rpcRequests(rpc, 'getTransaction')[0]).toEqual([
+        DUMMY_SIGNATURE,
+        { encoding: 'json', maxSupportedTransactionVersion: 0 }
+      ])
     })
 
     it('throws on a malformed signature without hitting the RPC', async () => {
-      const { account, getTransaction } = mockReceipt(RECEIPT)
+      const { account, rpc } = mockReceipt(DUMMY_RECEIPT)
 
       await expect(account.getTransactionReceipt('nope')).rejects.toThrow(/Invalid transaction signature/)
-      expect(getTransaction).not.toHaveBeenCalled()
+      expect(rpcRequests(rpc, 'getTransaction')).toHaveLength(0)
     })
 
     it('throws on an empty signature', async () => {
-      const { account } = mockReceipt(RECEIPT)
+      const { account } = mockReceipt(DUMMY_RECEIPT)
 
       await expect(account.getTransactionReceipt('')).rejects.toThrow(/Invalid transaction signature/)
     })
 
     it('rejects a 32-byte address passed as a signature', async () => {
       // Valid base58, wrong length — the mistake a caller is most likely to make.
-      const { account, getTransaction } = mockReceipt(RECEIPT)
+      const { account, rpc } = mockReceipt(DUMMY_RECEIPT)
 
       await expect(account.getTransactionReceipt(TEST_MULTISIG_PDA)).rejects.toThrow(/Invalid transaction signature/)
-      expect(getTransaction).not.toHaveBeenCalled()
+      expect(rpcRequests(rpc, 'getTransaction')).toHaveLength(0)
     })
 
     it('propagates RPC failures', async () => {
@@ -1582,11 +1724,9 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         provider: TEST_RPC_URL,
         multisigPda: TEST_MULTISIG_PDA
       })
-      account._rpc = {
-        getTransaction: () => ({ send: async () => { throw new Error('503 Service Unavailable') } })
-      }
+      stubSolanaRpc({ getTransaction: () => { throw new Error('503 Service Unavailable') } })
 
-      await expect(account.getTransactionReceipt(SIGNATURE)).rejects.toThrow('503 Service Unavailable')
+      await expect(account.getTransactionReceipt(DUMMY_SIGNATURE)).rejects.toThrow('503 Service Unavailable')
     })
   })
 
@@ -1597,18 +1737,17 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       const balance = await account.getTokenBalance(USDC_MINT)
 
       expect(balance).toBe(51448811n)
-      expect(typeof balance).toBe('bigint')
     })
 
     it('reads the vault\'s associated token account', async () => {
-      const { account, getAccountInfo } = mockTokenAccount('0')
+      const { account, rpc } = mockTokenAccount('0')
 
       await account.getTokenBalance(USDC_MINT)
 
-      expect(getAccountInfo).toHaveBeenCalledWith(
+      expect(rpcRequests(rpc, 'getAccountInfo')[0]).toEqual([
         USDC_ATA_VAULT_0,
-        expect.objectContaining({ encoding: 'jsonParsed' })
-      )
+        { commitment: 'confirmed', encoding: 'jsonParsed' }
+      ])
     })
 
     it('returns 0n when no associated token account exists', async () => {
@@ -1632,38 +1771,38 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('reads the token account of a vault selected by index', async () => {
-      const { account, getAccountInfo } = mockTokenAccount('7')
+      const { account, rpc } = mockTokenAccount('7')
 
       expect(await account.getTokenBalance(USDC_MINT, 3)).toBe(7n)
-      expect(getAccountInfo).toHaveBeenCalledWith(USDC_ATA_VAULT_3, expect.anything())
+      expect(rpcRequests(rpc, 'getAccountInfo')[0])
+        .toEqual([USDC_ATA_VAULT_3, { commitment: 'confirmed', encoding: 'jsonParsed' }])
     })
 
     it('queries a different account per mint, and never the vault itself', async () => {
-      const { account, getAccountInfo } = mockTokenAccount('0')
+      const { account, rpc } = mockTokenAccount('0')
 
       await account.getTokenBalance(USDC_MINT)
       await account.getTokenBalance(TOKEN_2022_MINT)
 
-      const [[first], [second]] = getAccountInfo.mock.calls
+      const [[first], [second]] = rpcRequests(rpc, 'getAccountInfo')
 
-      expect(first).not.toBe(second)
-      // Tokens live in a token account owned by the vault, not in the vault.
-      expect([first, second]).not.toContain(TEST_VAULT_0)
-      expect([first, second]).not.toContain(TEST_MULTISIG_PDA)
+      // One associated token account per mint, each owned by the vault rather than being it.
+      expect([first, second]).toEqual([USDC_ATA_VAULT_0, TOKEN_2022_ATA_VAULT_0])
     })
 
     it('throws on a malformed mint without hitting the RPC', async () => {
-      const { account, getAccountInfo } = mockTokenAccount('0')
+      const { account, rpc } = mockTokenAccount('0')
 
-      await expect(account.getTokenBalance('not-a-mint')).rejects.toThrow()
-      expect(getAccountInfo).not.toHaveBeenCalled()
+      await expect(account.getTokenBalance('not-a-mint'))
+        .rejects.toThrow('Expected base58-encoded address string of length in the range [32, 44]. Actual length: 10.')
+      expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(0)
     })
 
     it('rejects an out-of-range vault index before hitting the RPC', async () => {
-      const { account, getAccountInfo } = mockTokenAccount('0')
+      const { account, rpc } = mockTokenAccount('0')
 
       await expect(account.getTokenBalance(USDC_MINT, 256)).rejects.toThrow(/Invalid vault index/)
-      expect(getAccountInfo).not.toHaveBeenCalled()
+      expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(0)
     })
 
     it('reports the mint problem first when both arguments are invalid', async () => {
@@ -1672,7 +1811,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       const { account } = mockTokenAccount('0')
 
       await expect(account.getTokenBalance('not-a-mint', 256))
-        .rejects.toThrow(/base58/)
+        .rejects.toThrow('Expected base58-encoded address string of length in the range [32, 44]. Actual length: 10.')
     })
 
     it('propagates RPC failures', async () => {
@@ -1680,9 +1819,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         provider: TEST_RPC_URL,
         multisigPda: TEST_MULTISIG_PDA
       })
-      account._rpc = {
-        getAccountInfo: () => ({ send: async () => { throw new Error('503 Service Unavailable') } })
-      }
+      stubSolanaRpc({ getAccountInfo: () => { throw new Error('503 Service Unavailable') } })
 
       await expect(account.getTokenBalance(USDC_MINT)).rejects.toThrow('503 Service Unavailable')
     })
@@ -1691,11 +1828,11 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       // Documents the @todo rather than asserting desired behaviour: the derivation
       // uses the SPL Token program, so a Token-2022 mint yields an address that does
       // not hold the real balance. Delete this test when Token-2022 is supported.
-      const { account, getAccountInfo } = mockTokenAccount(null)
+      const { account, rpc } = mockTokenAccount(null)
 
       expect(await account.getTokenBalance(TOKEN_2022_MINT)).toBe(0n)
 
-      const [queried] = getAccountInfo.mock.calls[0]
+      const [queried] = rpcRequests(rpc, 'getAccountInfo')[0]
       expect(queried).toBe('mKKRTmYrT4YywefDUvszdEqz7nm1oddDd6QRXn1snfz')
     })
   })
@@ -1707,18 +1844,18 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       expect(await account.getVaultAddress()).toBe(TEST_VAULT_0)
     })
 
-    it('is not the multisig address', async () => {
+    it('is a PDA of the multisig, not the multisig itself', async () => {
       // The multisig account holds only its rent; funds live in the vault.
       const { account } = mockBalanceAccount(0n)
 
-      expect(await account.getVaultAddress()).not.toBe(TEST_MULTISIG_PDA)
+      expect(await account.getVaultAddress()).toBe(TEST_VAULT_0)
+      expect(TEST_VAULT_0).not.toBe(TEST_MULTISIG_PDA)
     })
 
     it('derives a vault by index', async () => {
       const { account } = mockBalanceAccount(0n)
 
       expect(await account.getVaultAddress(3)).toBe(TEST_VAULT_3)
-      expect(await account.getVaultAddress(3)).not.toBe(TEST_VAULT_0)
     })
 
     it('accepts an address and returns it as given', async () => {
@@ -1730,7 +1867,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     it('accepts the full u8 index range', async () => {
       const { account } = mockBalanceAccount(0n)
 
-      await expect(account.getVaultAddress(255)).resolves.toEqual(expect.any(String))
+      await expect(account.getVaultAddress(255)).resolves.toBe(TEST_VAULT_255)
     })
 
     it('rejects an index above the u8 range', async () => {
@@ -1749,7 +1886,8 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     it('rejects a malformed address', async () => {
       const { account } = mockBalanceAccount(0n)
 
-      await expect(account.getVaultAddress('not-an-address')).rejects.toThrow()
+      await expect(account.getVaultAddress('not-an-address'))
+        .rejects.toThrow('Expected base58-encoded address string of length in the range [32, 44]. Actual length: 14.')
     })
   })
 
@@ -1757,12 +1895,13 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     it('reads the vault address, not the multisig address', async () => {
       // The only assertion here that catches reading the wrong account: every
       // other test in this block passes with the multisig address substituted.
-      const { account, getBalance } = mockBalanceAccount(51000001n)
+      const { account, rpc } = mockBalanceAccount(51000001n)
 
       await account.getBalance()
 
-      expect(getBalance).toHaveBeenCalledWith(TEST_VAULT_0, { commitment: 'confirmed' })
-      expect(getBalance).not.toHaveBeenCalledWith(TEST_MULTISIG_PDA, expect.anything())
+      expect(rpcRequests(rpc, 'getBalance')[0]).toEqual([TEST_VAULT_0, { commitment: 'confirmed' }])
+      expect(rpcRequests(rpc, 'getBalance').map(([queried]) => queried))
+        .not.toContain(TEST_MULTISIG_PDA)
     })
 
     it('returns the balance as a bigint', async () => {
@@ -1771,7 +1910,6 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       const balance = await account.getBalance()
 
       expect(balance).toBe(51000001n)
-      expect(typeof balance).toBe('bigint')
     })
 
     it('returns 0n for an unfunded vault that has no account', async () => {
@@ -1789,25 +1927,25 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('reads a vault selected by index', async () => {
-      const { account, getBalance } = mockBalanceAccount(7n)
+      const { account, rpc } = mockBalanceAccount(7n)
 
       expect(await account.getBalance(3)).toBe(7n)
-      expect(getBalance).toHaveBeenCalledWith(TEST_VAULT_3, { commitment: 'confirmed' })
+      expect(rpcRequests(rpc, 'getBalance')[0]).toEqual([TEST_VAULT_3, { commitment: 'confirmed' }])
     })
 
     it('reads a vault selected by address', async () => {
-      const { account, getBalance } = mockBalanceAccount(7n)
+      const { account, rpc } = mockBalanceAccount(7n)
 
       await account.getBalance(TEST_VAULT_3)
 
-      expect(getBalance).toHaveBeenCalledWith(TEST_VAULT_3, { commitment: 'confirmed' })
+      expect(rpcRequests(rpc, 'getBalance')[0]).toEqual([TEST_VAULT_3, { commitment: 'confirmed' }])
     })
 
     it('rejects an out-of-range index before hitting the RPC', async () => {
-      const { account, getBalance } = mockBalanceAccount(0n)
+      const { account, rpc } = mockBalanceAccount(0n)
 
       await expect(account.getBalance(256)).rejects.toThrow(/Invalid vault index/)
-      expect(getBalance).not.toHaveBeenCalled()
+      expect(rpcRequests(rpc, 'getBalance')).toHaveLength(0)
     })
 
     it('propagates RPC failures', async () => {
@@ -1815,9 +1953,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         provider: TEST_RPC_URL,
         multisigPda: TEST_MULTISIG_PDA
       })
-      account._rpc = {
-        getBalance: () => ({ send: async () => { throw new Error('503 Service Unavailable') } })
-      }
+      stubSolanaRpc({ getBalance: () => { throw new Error('503 Service Unavailable') } })
 
       await expect(account.getBalance()).rejects.toThrow('503 Service Unavailable')
     })
@@ -1840,38 +1976,34 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('requests rent for the size the member count implies', async () => {
-      const { account, getMinimumBalanceForRentExemption } = mockDeployQuote()
+      const { account, rpc } = mockDeployQuote()
 
       await account.quoteDeploy(3)
 
       // 132 base + 3 x 33 per member
-      expect(getMinimumBalanceForRentExemption).toHaveBeenCalledWith(231n)
+      expect(rpcRequests(rpc, 'getMinimumBalanceForRentExemption')[0])
+        .toEqual([231, { commitment: 'confirmed' }])
     })
 
     it('quotes a single member by default', async () => {
-      const { account, getMinimumBalanceForRentExemption } = mockDeployQuote()
+      const { account, rpc } = mockDeployQuote()
 
       await account.quoteDeploy()
 
-      expect(getMinimumBalanceForRentExemption).toHaveBeenCalledWith(165n)
+      expect(rpcRequests(rpc, 'getMinimumBalanceForRentExemption')[0])
+        .toEqual([165, { commitment: 'confirmed' }])
     })
 
     it('reads the creation fee from the program config account', async () => {
-      const { account, getAccountInfo } = mockDeployQuote()
+      const { account, rpc } = mockDeployQuote()
 
       await account.quoteDeploy()
 
       // Derived PDA for ["multisig", "program_config"], not a hardcoded fee.
-      expect(getAccountInfo).toHaveBeenCalledWith(
+      expect(rpcRequests(rpc, 'getAccountInfo')[0]).toEqual([
         'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr',
-        expect.anything()
-      )
-    })
-
-    it('returns a bigint', async () => {
-      const { account } = mockDeployQuote()
-
-      expect(typeof (await account.quoteDeploy()).fee).toBe('bigint')
+        { commitment: 'confirmed', encoding: 'base64' }
+      ])
     })
 
     it('throws when the program config does not exist', async () => {
@@ -1886,20 +2018,25 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       await expect(account.quoteDeploy()).rejects.toThrow(/program config/)
     })
 
-    it('rejects an out-of-range member count before hitting the RPC', async () => {
-      const { account, getAccountInfo } = mockDeployQuote()
+    it.each([[0], [-1], [1.5], [65536]])(
+      'rejects a member count of %s before hitting the RPC', async (bad) => {
+        const { account, rpc } = mockDeployQuote()
 
-      for (const bad of [0, -1, 1.5, 65536]) {
-        await expect(account.quoteDeploy(bad)).rejects.toThrow(/Invalid member count/)
-      }
-
-      expect(getAccountInfo).not.toHaveBeenCalled()
-    })
+        await expect(account.quoteDeploy(bad)).rejects.toThrow(
+          `Invalid member count ${bad}. It must be an integer between 1 and 65535.`
+        )
+        expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(0)
+      })
 
     it('accepts the full member range', async () => {
-      const { account } = mockDeployQuote()
+      const { account, rpc } = mockDeployQuote()
 
-      await expect(account.quoteDeploy(65535)).resolves.toEqual(expect.any(Object))
+      expect(await account.quoteDeploy(65535)).toEqual({ fee: 2049280n })
+
+      // The stub's rent is fixed, so the size it was asked for is what carries the claim:
+      // 132 base + 33 per member, for the largest multisig Squads allows.
+      expect(rpcRequests(rpc, 'getMinimumBalanceForRentExemption')[0])
+        .toEqual([2162787, { commitment: 'confirmed' }])
     })
 
     it('propagates RPC failures', async () => {
@@ -1907,10 +2044,10 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         provider: TEST_RPC_URL,
         multisigPda: TEST_MULTISIG_PDA
       })
-      account._rpc = {
-        getAccountInfo: () => ({ send: async () => { throw new Error('503 Service Unavailable') } }),
-        getMinimumBalanceForRentExemption: () => ({ send: async () => 0n })
-      }
+      stubSolanaRpc({
+        getAccountInfo: () => { throw new Error('503 Service Unavailable') },
+        getMinimumBalanceForRentExemption: () => 0
+      })
 
       await expect(account.quoteDeploy()).rejects.toThrow('503 Service Unavailable')
     })
@@ -1936,17 +2073,16 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         .slice(0, memberCount)
         .map((address) => ({ address }))
 
-      const getAccountInfo = jest.fn(() => ({
-        send: async () => ({ value: multisigAccountValue({ members, threshold: 1 }) })
-      }))
-      // The real rent formula: (128 + size) * 6960 lamports.
-      const getMinimumBalanceForRentExemption = jest.fn((size) => ({
-        send: async () => (128n + size) * 6960n
-      }))
+      const rpc = stubSolanaRpc({
+        getAccountInfo: () => ({
+          context: { slot: 1 },
+          value: multisigAccountValue({ members, threshold: 1 })
+        }),
+        // The real rent formula: (128 + size) * 6960 lamports.
+        getMinimumBalanceForRentExemption: ([size]) => (128n + BigInt(size)) * 6960n
+      })
 
-      account._rpc = { getAccountInfo, getMinimumBalanceForRentExemption }
-
-      return { account, getMinimumBalanceForRentExemption }
+      return { account, rpc }
     }
 
     it('sums transaction rent, proposal rent and one signature', async () => {
@@ -1957,10 +2093,11 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('scales with the member count', async () => {
+      // One cluster state at a time: the transport is global.
       const { account: two } = mockQuote(2)
-      const { account: three } = mockQuote(3)
-
       const a = (await two.quotePropose(TX)).fee
+
+      const { account: three } = mockQuote(3)
       const b = (await three.quotePropose(TX)).fee
 
       expect(b).toBeGreaterThan(a)
@@ -1969,20 +2106,22 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('sizes the transaction account from the message, not a constant', async () => {
-      const { account, getMinimumBalanceForRentExemption } = mockQuote(2)
+      const { account, rpc } = mockQuote(2)
 
       await account.quotePropose(TX)
 
       // 83 base + 4 ephemeral prefix + 134 message
-      expect(getMinimumBalanceForRentExemption).toHaveBeenCalledWith(221n)
+      expect(rpcRequests(rpc, 'getMinimumBalanceForRentExemption')[0])
+        .toEqual([221, { commitment: 'confirmed' }])
     })
 
     it('sizes the proposal account as 70 + 96 per member', async () => {
-      const { account, getMinimumBalanceForRentExemption } = mockQuote(3)
+      const { account, rpc } = mockQuote(3)
 
       await account.quotePropose(TX)
 
-      expect(getMinimumBalanceForRentExemption).toHaveBeenCalledWith(358n)
+      expect(rpcRequests(rpc, 'getMinimumBalanceForRentExemption')[1])
+        .toEqual([358, { commitment: 'confirmed' }])
     })
 
     it('charges one signature, not two', async () => {
@@ -1999,7 +2138,8 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     it('throws on a malformed recipient', async () => {
       const { account } = mockQuote(2)
 
-      await expect(account.quotePropose({ to: 'nope', value: 1n })).rejects.toThrow()
+      await expect(account.quotePropose({ to: 'nope', value: 1n }))
+        .rejects.toThrow('Expected base58-encoded address string of length in the range [32, 44]. Actual length: 4.')
     })
 
     it('throws when the multisig does not exist', async () => {
@@ -2007,29 +2147,33 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         provider: TEST_RPC_URL,
         multisigPda: TEST_MULTISIG_PDA
       })
-      account._rpc = {
-        getAccountInfo: () => ({ send: async () => ({ value: null }) }),
-        getMinimumBalanceForRentExemption: () => ({ send: async () => 0n })
-      }
+      stubSolanaRpc({
+        getAccountInfo: () => ({ context: { slot: 1 }, value: null }),
+        getMinimumBalanceForRentExemption: () => 0
+      })
 
       await expect(account.quotePropose(TX)).rejects.toThrow(/does not exist/)
     })
 
     it('quotes the multisig named in a config override', async () => {
-      const { account } = mockQuote(2)
-      const shared = account._rpc
+      const { account, rpc } = mockQuote(2)
 
       const { fee } = await account.quotePropose(TX, { multisigPda: TEST_DERIVED_PDA })
 
-      // The override reuses this account's RPC, so the mock still serves it.
-      expect(shared.getAccountInfo).toHaveBeenCalled()
-      expect(typeof fee).toBe('bigint')
+      // The override reuses this account's transport, and reads the multisig it names.
+      expect(rpcRequests(rpc, 'getAccountInfo')[0][0]).toBe(TEST_DERIVED_PDA)
+      expect(fee).toBe(5148440n)
     })
 
     it('propagates RPC failures', async () => {
       const { account } = mockQuote(2)
-      account._rpc.getMinimumBalanceForRentExemption = () => ({
-        send: async () => { throw new Error('503 Service Unavailable') }
+
+      stubSolanaRpc({
+        getAccountInfo: () => ({
+          context: { slot: 1 },
+          value: multisigAccountValue({ members: [{ address: MEMBER_A }], threshold: 1 })
+        }),
+        getMinimumBalanceForRentExemption: () => { throw new Error('503 Service Unavailable') }
       })
 
       await expect(account.quotePropose(TX)).rejects.toThrow('503 Service Unavailable')
@@ -2045,7 +2189,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
      * @param {Object} [options] - The scenario.
      * @param {number} [options.memberCount=2] - How many members the multisig holds.
      * @param {boolean} [options.recipientAtaExists=true] - Whether the recipient holds the token.
-     * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getAccountInfo: Function, getMinimumBalanceForRentExemption: Function }}
+     * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, rpc: Object }}
      */
     function mockTransferQuote ({ memberCount = 2, recipientAtaExists = true } = {}) {
       const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
@@ -2058,28 +2202,21 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         .slice(0, memberCount)
         .map((address) => ({ address }))
 
-      const getAccountInfo = jest.fn((queried) => ({
-        send: async () => {
-          if (queried === TEST_MULTISIG_PDA) {
-            return { value: multisigAccountValue({ members, threshold: 1 }) }
-          }
-
-          // Anything else is the recipient's associated token account. Only its
-          // existence matters here, not its contents.
-          return {
-            value: recipientAtaExists
-              ? { owner: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', data: ['', 'base64'], space: 165n, lamports: 2039280n, executable: false }
+      const rpc = stubSolanaRpc({
+        getAccountInfo: ([queried]) => ({
+          context: { slot: 1 },
+          value: queried === TEST_MULTISIG_PDA
+            ? multisigAccountValue({ members, threshold: 1 })
+            // Anything else is the recipient's associated token account. Only its
+            // existence matters here, not its contents.
+            : recipientAtaExists
+              ? { owner: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', data: ['', 'base64'], space: 165, lamports: 2039280, executable: false }
               : null
-          }
-        }
-      }))
-      const getMinimumBalanceForRentExemption = jest.fn((size) => ({
-        send: async () => (128n + size) * 6960n
-      }))
+        }),
+        getMinimumBalanceForRentExemption: ([size]) => (128n + BigInt(size)) * 6960n
+      })
 
-      account._rpc = { getAccountInfo, getMinimumBalanceForRentExemption }
-
-      return { account, getAccountInfo, getMinimumBalanceForRentExemption }
+      return { account, rpc }
     }
 
     it('quotes a transfer to a recipient that already holds the token', async () => {
@@ -2097,34 +2234,38 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('sizes the transaction account from the branch it observed', async () => {
-      const { account: withAta, getMinimumBalanceForRentExemption: a } = mockTransferQuote()
-      const { account: without, getMinimumBalanceForRentExemption: b } = mockTransferQuote({
-        recipientAtaExists: false
-      })
+      const sizes = (rpc) =>
+        rpcRequests(rpc, 'getMinimumBalanceForRentExemption').map(([size]) => size)
+
+      const { account: withAta, rpc: a } = mockTransferQuote()
 
       await withAta.quoteTransfer(OPTIONS)
+
+      const { account: without, rpc: b } = mockTransferQuote({ recipientAtaExists: false })
+
       await without.quoteTransfer(OPTIONS)
 
       // 83 + 4 + 164, versus 83 + 4 + 308
-      expect(a).toHaveBeenCalledWith(251n)
-      expect(b).toHaveBeenCalledWith(395n)
+      expect(sizes(a)).toContain(251)
+      expect(sizes(b)).toContain(395)
     })
 
     it('scales with the member count', async () => {
       const { account: two } = mockTransferQuote({ memberCount: 2 })
+      const forTwo = (await two.quoteTransfer(OPTIONS)).fee
+
       const { account: three } = mockTransferQuote({ memberCount: 3 })
+      const forThree = (await three.quoteTransfer(OPTIONS)).fee
 
-      const diff = (await three.quoteTransfer(OPTIONS)).fee - (await two.quoteTransfer(OPTIONS)).fee
-
-      expect(diff).toBe(96n * 6960n)
+      expect(forThree - forTwo).toBe(96n * 6960n)
     })
 
     it('queries the recipient token account, not the recipient address', async () => {
-      const { account, getAccountInfo } = mockTransferQuote()
+      const { account, rpc } = mockTransferQuote()
 
       await account.quoteTransfer(OPTIONS)
 
-      const queried = getAccountInfo.mock.calls.map(([addr]) => addr)
+      const queried = rpcRequests(rpc, 'getAccountInfo').map(([addr]) => addr)
 
       expect(queried).toContain(TEST_MULTISIG_PDA)
       expect(queried).not.toContain(MEMBER_C)
@@ -2141,11 +2282,26 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('throws on a malformed mint or recipient before any RPC call', async () => {
-      const { account, getAccountInfo } = mockTransferQuote()
+      const { account, rpc } = mockTransferQuote()
 
-      await expect(account.quoteTransfer({ ...OPTIONS, token: 'nope' })).rejects.toThrow()
-      await expect(account.quoteTransfer({ ...OPTIONS, recipient: 'nope' })).rejects.toThrow()
-      expect(getAccountInfo).not.toHaveBeenCalled()
+      // Distinct lengths, so the message names which argument was rejected.
+      await expect(account.quoteTransfer({ ...OPTIONS, token: 'bad-mint' }))
+        .rejects.toThrow('Expected base58-encoded address string of length in the range [32, 44]. Actual length: 8.')
+      await expect(account.quoteTransfer({ ...OPTIONS, recipient: 'bad-recipient-address' }))
+        .rejects.toThrow('Expected base58-encoded address string of length in the range [32, 44]. Actual length: 21.')
+      expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(0)
+    })
+
+    it('reports the mint problem first when both arguments are invalid', async () => {
+      // Same contract as getTokenBalance: a caller fixing errors one at a time hears about
+      // the argument they passed first.
+      const { account } = mockTransferQuote()
+
+      await expect(account.quoteTransfer({
+        ...OPTIONS,
+        token: 'bad-mint',
+        recipient: 'bad-recipient-address'
+      })).rejects.toThrow('Expected base58-encoded address string of length in the range [32, 44]. Actual length: 8.')
     })
 
     it('throws when the multisig does not exist', async () => {
@@ -2153,18 +2309,23 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         provider: TEST_RPC_URL,
         multisigPda: TEST_MULTISIG_PDA
       })
-      account._rpc = {
-        getAccountInfo: () => ({ send: async () => ({ value: null }) }),
-        getMinimumBalanceForRentExemption: () => ({ send: async () => 0n })
-      }
+      stubSolanaRpc({
+        getAccountInfo: () => ({ context: { slot: 1 }, value: null }),
+        getMinimumBalanceForRentExemption: () => 0
+      })
 
       await expect(account.quoteTransfer(OPTIONS)).rejects.toThrow(/does not exist/)
     })
 
     it('propagates RPC failures', async () => {
       const { account } = mockTransferQuote()
-      account._rpc.getMinimumBalanceForRentExemption = () => ({
-        send: async () => { throw new Error('503 Service Unavailable') }
+
+      stubSolanaRpc({
+        getAccountInfo: () => ({
+          context: { slot: 1 },
+          value: multisigAccountValue({ members: [{ address: MEMBER_A }], threshold: 1 })
+        }),
+        getMinimumBalanceForRentExemption: () => { throw new Error('503 Service Unavailable') }
       })
 
       await expect(account.quoteTransfer(OPTIONS)).rejects.toThrow('503 Service Unavailable')
@@ -2177,7 +2338,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
      * quoting an execution reads.
      *
      * @param {Object|null} proposal - The proposal account, or null to report it missing.
-     * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, getMultipleAccounts: Function }}
+     * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, rpc: Object }}
      */
     function mockExecuteQuote (proposal = proposalAccountValue({ approved: [MEMBER_A] })) {
       const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
@@ -2185,8 +2346,9 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         multisigPda: TEST_MULTISIG_PDA
       })
 
-      const getMultipleAccounts = jest.fn(() => ({
-        send: async () => ({
+      const rpc = stubSolanaRpc({
+        getMultipleAccounts: () => ({
+          context: { slot: 1 },
           value: [
             multisigAccountValue({
               members: [{ address: MEMBER_A }, { address: MEMBER_B }],
@@ -2195,11 +2357,9 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
             proposal
           ]
         })
-      }))
+      })
 
-      account._rpc = { getMultipleAccounts }
-
-      return { account, getMultipleAccounts }
+      return { account, rpc }
     }
 
     it('quotes the base fee of the execution transaction', async () => {
@@ -2209,12 +2369,12 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('reads the multisig and the proposal in one request', async () => {
-      const { account, getMultipleAccounts } = mockExecuteQuote()
+      const { account, rpc } = mockExecuteQuote()
 
       await account.quoteExecuteProposal(1)
 
-      expect(getMultipleAccounts).toHaveBeenCalledTimes(1)
-      expect(getMultipleAccounts.mock.calls[0][0]).toHaveLength(2)
+      expect(rpcRequests(rpc, 'getMultipleAccounts')).toHaveLength(1)
+      expect(rpcRequests(rpc, 'getMultipleAccounts')[0][0]).toHaveLength(2)
     })
 
     it('throws NoSuchElementError when no proposal exists at that id', async () => {
@@ -2232,8 +2392,9 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
 
     it('propagates RPC failures', async () => {
       const { account } = mockExecuteQuote()
-      account._rpc.getMultipleAccounts = () => ({
-        send: async () => { throw new Error('503 Service Unavailable') }
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => { throw new Error('503 Service Unavailable') }
       })
 
       await expect(account.quoteExecuteProposal(1)).rejects.toThrow('503 Service Unavailable')
@@ -2241,9 +2402,13 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
   })
 
   describe('unsupported message operations', () => {
-    const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
-      provider: TEST_RPC_URL,
-      multisigPda: TEST_MULTISIG_PDA
+    let account
+
+    beforeEach(() => {
+      account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        multisigPda: TEST_MULTISIG_PDA
+      })
     })
 
     it('throws NotSupportedError from getMessageProposals', async () => {
@@ -2264,16 +2429,34 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       await expect(account.verify('hello', 'sig')).rejects.toThrow(NotSupportedError)
     })
 
-    it('distinguishes not-supported from not-implemented', async () => {
-      // quoteDeploy is pending work; getMessageProposals never will be. A caller doing
-      // capability detection has to be able to tell them apart.
-      account._rpc = {
-        getAccountInfo: () => ({ send: async () => ({ value: null }) }),
-        getMinimumBalanceForRentExemption: () => ({ send: async () => 2039280n })
-      }
+    // A caller doing capability detection has to tell "this protocol cannot" from "not built
+    // yet", so each half is its own test.
+    it('refuses to quote a send, naming the method and the reason', async () => {
+      const error = await account.quoteSendTransaction({ to: MEMBER_A, value: 1n })
+        .catch((thrown) => thrown)
 
-      await expect(account.getMessageProposals(['abc'])).rejects.toThrow(NotSupportedError)
-      await expect(account.quoteDeploy()).rejects.not.toThrow(NotSupportedError)
+      expect(error).toBeInstanceOf(NotSupportedError)
+      expect(error.methodName).toBe('quoteSendTransaction(tx)')
+      expect(error.reason).toMatch(/does not submit transactions directly/)
+    })
+
+    it('reports an unsupported operation as NotSupportedError', async () => {
+      const error = await account.getMessageProposals(['abc']).catch((thrown) => thrown)
+
+      expect(error).toBeInstanceOf(NotSupportedError)
+    })
+
+    it('does not report pending work as unsupported', async () => {
+      stubSolanaRpc({
+        getAccountInfo: () => ({ context: { slot: 1 }, value: null }),
+        getMinimumBalanceForRentExemption: () => 2039280
+      })
+
+      // quoteDeploy fails because the multisig is absent, not because Squads cannot do it.
+      const error = await account.quoteDeploy().catch((thrown) => thrown)
+
+      expect(error).not.toBeInstanceOf(NotSupportedError)
+      expect(error.message).toMatch(/could not be read/)
     })
 
     it('is not a NotImplementedError', async () => {
@@ -2309,18 +2492,21 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
 
     it('queries the derived address', async () => {
-      const { account, getAccountInfo } = mockAccount(null, { createKey: TEST_CREATE_KEY })
+      const { account, rpc } = mockAccount(null, { createKey: TEST_CREATE_KEY })
 
       await account.isDeployed()
 
-      expect(getAccountInfo).toHaveBeenCalledWith(TEST_DERIVED_PDA, expect.anything())
+      expect(rpcRequests(rpc, 'getAccountInfo')[0]).toEqual([
+        TEST_DERIVED_PDA,
+        { commitment: 'confirmed', encoding: 'base64', dataSlice: { offset: 0, length: 8 } }
+      ])
     })
 
     it('throws without hitting the RPC when nothing is configured', async () => {
-      const { account, getAccountInfo } = mockAccount(null, {})
+      const { account, rpc } = mockAccount(null, {})
 
       await expect(account.isDeployed()).rejects.toThrow(/multisigPda.*createKey/)
-      expect(getAccountInfo).not.toHaveBeenCalled()
+      expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(0)
     })
   })
 })

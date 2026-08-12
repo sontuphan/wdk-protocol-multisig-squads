@@ -19,7 +19,7 @@ import { access } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, jest } from '@jest/globals'
 
 import { address } from '@solana/addresses'
 import { createSolanaRpc } from '@solana/rpc'
@@ -46,6 +46,12 @@ import { approveWithAll, createWallet, deployMultisig, sorted } from './helpers/
 jest.setTimeout(180_000)
 
 const TEST_RPC_URL = 'http://127.0.0.1:8899'
+
+// The signer keys the suite's seed phrase derives, and the rent the multisig account pays:
+// measured against the validator, which is what `quoteDeploy` reads at run time.
+const SIGNER_0 = '3uXqWpwgqKVdiHAwF6Vmu4G4vdQzpR66xjPkz1G7zMKE'
+const SIGNER_1 = 'CfGcujEkPVDx7yGyn1PUjxn2e353MXbLk8ixzwuJUktK'
+const MULTISIG_RENT = 2039280n
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 
@@ -151,12 +157,6 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
   })
 
   describe('module and localnet', () => {
-    it('exports the manager and both account classes', () => {
-      expect(typeof WalletManagerMultisigSolanaSquads).toBe('function')
-      expect(typeof WalletAccountMultisigSolanaSquads).toBe('function')
-      expect(typeof WalletAccountReadOnlyMultisigSolanaSquads).toBe('function')
-    })
-
     it('runs against a validator hosting the Squads program', async () => {
       const { value } = await rpc
         .getMultipleAccounts(
@@ -180,7 +180,9 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const [first, second] = await Promise.all([wallet.getAccount(0), wallet.getAccount(1)])
 
-      expect(await first.getSignerAddress()).not.toBe(await second.getSignerAddress())
+      // The keys TEST_SEED_PHRASE derives at 0'/0' and 1'/0'.
+      expect(await first.getSignerAddress()).toBe(SIGNER_0)
+      expect(await second.getSignerAddress()).toBe(SIGNER_1)
     })
   })
 
@@ -230,9 +232,10 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         fundVault: LAMPORTS_PER_SOL
       })
 
-      expect(vaultPda).not.toBe(multisigPda)
+      // The airdrop landed in the vault; the multisig account holds only its own rent.
       expect(await accounts[0].getBalance()).toBe(LAMPORTS_PER_SOL)
       expect(await solanaAccount(vaultPda).getBalance()).toBe(LAMPORTS_PER_SOL)
+      expect(await solanaAccount(multisigPda).getBalance()).toBe(MULTISIG_RENT)
     })
 
     it('quotes a deploy that covers what the creator is actually debited', async () => {
@@ -250,7 +253,6 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const spent = before - (await solanaAccount(signers[0]).getBalance())
 
-      expect(fee).toBeGreaterThan(0n)
       expect(spent).toBe(fee)
     })
 
@@ -262,7 +264,8 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         accounts[0].quoteDeploy(5)
       ])
 
-      expect(five.fee).toBeGreaterThan(one.fee)
+      // Four more members at 33 bytes each, at the validator's 6960 lamports per byte.
+      expect(five.fee - one.fee).toBe(4n * 33n * 6960n)
     })
 
     it('refuses to deploy the same multisig twice', async () => {
@@ -274,7 +277,9 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
     it('refuses a threshold above the number of owners', async () => {
       const { accounts, signers } = await createWallet({ members: 2 })
 
-      await expect(accounts[0].deploy(signers, 3)).rejects.toThrow()
+      await expect(accounts[0].deploy(signers, 3)).rejects.toThrow(
+        'Invalid threshold 3. It must be an integer between 1 and the number of owners able to vote (2).'
+      )
     })
 
     it('refuses to deploy without a create key secret', async () => {
@@ -319,11 +324,13 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       await confirmTransaction(rpc, proposal.hash)
 
-      expect(proposal).toMatchObject({
+      expect(proposal).toEqual({
         proposalId: '1',
         confirmations: 0,
         threshold: 2,
-        status: 'pending'
+        status: 'pending',
+        hash: proposal.hash,
+        fee: 5000n
       })
       expect(await accounts[0].getNonce()).toBe(1n)
 
@@ -331,7 +338,8 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       expect(created).toMatchObject({
         proposalId: '1',
-        status: 'Active',
+        status: 'pending',
+        statusName: 'Active',
         confirmations: 0,
         approved: [],
         rejected: []
@@ -346,7 +354,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const approved = await accounts[0].getProposal(proposal.proposalId)
 
-      expect(approved).toMatchObject({ status: 'Approved', confirmations: 2 })
+      expect(approved).toMatchObject({ status: 'pending', statusName: 'Approved', confirmations: 2 })
       expect(sorted(approved.approved)).toEqual(sorted(signers))
       expect(await accounts[0].isReadyToExecute(proposal.proposalId)).toBe(true)
 
@@ -472,7 +480,16 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         value: TRANSFER_AMOUNT
       })
 
-      expect(fee).toBeGreaterThan(0n)
+      const before = await solanaAccount(await accounts[0].getSignerAddress()).getBalance()
+      const proposal = await accounts[0].propose({ to: recipient, value: TRANSFER_AMOUNT })
+
+      await confirmTransaction(rpc, proposal.hash)
+
+      const after = await solanaAccount(await accounts[0].getSignerAddress()).getBalance()
+
+      // The quote covers the rent for both accounts plus the signature, which is exactly what
+      // the proposer pays.
+      expect(before - after).toBe(fee)
     })
 
     it('fails execution when the vault cannot cover the transfer', async () => {
@@ -486,9 +503,13 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       // Preflight rejects it at send time, and a node without preflight would reject it at
       // confirmation — either way the proposal stays approved and nothing leaves the vault.
-      await expect(
-        accounts[0].executeProposal(proposal.proposalId).then((result) => confirmTransaction(rpc, result.hash))
-      ).rejects.toThrow()
+      const error = await accounts[0].executeProposal(proposal.proposalId)
+        .then((result) => confirmTransaction(rpc, result.hash))
+        .catch((thrown) => thrown)
+
+      // The vault holds no lamports, so the inner transfer cannot be simulated. The node
+      // rejects it before it reaches a block, which is what keeps the vault intact below.
+      expect(String(error)).toMatch(/Transaction simulation failed/)
 
       expect(await solanaAccount(recipient).getBalance()).toBe(0n)
 
@@ -504,7 +525,9 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
     let testToken
 
-    beforeAll(async () => {
+    // A mint per test: the four tests below each move tokens, and a shared mint authority is
+    // shared mutable state. Deploying one costs a couple of transactions against a localnet.
+    beforeEach(async () => {
       testToken = await deployTestToken(rpc)
     })
 
@@ -536,7 +559,14 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       await confirmTransaction(rpc, proposal.hash)
 
-      expect(proposal).toMatchObject({ proposalId: '1', confirmations: 0, status: 'pending' })
+      expect(proposal).toEqual({
+        proposalId: '1',
+        confirmations: 0,
+        threshold: 2,
+        status: 'pending',
+        hash: proposal.hash,
+        fee: 5000n
+      })
 
       await approveWithAll(accounts, proposal.proposalId, rpc)
 
@@ -546,7 +576,9 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       await confirmTransaction(rpc, execution.hash)
 
-      expect(await accounts[0].getTokenBalance(testToken.mint)).toBe(MINT_AMOUNT - TRANSFER_AMOUNT)
+      // Both sides read through the sibling package, so the SUT does not confirm its own work.
+      expect(await solanaAccount(vaultPda).getTokenBalance(testToken.mint))
+        .toBe(MINT_AMOUNT - TRANSFER_AMOUNT)
       expect(await solanaAccount(recipient).getTokenBalance(testToken.mint)).toBe(TRANSFER_AMOUNT)
     })
 
@@ -583,7 +615,18 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         amount: TRANSFER_AMOUNT
       })
 
-      expect(fee).toBeGreaterThan(0n)
+      const before = await solanaAccount(await accounts[0].getSignerAddress()).getBalance()
+      const proposal = await accounts[0].transfer({
+        token: testToken.mint,
+        recipient,
+        amount: TRANSFER_AMOUNT
+      })
+
+      await confirmTransaction(rpc, proposal.hash)
+
+      const after = await solanaAccount(await accounts[0].getSignerAddress()).getBalance()
+
+      expect(before - after).toBe(fee)
     })
 
     it('refuses to propose a transfer of a mint that does not exist', async () => {
@@ -628,7 +671,8 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       const afterOne = await accounts[0].getProposal(proposal.proposalId)
 
       expect(afterOne).toMatchObject({
-        status: 'Active',
+        status: 'pending',
+        statusName: 'Active',
         confirmations: 1,
         approved: [signers[0]]
       })
@@ -639,7 +683,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const afterTwo = await accounts[0].getProposal(proposal.proposalId)
 
-      expect(afterTwo).toMatchObject({ status: 'Approved', confirmations: 2 })
+      expect(afterTwo).toMatchObject({ status: 'pending', statusName: 'Approved', confirmations: 2 })
       expect(sorted(afterTwo.approved)).toEqual(sorted([signers[0], signers[1]]))
     })
 
@@ -660,7 +704,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const rejected = await accounts[0].getProposal(proposal.proposalId)
 
-      expect(rejected).toMatchObject({ status: 'Rejected', rejected: [signers[1]] })
+      expect(rejected).toMatchObject({ statusName: 'Rejected', rejected: [signers[1]] })
       expect(await accounts[0].isReadyToExecute(proposal.proposalId)).toBe(false)
       await expect(accounts[0].executeProposal(proposal.proposalId)).rejects.toThrow(/rejected/)
     })
@@ -737,8 +781,12 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       // was never made a member.
       const outsider = await multisig.manager.getAccount(1)
 
-      await expect(outsider.approveProposal(proposal.proposalId)).rejects.toThrow()
-      await expect(outsider.propose({ to: proposal.recipient, value: 1n })).rejects.toThrow()
+      const outsiderAddress = await outsider.getSignerAddress()
+
+      await expect(outsider.approveProposal(proposal.proposalId))
+        .rejects.toThrow(`The signer ${outsiderAddress} is not a member of the multisig`)
+      await expect(outsider.propose({ to: proposal.recipient, value: 1n }))
+        .rejects.toThrow(`The signer ${outsiderAddress} is not a member of the multisig`)
     })
 
     it('refuses to execute a proposal that has not been approved', async () => {
@@ -918,7 +966,9 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       // The executed config change bumped staleTransactionIndex past the pending proposal,
       // so it can no longer collect votes.
-      await expect(accounts[0].approveProposal(pending.proposalId)).rejects.toThrow()
+      await expect(accounts[0].approveProposal(pending.proposalId)).rejects.toThrow(
+        'was invalidated by a later configuration change and can no longer be voted on'
+      )
 
       const stale = await accounts[0].getProposal(pending.proposalId)
 
@@ -929,21 +979,32 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
     it('refuses to add an owner that is already a member', async () => {
       const { accounts, signers } = await deployMultisig({ members: 2, threshold: 2 })
 
-      await expect(accounts[0].addOwner(signers[1])).rejects.toThrow()
+      await expect(accounts[0].addOwner(signers[1]))
+        .rejects.toThrow(`The address ${signers[1]} is already a member of the multisig`)
     })
 
     it('refuses to remove an owner that is not a member', async () => {
       const { accounts } = await deployMultisig({ members: 2, threshold: 2 })
       const outsider = (await generateKeyPairSigner()).address
 
-      await expect(accounts[0].removeOwner(outsider)).rejects.toThrow()
+      await expect(accounts[0].removeOwner(outsider))
+        .rejects.toThrow(`The address ${outsider} is not a member of the multisig`)
     })
 
-    it('refuses a threshold the remaining voters could never reach', async () => {
+    it('refuses a threshold above the voter count', async () => {
+      const { accounts } = await deployMultisig({ members: 2, threshold: 2 })
+
+      await expect(accounts[0].changeThreshold(3)).rejects.toThrow(
+        'Invalid threshold 3. It must be an integer between 1 and the number of owners able to vote (2).'
+      )
+    })
+
+    it('refuses a removal that would leave the threshold unreachable', async () => {
       const { accounts, signers } = await deployMultisig({ members: 2, threshold: 2 })
 
-      await expect(accounts[0].changeThreshold(3)).rejects.toThrow()
-      await expect(accounts[0].removeOwner(signers[1])).rejects.toThrow()
+      await expect(accounts[0].removeOwner(signers[1])).rejects.toThrow(
+        'Invalid threshold 2. It must be an integer between 1 and the number of owners able to vote (1).'
+      )
     })
 
     it('refuses a config change on a multisig that does not exist', async () => {
@@ -986,20 +1047,28 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       await expect(account.verify('hello', '0x00')).rejects.toThrow(NotSupportedError)
     })
 
-    it('returns a receipt for a confirmed transaction and null for an unknown one', async () => {
+    it('returns the receipt of a confirmed transaction', async () => {
       const { accounts, deployHash } = await deployMultisig({ members: 1, threshold: 1 })
 
       const receipt = await accounts[0].getTransactionReceipt(deployHash)
 
-      expect(receipt).not.toBeNull()
+      expect(receipt.transaction.signatures[0]).toBe(deployHash)
       expect(receipt.meta.err).toBeNull()
+      // Two signatures: the creator and the create key.
+      expect(receipt.meta.fee).toBe(10000n)
+    })
 
-      const unknown = '5'.repeat(87)
+    it('returns null for a signature the cluster has never seen', async () => {
+      const { accounts } = await deployMultisig({ members: 1, threshold: 1 })
 
-      expect(await accounts[0].getTransactionReceipt(unknown)).toBeNull()
-      await expect(accounts[0].getTransactionReceipt('not-a-signature')).rejects.toThrow(
-        /Invalid transaction signature/
-      )
+      expect(await accounts[0].getTransactionReceipt('5'.repeat(87))).toBeNull()
+    })
+
+    it('refuses a signature that is not 64 bytes of base58', async () => {
+      const { accounts } = await deployMultisig({ members: 1, threshold: 1 })
+
+      await expect(accounts[0].getTransactionReceipt('not-a-signature'))
+        .rejects.toThrow('Invalid transaction signature: not-a-signature')
     })
 
     it('exposes a read-only view that reads the same state without signing', async () => {
@@ -1031,25 +1100,36 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       expect(seen.statusName).toBe('Approved')
     })
 
-    it('reports an undeployed multisig without throwing', async () => {
+    it('reports an undeployed multisig as absent rather than throwing', async () => {
       const { accounts } = await createWallet({ members: 1 })
       const [account] = accounts
 
       expect(await account.isDeployed()).toBe(false)
       expect(await account.getMultisigInfo()).toMatchObject({
         owners: [],
+        masks: [],
         threshold: 0,
         isCreated: false
       })
-      expect(await account.getBalance()).toBe(0n)
-
-      await expect(account.getOwners()).rejects.toThrow(/does not exist/)
-      await expect(account.getThreshold()).rejects.toThrow(/does not exist/)
-      await expect(account.getNonce()).rejects.toThrow(/does not exist/)
     })
 
+    it('reports an empty vault for an undeployed multisig', async () => {
+      const { accounts } = await createWallet({ members: 1 })
+
+      expect(await accounts[0].getBalance()).toBe(0n)
+    })
+
+    it.each([['getOwners'], ['getThreshold'], ['getNonce']])(
+      'refuses %s on an undeployed multisig', async (method) => {
+        const { accounts } = await createWallet({ members: 1 })
+
+        await expect(accounts[0][method]()).rejects.toThrow(
+          `The multisig account ${await accounts[0].getAddress()} does not exist.`
+        )
+      })
+
     it('derives distinct vaults per index and rejects one out of range', async () => {
-      const { accounts } = await deployMultisig({ members: 1, threshold: 1 })
+      const { accounts, vaultPda } = await deployMultisig({ members: 1, threshold: 1 })
       const [account] = accounts
 
       const [zero, one] = await Promise.all([
@@ -1057,8 +1137,11 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         account.getVaultAddress(1)
       ])
 
-      expect(zero).not.toBe(one)
-      await expect(account.getVaultAddress(256)).rejects.toThrow(/Invalid vault index/)
+      expect(zero).toBe(vaultPda)
+      expect(one).not.toBe(zero)
+      await expect(account.getVaultAddress(256)).rejects.toThrow(
+        'Invalid vault index 256. It must be an integer between 0 and 255.'
+      )
     })
 
     it('refuses to read a multisig with no address configured', async () => {
