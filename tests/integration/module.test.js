@@ -296,7 +296,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const { accounts } = await createWallet({
         members: 1,
-        config: { multisigPda, createKeySecret: undefined }
+        config: { multisigPdaOrCreateKey: multisigPda, createKeySecret: undefined }
       })
 
       expect(await accounts[0].getAddress()).toBe(multisigPda)

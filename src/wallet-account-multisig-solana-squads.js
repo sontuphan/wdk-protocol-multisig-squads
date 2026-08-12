@@ -24,7 +24,7 @@ import WalletAccountReadOnlyMultisigSolanaSquads, {
 
 import { NotSupportedError } from './errors.js'
 
-import { address, getAddressEncoder, getProgramDerivedAddress } from '@solana/addresses'
+import { address, getAddressEncoder } from '@solana/addresses'
 
 import { getBase58Encoder, getBase64Encoder } from '@solana/codecs'
 
@@ -35,7 +35,9 @@ import {
   PROPOSAL_STATUS,
   SYSTEM_TRANSFER,
   TRANSACTION_MESSAGE
-} from './layouts.js'
+} from './helpers/layouts.js'
+
+import { getProgramDerivedAddressSync } from './helpers/program-derived-address.js'
 
 import { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes } from '@solana/signers'
 
@@ -159,16 +161,17 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /**
-   * Returns the address of the Squads multisig account. A configured `multisigPda` wins over a
-   * configured `createKey`, which in turn wins over `createKeySecret`.
+   * Returns the address of the Squads multisig account, resolving it from `createKeySecret` when
+   * the config names no multisig itself.
    *
    * @returns {Promise<string>} The multisig address.
    * @throws {Error} If the multisig address cannot be resolved.
    */
   async getAddress () {
-    if (!this._multisigPda && !this._createKey && this._config.createKeySecret) {
+    if (!this._multisigPda && this._config.createKeySecret) {
       const { address } = await this._getCreateKeySigner()
-      this._createKey = address
+
+      this._multisigPda = this._toMultisigPda(address)
     }
 
     return super.getAddress()
@@ -282,7 +285,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    */
   async deploy (owners, threshold = DEFAULT.threshold) {
     const createKeySigner = await this._getCreateKeySigner()
-    const [expectedPda] = await getProgramDerivedAddress({
+    const [expectedPda] = getProgramDerivedAddressSync({
       programAddress: this._programId,
       seeds: [SEED.prefix, SEED.multisig, getAddressEncoder().encode(createKeySigner.address)]
     })
@@ -293,7 +296,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       )
     }
 
-    this._createKey = createKeySigner.address
     this._multisigPda = expectedPda
 
     const members = owners ?? [await this.getSignerAddress()]
@@ -755,14 +757,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @throws {Error} If the multisig address cannot be resolved.
    */
   async toReadOnlyAccount () {
-    await this.getAddress()
-
+    const multisigPdaOrCreateKey = await this.getAddress()
     const { createKeySecret, ...config } = this._config
 
     return new WalletAccountReadOnlyMultisigSolanaSquads(this._signerAddress, {
       ...config,
-      multisigPda: this._multisigPda,
-      createKey: this._createKey
+      multisigPdaOrCreateKey
     })
   }
 
@@ -851,10 +851,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     )
 
     const index = transactionIndex + 1n
-    const [transactionPda, proposalPda] = await Promise.all([
-      this._getTransactionPda(multisigPda, index),
-      this._getProposalPda(multisigPda, index)
-    ])
+    const transactionPda = this._getTransactionPda(multisigPda, index)
+    const proposalPda = this._getProposalPda(multisigPda, index)
 
     const creator = { address: address(signerAddress), role: ACCOUNT_ROLE.writableSigner }
     const systemProgram = { address: address(PROGRAM_ADDRESS.system), role: ACCOUNT_ROLE.readonly }
@@ -1102,13 +1100,11 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
 
     const member = address(signerAddress)
-    const spendingLimits = await Promise.all(
-      transaction.actions
-        .filter((action) => action.createKey || action.spendingLimit)
-        .map((action) => action.spendingLimit
-          ? address(action.spendingLimit)
-          : this._getSpendingLimitPda(multisig.address, action.createKey))
-    )
+    const spendingLimits = transaction.actions
+      .filter((action) => action.createKey || action.spendingLimit)
+      .map((action) => action.spendingLimit
+        ? address(action.spendingLimit)
+        : this._getSpendingLimitPda(multisig.address, action.createKey))
 
     return {
       programAddress: this._programId,
@@ -1153,7 +1149,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const { message } = transaction
     const signedForByProgram = new Set([
       vaultPda,
-      ...await this._getEphemeralSignerPdas(transaction.address, transaction.ephemeralSignerCount)
+      ...this._getEphemeralSignerPdas(transaction.address, transaction.ephemeralSignerCount)
     ])
     const lookups = message.addressTableLookups
     const accounts = lookups.map((lookup) => ({

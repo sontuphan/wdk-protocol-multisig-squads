@@ -49,8 +49,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     get keyPair(): KeyPair;
     /**
-     * Returns the address of the Squads multisig account. A configured `multisigPda` wins over a
-     * configured `createKey`, which in turn wins over `createKeySecret`.
+     * Returns the address of the Squads multisig account, resolving it from `createKeySecret` when
+     * the config names no multisig itself.
      *
      * @returns {Promise<string>} The multisig address.
      * @throws {Error} If the multisig address cannot be resolved.

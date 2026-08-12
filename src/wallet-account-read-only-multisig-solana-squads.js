@@ -22,13 +22,15 @@ import { NotSupportedError } from './errors.js'
 
 import { createSolanaRpc } from '@solana/rpc'
 
-import { address, getAddressEncoder, getProgramDerivedAddress } from '@solana/addresses'
+import { address, getAddressEncoder, isOffCurveAddress } from '@solana/addresses'
 
 import { getBase58Encoder, getBase64Encoder, getU64Encoder } from '@solana/codecs'
 
 import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token'
 
-import { ACCOUNT, ACCOUNT_DISCRIMINATOR, PROPOSAL_STATUS } from './layouts.js'
+import { ACCOUNT, ACCOUNT_DISCRIMINATOR, PROPOSAL_STATUS } from './helpers/layouts.js'
+
+import { getProgramDerivedAddressSync } from './helpers/program-derived-address.js'
 
 /** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
 /** @typedef {import('@solana/rpc-types').Commitment} Commitment */
@@ -56,18 +58,18 @@ import { ACCOUNT, ACCOUNT_DISCRIMINATOR, PROPOSAL_STATUS } from './layouts.js'
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
 
 /**
- * The configuration a read-only Squads account takes: how to reach the cluster, and how to
- * identify the multisig. `multisigPda` names an existing one; `createKey` derives its address
- * instead. Both may be given, and must then agree. A signing account may give neither and
- * supply `createKeySecret`, which the create key is derived from.
+ * The configuration a read-only Squads account takes: how to reach the cluster, and which
+ * multisig to operate on. One field names the multisig: either its address, or the create key it
+ * derives from. The two never look alike. A multisig address always sits off the ed25519 curve,
+ * and a create key always sits on it, because it has to sign the multisig into being. A signing
+ * account may give neither and supply `createKeySecret`, which the create key is derived from.
  *
  * @typedef {Object} SolanaMultisigSquadsReadOnlyConfig
  * @property {string | string[]} [provider] - A Solana RPC URL, or a list of URLs for failover. Omit it to derive addresses without reaching the cluster; every method that needs the cluster then throws.
  * @property {Commitment} [commitment] - The commitment level for transactions (default: 'confirmed').
  * @property {number} [retries] - The number of retries for the failover provider (default: 3).
  * @property {string} [programId] - The Squads program to operate against, for a fork or a local deployment (default: `SQUADS_PROGRAM_ADDRESS`).
- * @property {string} [multisigPda] - The address of an existing Squads multisig to operate on.
- * @property {string} [createKey] - The create key used to derive a new multisig PDA on creation.
+ * @property {string} [multisigPdaOrCreateKey] - The address of an existing Squads multisig, or the create key its address derives from.
  */
 
 /**
@@ -225,7 +227,7 @@ const PROPOSAL_STATUS_PHRASES = [
 ]
 
 // What is left of the byte arithmetic: the account sizes the rent quotes are computed from, which
-// `src/layouts.js` cannot supply because the accounts are sized before they hold anything.
+// `src/helpers/layouts.js` cannot supply because the accounts are sized before they hold anything.
 const SIZE = {
   address: 32,
   member: 33,
@@ -303,28 +305,22 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     this._signerAddress = signerAddress
 
     /**
-     * The address of the Squads multisig account.
-     *
-     * @protected
-     * @type {string | undefined}
-     */
-    this._multisigPda = config.multisigPda
-
-    /**
-     * The create key used to derive the multisig address, if configured.
-     *
-     * @protected
-     * @type {string | undefined}
-     */
-    this._createKey = config.createKey
-
-    /**
      * The address of the Squads program to operate against.
      *
      * @protected
      * @type {Address}
      */
     this._programId = address(config.programId ?? SQUADS_PROGRAM_ADDRESS)
+
+    /**
+     * The address of the Squads multisig account.
+     *
+     * @protected
+     * @type {string | undefined}
+     */
+    this._multisigPda = config.multisigPdaOrCreateKey
+      ? this._toMultisigPda(config.multisigPdaOrCreateKey)
+      : undefined
 
     /**
      * The commitment level for transactions.
@@ -362,35 +358,19 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the address of the Squads multisig account. A configured `multisigPda` wins over a
-   * configured `createKey`, which is only derived from when no address is configured.
+   * Returns the address of the Squads multisig account.
    *
    * @returns {Promise<string>} The multisig address.
-   * @throws {Error} If neither `multisigPda` nor `createKey` is configured.
+   * @throws {Error} If no `multisigPdaOrCreateKey` is configured.
    */
   async getAddress () {
-    if (this._multisigPda) {
-      return this._multisigPda
-    }
-
-    if (!this._createKey) {
+    if (!this._multisigPda) {
       throw new Error(
-        'No multisig address is configured. Provide `multisigPda` or `createKey` in the config.'
+        'No multisig address is configured. Provide `multisigPdaOrCreateKey` in the config.'
       )
     }
 
-    const [multisigPda] = await getProgramDerivedAddress({
-      programAddress: this._programId,
-      seeds: [
-        SEED.prefix,
-        SEED.multisig,
-        getAddressEncoder().encode(address(this._createKey))
-      ]
-    })
-
-    this._multisigPda = multisigPda
-
-    return multisigPda
+    return this._multisigPda
   }
 
   /**
@@ -545,7 +525,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const multisigPda = await this.getAddress()
 
-    const [vaultPda] = await getProgramDerivedAddress({
+    const [vaultPda] = getProgramDerivedAddressSync({
       programAddress: this._programId,
       seeds: [
         SEED.prefix,
@@ -685,9 +665,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     }
 
     const indices = proposalIds.map((id) => this._toProposalIndex(id))
-    const proposalPdas = await Promise.all(
-      indices.map((index) => this._getProposalPda(multisigPda, index))
-    )
+    const proposalPdas = indices.map((index) => this._getProposalPda(multisigPda, index))
 
     const proposals = {}
 
@@ -749,10 +727,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     const index = this._toProposalIndex(proposalId)
     const multisigPda = await this.getAddress()
 
-    const [proposalPda, transactionPda] = await Promise.all([
-      this._getProposalPda(multisigPda, index),
-      this._getTransactionPda(multisigPda, index)
-    ])
+    const proposalPda = this._getProposalPda(multisigPda, index)
+    const transactionPda = this._getTransactionPda(multisigPda, index)
 
     const { value } = await this._rpc
       .getMultipleAccounts(
@@ -1023,7 +999,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     }
 
     const multisigPda = await this.getAddress()
-    const proposalPda = await this._getProposalPda(multisigPda, index)
+    const proposalPda = this._getProposalPda(multisigPda, index)
 
     const { value } = await this._rpc
       .getMultipleAccounts([address(multisigPda), proposalPda], {
@@ -1052,10 +1028,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     }
 
     const multisigPda = await this.getAddress()
-    const [proposalPda, transactionPda] = await Promise.all([
-      this._getProposalPda(multisigPda, index),
-      this._getTransactionPda(multisigPda, index)
-    ])
+    const proposalPda = this._getProposalPda(multisigPda, index)
+    const transactionPda = this._getTransactionPda(multisigPda, index)
 
     const { value } = await this._rpc
       .getMultipleAccounts(
@@ -1090,7 +1064,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       throw new Error('The wallet must be connected to a provider to read the Squads program config.')
     }
 
-    const [programConfigPda] = await getProgramDerivedAddress({
+    const [programConfigPda] = getProgramDerivedAddressSync({
       programAddress: this._programId,
       seeds: [SEED.prefix, SEED.programConfig]
     })
@@ -1140,15 +1114,42 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
+   * Resolves what the config names, an address or a create key, to the multisig address.
+   *
+   * @protected
+   * @param {string} multisigPdaOrCreateKey - The multisig address, or the create key it derives from.
+   * @returns {Address} The multisig address.
+   * @throws {Error} If the value is not an address.
+   */
+  _toMultisigPda (multisigPdaOrCreateKey) {
+    const identity = address(multisigPdaOrCreateKey)
+
+    if (isOffCurveAddress(identity)) {
+      return identity
+    }
+
+    const [multisigPda] = getProgramDerivedAddressSync({
+      programAddress: this._programId,
+      seeds: [
+        SEED.prefix,
+        SEED.multisig,
+        getAddressEncoder().encode(identity)
+      ]
+    })
+
+    return multisigPda
+  }
+
+  /**
    * Derives the address of the transaction account stored at the given index.
    *
    * @protected
    * @param {string} multisigPda - The multisig address the transaction belongs to.
    * @param {bigint} index - The transaction index.
-   * @returns {Promise<Address>} The transaction address.
+   * @returns {Address} The transaction address.
    */
-  async _getTransactionPda (multisigPda, index) {
-    const [transactionPda] = await getProgramDerivedAddress({
+  _getTransactionPda (multisigPda, index) {
+    const [transactionPda] = getProgramDerivedAddressSync({
       programAddress: this._programId,
       seeds: this._getTransactionSeeds(multisigPda, index)
     })
@@ -1163,10 +1164,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @protected
    * @param {string} multisigPda - The multisig address the proposal belongs to.
    * @param {bigint} index - The transaction index the proposal votes on.
-   * @returns {Promise<Address>} The proposal address.
+   * @returns {Address} The proposal address.
    */
-  async _getProposalPda (multisigPda, index) {
-    const [proposalPda] = await getProgramDerivedAddress({
+  _getProposalPda (multisigPda, index) {
+    const [proposalPda] = getProgramDerivedAddressSync({
       programAddress: this._programId,
       seeds: [...this._getTransactionSeeds(multisigPda, index), SEED.proposal]
     })
@@ -1180,26 +1181,24 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @protected
    * @param {string} transactionPda - The transaction address the signers are derived from.
    * @param {number} count - How many the message needs.
-   * @returns {Promise<Address[]>} The ephemeral signer addresses, in index order.
+   * @returns {Address[]} The ephemeral signer addresses, in index order.
    */
-  async _getEphemeralSignerPdas (transactionPda, count) {
+  _getEphemeralSignerPdas (transactionPda, count) {
     const encoder = getAddressEncoder()
 
-    return Promise.all(
-      Array.from({ length: count }, async (_unused, index) => {
-        const [pda] = await getProgramDerivedAddress({
-          programAddress: this._programId,
-          seeds: [
-            SEED.prefix,
-            encoder.encode(address(transactionPda)),
-            SEED.ephemeralSigner,
-            Uint8Array.of(index)
-          ]
-        })
-
-        return pda
+    return Array.from({ length: count }, (_unused, index) => {
+      const [pda] = getProgramDerivedAddressSync({
+        programAddress: this._programId,
+        seeds: [
+          SEED.prefix,
+          encoder.encode(address(transactionPda)),
+          SEED.ephemeralSigner,
+          Uint8Array.of(index)
+        ]
       })
-    )
+
+      return pda
+    })
   }
 
   /**
@@ -1208,10 +1207,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @protected
    * @param {string} multisigPda - The multisig address.
    * @param {string} createKey - The action's `createKey`.
-   * @returns {Promise<Address>} The spending limit address.
+   * @returns {Address} The spending limit address.
    */
-  async _getSpendingLimitPda (multisigPda, createKey) {
-    const [spendingLimitPda] = await getProgramDerivedAddress({
+  _getSpendingLimitPda (multisigPda, createKey) {
+    const [spendingLimitPda] = getProgramDerivedAddressSync({
       programAddress: this._programId,
       seeds: [
         SEED.prefix,
@@ -1241,14 +1240,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     let identity = {}
 
-    if (!config.multisigPda && !config.createKey) {
-      await this.getAddress()
-
-      identity = this._config.multisigPda
-        ? { multisigPda: this._config.multisigPda }
-        : { createKey: this._createKey }
-    } else if (!config.multisigPda) {
-      identity = { multisigPda: undefined }
+    if (!config.multisigPdaOrCreateKey) {
+      identity = {
+        multisigPdaOrCreateKey: this._config.multisigPdaOrCreateKey ?? await this.getAddress()
+      }
     }
 
     const account = new WalletAccountReadOnlyMultisigSolanaSquads(this._signerAddress, {

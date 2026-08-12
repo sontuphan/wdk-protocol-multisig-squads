@@ -34,7 +34,7 @@ const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
   // The multisig's address derives from this key, so keep it: without it the address —
   // and anything in its vault — cannot be recovered.
   createKeySecret: '<base58 32-byte private key or 64-byte keypair>'
-  // multisigPda: '<existing multisig address>'
+  // multisigPdaOrCreateKey: '<existing multisig address>'
 })
 
 const account = await wallet.getAccount(0)
@@ -50,8 +50,9 @@ account.dispose()
 
 > [!IMPORTANT]
 > `createKeySecret` is required to create a multisig, and is the only way to recover its
-> address later. To attach to an existing multisig instead, pass `multisigPda` (or
-> `createKey`) and omit it.
+> address later. To attach to an existing multisig instead, pass `multisigPdaOrCreateKey` and
+> omit it: it takes the multisig's address, or the create key that address derives from, and
+> tells the two apart by curve membership.
 
 ## Key Capabilities
 

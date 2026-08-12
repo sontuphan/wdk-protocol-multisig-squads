@@ -32,7 +32,7 @@ import WalletManagerMultisigSolanaSquads, {
 const TEST_SEED_PHRASE =
   'test walk nut penalty hip pave soap entry language right filter choice'
 const TEST_RPC_URL = 'https://dummy-url.com'
-const TEST_MULTISIG_PDA = '11111111111111111111111111111111'
+const TEST_MULTISIG_PDA = 'EEPqJbpYrwqisgoPt3Vu74YBqRji8mFrRxQdARVfDuNG'
 
 // A fixed 32-byte create key secret, so the derived multisig address is stable.
 const CREATE_KEY_SECRET = getBase58Decoder().decode(new Uint8Array(32).fill(9))
@@ -43,8 +43,8 @@ const DERIVED_MULTISIG_PDA = '7jmBsJmAV5aAwEQkw3AybYgTMHVUzbWgWMGvyMjhSEDQ'
 
 // PDAs of TEST_MULTISIG_PDA, from the SDK's `getProposalPda` / `getSpendingLimitPda` rather
 // than from the code under test, so a broken derivation fails instead of cancelling out.
-const TEST_PROPOSAL_PDA_3 = '4Eroat41yAUnTi5FJsjWDocy5jBZT1VuaxEvmgyVeB26'
-const TEST_VAULT_PDA = 'HyvBpUqbXi4DEpVknM8Z6tUK3mKUTHaGmQ321rgvdDU6'
+const TEST_PROPOSAL_PDA_3 = 'E5EgUq6vmcx2ZorjGvtmdatZwNXLcA7V55ZuFUPursRx'
+const TEST_VAULT_PDA = '6soQChwEoXXbAo17wNPdfLFaxzrAjiAxPif9nbJkDXCm'
 
 // The member key `getAccount(0)` derives from TEST_SEED_PHRASE.
 const TEST_SIGNER = '3uXqWpwgqKVdiHAwF6Vmu4G4vdQzpR66xjPkz1G7zMKE'
@@ -324,7 +324,7 @@ async function votingAccount ({
 } = {}) {
   const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
     provider: TEST_RPC_URL,
-    multisigPda: TEST_MULTISIG_PDA
+    multisigPdaOrCreateKey: TEST_MULTISIG_PDA
   })
   const account = await wallet.getAccount(0)
 
@@ -368,7 +368,7 @@ async function configuringAccount ({
 } = {}) {
   const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
     provider: TEST_RPC_URL,
-    multisigPda: TEST_MULTISIG_PDA
+    multisigPdaOrCreateKey: TEST_MULTISIG_PDA
   })
   const account = await wallet.getAccount(0)
 
@@ -409,7 +409,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
       provider: TEST_RPC_URL,
       commitment: 'confirmed',
-      multisigPda: TEST_MULTISIG_PDA
+      multisigPdaOrCreateKey: TEST_MULTISIG_PDA
     })
     account = await wallet.getAccount(0)
   })
@@ -446,7 +446,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     })
 
     await expect((await nameless.getAccount(0)).toReadOnlyAccount())
-      .rejects.toThrow('No multisig address is configured. Provide `multisigPda` or `createKey` in the config.')
+      .rejects.toThrow('No multisig address is configured. Provide `multisigPdaOrCreateKey` in the config.')
   })
 
   it('throws NotImplementedError for messages beyond a native transfer', async () => {
@@ -602,14 +602,14 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     it('resolves the multisig address from createKeySecret alone', async () => {
       const { account } = await deployingAccount()
 
-      // No multisigPda and no createKey configured — only the secret.
+      // No identity configured, only the secret.
       await expect(account.getAddress()).resolves.toBe(DERIVED_MULTISIG_PDA)
     })
 
     it('throws without a createKeySecret', async () => {
       const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
         provider: TEST_RPC_URL,
-        multisigPda: TEST_MULTISIG_PDA
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA
       })
       const account = await wallet.getAccount(0)
 
@@ -643,12 +643,38 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 
-    it('throws when a configured multisigPda does not match the createKeySecret', async () => {
+    it('throws when a configured address does not match the createKeySecret', async () => {
       const { account } = await deployingAccount({
-        config: { multisigPda: TEST_MULTISIG_PDA }
+        config: { multisigPdaOrCreateKey: TEST_MULTISIG_PDA }
       })
 
       await expect(account.deploy()).rejects.toThrow(/does not derive from/)
+    })
+
+    it('throws when a configured create key does not match the createKeySecret', async () => {
+      const { account } = await deployingAccount({
+        config: { multisigPdaOrCreateKey: OTHER_MEMBER }
+      })
+
+      await expect(account.deploy()).rejects.toThrow(/does not derive from/)
+    })
+
+    it('accepts the create key the secret derives, configured alongside it', async () => {
+      const { account, sendTransaction } = await deployingAccount({
+        config: { multisigPdaOrCreateKey: CREATE_KEY }
+      })
+
+      expect(await account.deploy()).toEqual({ hash: DUMMY_DEPLOY_HASH })
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+    })
+
+    it('accepts the address the secret derives, configured alongside it', async () => {
+      const { account, sendTransaction } = await deployingAccount({
+        config: { multisigPdaOrCreateKey: DERIVED_MULTISIG_PDA }
+      })
+
+      expect(await account.deploy()).toEqual({ hash: DUMMY_DEPLOY_HASH })
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -744,7 +770,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     } = {}) {
       const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
         provider: TEST_RPC_URL,
-        multisigPda: TEST_MULTISIG_PDA
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA
       })
       const account = await wallet.getAccount(0)
 
@@ -1963,8 +1989,8 @@ describe('WalletAccountMultisigSolanaSquads', () => {
   describe('executeProposal', () => {
     // The other three accounts the execute path reads alongside the multisig, and the spending
     // limit one config action names. All program-derived from TEST_MULTISIG_PDA.
-    const TEST_TRANSACTION_PDA_3 = 'FCHm7fn3AboT17Dg5DdUuD8oXWoD58Yuv26fEpxohkTf'
-    const TEST_SPENDING_LIMIT_PDA = 'CNStkV6gX6Jm63pqXgE4ZqNu6SePApGTLGck9NoUUxbG'
+    const TEST_TRANSACTION_PDA_3 = '5PzeP4ZwkPPmZiYC98mZFzWnfcNxSCEudToHCzB9kXDG'
+    const TEST_SPENDING_LIMIT_PDA = '65Du8F3pZott4itHLd1LU2MtnaFaogmdQ4Gvnz9b4EUR'
     const CLOCK_SYSVAR = 'SysvarC1ock11111111111111111111111111111111'
 
     /**
@@ -1991,7 +2017,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     } = {}) {
       const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
         provider: TEST_RPC_URL,
-        multisigPda: TEST_MULTISIG_PDA
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA
       })
       const account = await wallet.getAccount(0)
 
@@ -2155,7 +2181,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
     it('de-signs the ephemeral signers a message declares', async () => {
       const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
-        provider: TEST_RPC_URL, multisigPda: TEST_MULTISIG_PDA
+        provider: TEST_RPC_URL, multisigPdaOrCreateKey: TEST_MULTISIG_PDA
       })
       const probe = await wallet.getAccount(0)
       const transactionPda = await probe._getTransactionPda(TEST_MULTISIG_PDA, 3n)
@@ -2360,7 +2386,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     } = {}) {
       const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
         provider: TEST_RPC_URL,
-        multisigPda: TEST_MULTISIG_PDA,
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA,
         ...config
       })
       const account = await wallet.getAccount(0)
@@ -2535,23 +2561,23 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const { account, rpc } = await quotingAccount()
 
       // The named multisig is absent, so the quote refuses rather than quoting the derived one.
-      await expect(account.quotePropose(TX, { multisigPda: TEST_MULTISIG_PDA }))
+      await expect(account.quotePropose(TX, { multisigPdaOrCreateKey: TEST_MULTISIG_PDA }))
         .rejects.toThrow(`The multisig account ${TEST_MULTISIG_PDA} does not exist.`)
       expect(rpcRequests(rpc, 'getAccountInfo')[0][0]).toBe(TEST_MULTISIG_PDA)
     })
 
     it('lets an override name a create key over the configured address', async () => {
-      const { account, rpc } = await quotingAccount({ multisigPda: TEST_MULTISIG_PDA })
+      const { account, rpc } = await quotingAccount({ multisigPdaOrCreateKey: TEST_MULTISIG_PDA })
 
-      expect(await account.quotePropose(TX, { createKey: CREATE_KEY }))
+      expect(await account.quotePropose(TX, { multisigPdaOrCreateKey: CREATE_KEY }))
         .toEqual({ fee: 4480280n })
       expect(rpcRequests(rpc, 'getAccountInfo')[0][0]).toBe(DERIVED_MULTISIG_PDA)
     })
 
     it('keeps the configured address for the account the override was taken from', async () => {
-      const { account } = await quotingAccount({ multisigPda: TEST_MULTISIG_PDA })
+      const { account } = await quotingAccount({ multisigPdaOrCreateKey: TEST_MULTISIG_PDA })
 
-      await account.quotePropose(TX, { createKey: CREATE_KEY })
+      await account.quotePropose(TX, { multisigPdaOrCreateKey: CREATE_KEY })
 
       expect(await account.getAddress()).toBe(TEST_MULTISIG_PDA)
     })

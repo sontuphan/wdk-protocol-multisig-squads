@@ -15,7 +15,7 @@
 'use strict'
 
 // Everything this package puts on the wire, checked two ways. `instruction data` and the
-// blocks around it diff the schemas in `src/layouts.js` against @sqds/multisig, which defines the
+// blocks around it diff the schemas in `src/helpers/layouts.js` against @sqds/multisig, which defines the
 // format; the `instruction assembly` block drives the public API and reads the submitted
 // transaction back, so a byte-perfect schema called with the wrong arguments still fails. The SDK
 // is a dev-time reference only; it is never imported by src.
@@ -25,9 +25,9 @@ import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals
 import * as multisig from '@sqds/multisig'
 import { generated, utils } from '@sqds/multisig'
 import { PublicKey, TransactionMessage, SystemProgram } from '@solana/web3.js'
-import { getBase58Decoder, getBase58Encoder } from '@solana/codecs'
+import { getBase58Decoder, getBase58Encoder, getU64Encoder } from '@solana/codecs'
 
-import { address } from '@solana/addresses'
+import { address, getProgramDerivedAddress } from '@solana/addresses'
 import {
   findAssociatedTokenPda,
   getCreateAssociatedTokenIdempotentInstruction,
@@ -41,7 +41,12 @@ import WalletManagerMultisigSolanaSquads, {
   SQUADS_PROGRAM_ADDRESS
 } from '@tetherto/wdk-protocol-multisig-squads'
 
-import { CONFIG_ACTION, CONFIG_ACTION_ENCODER, INSTRUCTION } from '../src/layouts.js'
+import { CONFIG_ACTION, CONFIG_ACTION_ENCODER, INSTRUCTION } from '../src/helpers/layouts.js'
+
+import {
+  createProgramDerivedAddressSync,
+  getProgramDerivedAddressSync
+} from '../src/helpers/program-derived-address.js'
 
 import { lookupTableAccount, multipleAccounts, stubSolanaRpc } from './helpers/rpc.js'
 import { instructionShape, submittedInstructions } from './helpers/transaction.js'
@@ -57,6 +62,7 @@ const TEST_MULTISIG = '11111111111111111111111111111111'
 // so the 11 message tests can use the constant and still fail if the derivation breaks.
 const TEST_OWN_MULTISIG = '7jmBsJmAV5aAwEQkw3AybYgTMHVUzbWgWMGvyMjhSEDQ'
 const TEST_OWN_VAULT = '46t5cnapyYC1RNVCgezqxNssv65qnF3FgddyG86egHL1'
+const TEST_OWN_CREATE_KEY = 'J2xccRtuG43drESLYznHhLhQkLTdfepcKYbiQ9BsJVaf'
 
 const ADDRESS_LOOKUP_TABLE_PROGRAM = 'AddressLookupTab1e1111111111111111111111111'
 
@@ -228,6 +234,74 @@ describe('wire format', () => {
 
     it('derives the vault address the SDK derives from that multisig', async () => {
       expect(await account.getVaultAddress()).toBe(TEST_OWN_VAULT)
+    })
+  })
+
+  // The derivation itself, checked against both oracles: @solana/addresses for the algorithm and
+  // the bump it settles on, @sqds/multisig for the seeds Squads actually uses. Everything else in
+  // this file consumes these addresses, so a wrong bump loop would cancel out.
+  describe('synchronous program-derived addresses', () => {
+    const SEEDS = [
+      ['multisig', 'multisig', getBase58Encoder().encode(TEST_OWN_CREATE_KEY)],
+      ['multisig', getBase58Encoder().encode(TEST_OWN_MULTISIG), 'vault', Uint8Array.of(0)],
+      ['multisig', getBase58Encoder().encode(TEST_OWN_MULTISIG), 'transaction', getU64Encoder().encode(1n)],
+      ['multisig', 'program_config']
+    ]
+
+    it.each(SEEDS.map((seeds, index) => [index, seeds]))(
+      'agrees with @solana/addresses on seed set %i, bump included',
+      async (_index, seeds) => {
+        const expected = await getProgramDerivedAddress({
+          programAddress: SQUADS_PROGRAM_ADDRESS,
+          seeds
+        })
+
+        expect(getProgramDerivedAddressSync({ programAddress: SQUADS_PROGRAM_ADDRESS, seeds }))
+          .toEqual(expected)
+      }
+    )
+
+    it('derives the multisig address the SDK derives, with the SDK bump', async () => {
+      const [expected, bump] = multisig.getMultisigPda({
+        createKey: new PublicKey(TEST_OWN_CREATE_KEY)
+      })
+
+      expect(getProgramDerivedAddressSync({
+        programAddress: SQUADS_PROGRAM_ADDRESS,
+        seeds: ['multisig', 'multisig', getBase58Encoder().encode(TEST_OWN_CREATE_KEY)]
+      })).toEqual([expected.toBase58(), bump])
+    })
+
+    it('rejects a bumpless derivation that lands on the curve', () => {
+      // 'multisig' + this create key hashes onto the curve at bump 255, which is why the
+      // canonical address above sits at 252.
+      expect(() => createProgramDerivedAddressSync({
+        programAddress: SQUADS_PROGRAM_ADDRESS,
+        seeds: ['multisig', 'multisig', getBase58Encoder().encode(TEST_OWN_CREATE_KEY), Uint8Array.of(253)]
+      })).toThrow('lies on the ed25519 curve.')
+    })
+
+    // The bump counts toward the runtime's limit of 16, so 16 caller seeds already overflow.
+    // @solana/addresses reports the same counts, 17 and 18, for these two inputs.
+    it.each([[16, 17], [17, 18]])('refuses %i seeds, the bump making %i', (given, counted) => {
+      expect(() => getProgramDerivedAddressSync({
+        programAddress: SQUADS_PROGRAM_ADDRESS,
+        seeds: Array.from({ length: given }, () => 'multisig')
+      })).toThrow(`Expected at most 16 seeds, got ${counted}.`)
+    })
+
+    it('derives 15 seeds, one below the overflow', async () => {
+      const seeds = Array.from({ length: 15 }, () => 'multisig')
+
+      expect(getProgramDerivedAddressSync({ programAddress: SQUADS_PROGRAM_ADDRESS, seeds }))
+        .toEqual(await getProgramDerivedAddress({ programAddress: SQUADS_PROGRAM_ADDRESS, seeds }))
+    })
+
+    it('refuses a seed above 32 bytes', () => {
+      expect(() => getProgramDerivedAddressSync({
+        programAddress: SQUADS_PROGRAM_ADDRESS,
+        seeds: ['multisig', new Uint8Array(33)]
+      })).toThrow('The seed at index 1 is 33 bytes, above the maximum of 32.')
     })
   })
 

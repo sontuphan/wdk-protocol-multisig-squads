@@ -21,18 +21,18 @@
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
 /**
- * The configuration a read-only Squads account takes: how to reach the cluster, and how to
- * identify the multisig. `multisigPda` names an existing one; `createKey` derives its address
- * instead. Both may be given, and must then agree. A signing account may give neither and
- * supply `createKeySecret`, which the create key is derived from.
+ * The configuration a read-only Squads account takes: how to reach the cluster, and which
+ * multisig to operate on. One field names the multisig: either its address, or the create key it
+ * derives from. The two never look alike. A multisig address always sits off the ed25519 curve,
+ * and a create key always sits on it, because it has to sign the multisig into being. A signing
+ * account may give neither and supply `createKeySecret`, which the create key is derived from.
  *
  * @typedef {Object} SolanaMultisigSquadsReadOnlyConfig
  * @property {string | string[]} [provider] - A Solana RPC URL, or a list of URLs for failover. Omit it to derive addresses without reaching the cluster; every method that needs the cluster then throws.
  * @property {Commitment} [commitment] - The commitment level for transactions (default: 'confirmed').
  * @property {number} [retries] - The number of retries for the failover provider (default: 3).
  * @property {string} [programId] - The Squads program to operate against, for a fork or a local deployment (default: `SQUADS_PROGRAM_ADDRESS`).
- * @property {string} [multisigPda] - The address of an existing Squads multisig to operate on.
- * @property {string} [createKey] - The create key used to derive a new multisig PDA on creation.
+ * @property {string} [multisigPdaOrCreateKey] - The address of an existing Squads multisig, or the create key its address derives from.
  */
 /**
  * The extra configuration a signing account takes: the secret it derives a new multisig's
@@ -178,26 +178,19 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     protected _signerAddress: string | undefined;
     /**
-     * The address of the Squads multisig account.
-     *
-     * @protected
-     * @type {string | undefined}
-     */
-    protected _multisigPda: string | undefined;
-    /**
-     * The create key used to derive the multisig address, if configured.
-     *
-     * @protected
-     * @type {string | undefined}
-     */
-    protected _createKey: string | undefined;
-    /**
      * The address of the Squads program to operate against.
      *
      * @protected
      * @type {Address}
      */
     protected _programId: Address;
+    /**
+     * The address of the Squads multisig account.
+     *
+     * @protected
+     * @type {string | undefined}
+     */
+    protected _multisigPda: string | undefined;
     /**
      * The commitment level for transactions.
      *
@@ -213,11 +206,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     protected _rpc: SolanaRpc | undefined;
     /**
-     * Returns the address of the Squads multisig account. A configured `multisigPda` wins over a
-     * configured `createKey`, which is only derived from when no address is configured.
+     * Returns the address of the Squads multisig account.
      *
      * @returns {Promise<string>} The multisig address.
-     * @throws {Error} If neither `multisigPda` nor `createKey` is configured.
+     * @throws {Error} If no `multisigPdaOrCreateKey` is configured.
      */
     getAddress(): Promise<string>;
     /**
@@ -424,14 +416,23 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     protected _toProposalIndex(proposalId: number | bigint | string): bigint;
     /**
+     * Resolves what the config names, an address or a create key, to the multisig address.
+     *
+     * @protected
+     * @param {string} multisigPdaOrCreateKey - The multisig address, or the create key it derives from.
+     * @returns {Address} The multisig address.
+     * @throws {Error} If the value is not an address.
+     */
+    protected _toMultisigPda(multisigPdaOrCreateKey: string): Address;
+    /**
      * Derives the address of the transaction account stored at the given index.
      *
      * @protected
      * @param {string} multisigPda - The multisig address the transaction belongs to.
      * @param {bigint} index - The transaction index.
-     * @returns {Promise<Address>} The transaction address.
+     * @returns {Address} The transaction address.
      */
-    protected _getTransactionPda(multisigPda: string, index: bigint): Promise<Address>;
+    protected _getTransactionPda(multisigPda: string, index: bigint): Address;
     /**
      * Derives the address of the proposal account that votes on the transaction at the given
      * index.
@@ -439,27 +440,27 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @protected
      * @param {string} multisigPda - The multisig address the proposal belongs to.
      * @param {bigint} index - The transaction index the proposal votes on.
-     * @returns {Promise<Address>} The proposal address.
+     * @returns {Address} The proposal address.
      */
-    protected _getProposalPda(multisigPda: string, index: bigint): Promise<Address>;
+    protected _getProposalPda(multisigPda: string, index: bigint): Address;
     /**
      * Derives the ephemeral signer addresses a stored transaction's message expects.
      *
      * @protected
      * @param {string} transactionPda - The transaction address the signers are derived from.
      * @param {number} count - How many the message needs.
-     * @returns {Promise<Address[]>} The ephemeral signer addresses, in index order.
+     * @returns {Address[]} The ephemeral signer addresses, in index order.
      */
-    protected _getEphemeralSignerPdas(transactionPda: string, count: number): Promise<Address[]>;
+    protected _getEphemeralSignerPdas(transactionPda: string, count: number): Address[];
     /**
      * Derives a spending limit's address from the create key its action carries.
      *
      * @protected
      * @param {string} multisigPda - The multisig address.
      * @param {string} createKey - The action's `createKey`.
-     * @returns {Promise<Address>} The spending limit address.
+     * @returns {Address} The spending limit address.
      */
-    protected _getSpendingLimitPda(multisigPda: string, createKey: string): Promise<Address>;
+    protected _getSpendingLimitPda(multisigPda: string, createKey: string): Address;
     /** @private */
     private _hasDiscriminator;
     /** @private */
@@ -502,10 +503,11 @@ export type TransferOptions = import("@tetherto/wdk-wallet").TransferOptions;
 export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
 export type SolanaTransactionReceipt = import("@tetherto/wdk-wallet-solana").SolanaTransactionReceipt;
 /**
- * The configuration a read-only Squads account takes: how to reach the cluster, and how to
- * identify the multisig. `multisigPda` names an existing one; `createKey` derives its address
- * instead. Both may be given, and must then agree. A signing account may give neither and
- * supply `createKeySecret`, which the create key is derived from.
+ * The configuration a read-only Squads account takes: how to reach the cluster, and which
+ * multisig to operate on. One field names the multisig: either its address, or the create key it
+ * derives from. The two never look alike. A multisig address always sits off the ed25519 curve,
+ * and a create key always sits on it, because it has to sign the multisig into being. A signing
+ * account may give neither and supply `createKeySecret`, which the create key is derived from.
  */
 export type SolanaMultisigSquadsReadOnlyConfig = {
     /**
@@ -528,13 +530,10 @@ export type SolanaMultisigSquadsReadOnlyConfig = {
      */
     programId?: string;
     /**
-     * - The address of an existing Squads multisig to operate on.
+     * - The address of an existing Squads multisig, or the
+     * create key its address derives from.
      */
-    multisigPda?: string;
-    /**
-     * - The create key used to derive a new multisig PDA on creation.
-     */
-    createKey?: string;
+    multisigPdaOrCreateKey?: string;
 };
 /**
  * The extra configuration a signing account takes: the secret it derives a new multisig's
