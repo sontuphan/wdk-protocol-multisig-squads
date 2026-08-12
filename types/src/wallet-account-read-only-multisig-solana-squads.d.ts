@@ -462,10 +462,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /** @private */
     private _hasDiscriminator;
     /** @private */
-    /** @private */
     private _withConfig;
-    /** @private */
-    /** @private */
     /** @private */
     private _getTransactionSeeds;
     /** @private */
@@ -474,11 +471,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     private _decodeProposalAccount;
     /** @private */
     private _decodeTransactionAccount;
-    /** @private */
-    private _decodeVaultTransactionMessage;
-    /** @private */
-    private _decodeConfigActions;
-    /** @private */
 }
 export type SolanaRpc = ReturnType<typeof import("@solana/rpc").createSolanaRpc>;
 export type Commitment = import("@solana/rpc-types").Commitment;

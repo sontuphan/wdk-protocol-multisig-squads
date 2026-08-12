@@ -24,9 +24,11 @@ import { createSolanaRpc } from '@solana/rpc'
 
 import { address, getAddressEncoder, getProgramDerivedAddress } from '@solana/addresses'
 
-import { getBase58Decoder, getBase58Encoder, getBase64Encoder } from '@solana/codecs'
+import { getBase58Encoder, getBase64Encoder, getU64Encoder } from '@solana/codecs'
 
 import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token'
+
+import { ACCOUNT, ACCOUNT_DISCRIMINATOR, PROPOSAL_STATUS } from './layouts.js'
 
 /** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
 /** @typedef {import('@solana/rpc-types').Commitment} Commitment */
@@ -191,15 +193,6 @@ import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/t
 
 export const SQUADS_PROGRAM_ADDRESS = 'SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf'
 
-const DISCRIMINATOR = {
-  multisig: Uint8Array.from([224, 116, 121, 186, 68, 161, 79, 236]),
-  proposal: Uint8Array.from([26, 94, 189, 187, 116, 136, 53, 33]),
-  vaultTransaction: Uint8Array.from([168, 250, 162, 100, 81, 14, 162, 207]),
-  configTransaction: Uint8Array.from([94, 8, 4, 35, 113, 139, 139, 112]),
-  batch: Uint8Array.from([156, 194, 70, 44, 22, 88, 137, 44]),
-  programConfig: Uint8Array.from([196, 210, 90, 231, 144, 149, 140, 63])
-}
-
 /**
  * The transaction kinds a Squads proposal can back, keyed by kind.
  *
@@ -211,21 +204,6 @@ const PROGRAM_ADDRESS = {
   default: '11111111111111111111111111111111',
   clockSysvar: 'SysvarC1ock11111111111111111111111111111111'
 }
-
-const CONFIG_ACTION = { addSpendingLimit: 4, removeSpendingLimit: 5, setRentCollector: 6 }
-
-const CONFIG_ACTION_NAMES = [
-  'AddMember',
-  'RemoveMember',
-  'ChangeThreshold',
-  'SetTimeLock',
-  'AddSpendingLimit',
-  'RemoveSpendingLimit',
-  'SetRentCollector'
-]
-const CONFIG_ACTION_BODY_SIZES = [33, 32, 2, 4, 0, 32, 0]
-
-const PROPOSAL_STATUS = { approved: 3, executing: 4, executed: 5 }
 
 const PROPOSAL_STATUS_NAMES = [
   'Draft',
@@ -246,34 +224,12 @@ const PROPOSAL_STATUS_PHRASES = [
   'cancelled'
 ]
 
-const MULTISIG_OFFSET = {
-  configAuthority: 40,
-  threshold: 72,
-  timeLock: 74,
-  transactionIndex: 78,
-  staleTransactionIndex: 86,
-  rentCollector: 94
-}
-
-const PROPOSAL_OFFSET = { status: 48, statusTimestamp: 49 }
-
-const PROGRAM_CONFIG_OFFSET = { creationFee: 40, treasury: 48 }
-
-const VAULT_TRANSACTION_OFFSET = { vaultIndex: 81, ephemeralBumps: 83 }
-
-const CONFIG_TRANSACTION_OFFSET = { actions: 81 }
-
-const CLOCK_OFFSET = { unixTimestamp: 32 }
-
+// What is left of the byte arithmetic: the account sizes the rent quotes are computed from, which
+// `src/layouts.js` cannot supply because the accounts are sized before they hold anything.
 const SIZE = {
-  optionTag: 1,
-  enumTag: 1,
-  bump: 1,
   address: 32,
   member: 33,
   vecPrefix: 4,
-  transactionIndex: 8,
-  timestamp: 8,
   signature: 64,
   messageHeader: 3,
   programIdIndex: 1,
@@ -282,7 +238,6 @@ const SIZE = {
   vaultTransactionBase: 83,
   proposalBase: 70,
   proposalMember: 96,
-  addSpendingLimitFixed: 74,
   splTransferMessage: 164,
   splTransferWithAtaMessage: 308
 }
@@ -454,7 +409,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       .getAccountInfo(address(multisigPda), {
         commitment: this._commitment,
         encoding: 'base64',
-        dataSlice: { offset: 0, length: DISCRIMINATOR.multisig.length }
+        dataSlice: { offset: 0, length: ACCOUNT_DISCRIMINATOR.multisig.length }
       })
       .send()
 
@@ -466,7 +421,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       return false
     }
 
-    return this._hasDiscriminator(getBase64Encoder().encode(value.data[0]), DISCRIMINATOR.multisig)
+    return this._hasDiscriminator(
+      getBase64Encoder().encode(value.data[0]),
+      ACCOUNT_DISCRIMINATOR.multisig
+    )
   }
 
   /**
@@ -540,10 +498,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       .getAccountInfo(address(multisigPda), {
         commitment: this._commitment,
         encoding: 'base64',
-        dataSlice: {
-          offset: 0,
-          length: MULTISIG_OFFSET.transactionIndex + SIZE.transactionIndex
-        }
+        dataSlice: { offset: 0, length: ACCOUNT.multisigHeader.fixedSize }
       })
       .send()
 
@@ -555,13 +510,14 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const data = getBase64Encoder().encode(value.data[0])
 
-    if (value.owner !== this._programId || !this._hasDiscriminator(data, DISCRIMINATOR.multisig)) {
+    if (
+      value.owner !== this._programId ||
+      !this._hasDiscriminator(data, ACCOUNT_DISCRIMINATOR.multisig)
+    ) {
       throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
     }
 
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-
-    return view.getBigUint64(MULTISIG_OFFSET.transactionIndex, true)
+    return ACCOUNT.multisigHeader.decode(data).transactionIndex
   }
 
   /**
@@ -811,40 +767,36 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     }
 
     const proposalData = getBase64Encoder().encode(proposal.data[0])
+    const multisigData = getBase64Encoder().encode(multisig.data[0])
 
     if (
-      !this._hasDiscriminator(proposalData, DISCRIMINATOR.proposal) ||
-      proposalData[PROPOSAL_OFFSET.status] !== PROPOSAL_STATUS.approved
+      !this._hasDiscriminator(proposalData, ACCOUNT_DISCRIMINATOR.proposal) ||
+      !this._hasDiscriminator(multisigData, ACCOUNT_DISCRIMINATOR.multisig)
     ) {
       return false
     }
 
-    const multisigData = getBase64Encoder().encode(multisig.data[0])
+    const { status, timestamp: approvedAt } = ACCOUNT.proposal.decode(proposalData).status
 
-    if (!this._hasDiscriminator(multisigData, DISCRIMINATOR.multisig)) {
+    if (status !== PROPOSAL_STATUS.approved) {
       return false
     }
 
-    const multisigView = new DataView(multisigData.buffer, multisigData.byteOffset, multisigData.byteLength)
+    const { timeLock, staleTransactionIndex } = ACCOUNT.multisig.decode(multisigData)
     const transactionData = getBase64Encoder().encode(transaction.data[0])
 
-    if (this._hasDiscriminator(transactionData, DISCRIMINATOR.configTransaction)) {
-      const staleIndex = multisigView.getBigUint64(MULTISIG_OFFSET.staleTransactionIndex, true)
-
-      if (index <= staleIndex) {
-        return false
-      }
+    // The transaction account is read for its discriminator alone: only a config transaction goes
+    // stale, and `config_transaction_execute` is the one instruction that checks the index.
+    if (
+      this._hasDiscriminator(transactionData, ACCOUNT_DISCRIMINATOR.configTransaction) &&
+      index <= staleTransactionIndex
+    ) {
+      return false
     }
 
-    const clockData = getBase64Encoder().encode(clock.data[0])
-    const proposalView = new DataView(proposalData.buffer, proposalData.byteOffset, proposalData.byteLength)
-    const clockView = new DataView(clockData.buffer, clockData.byteOffset, clockData.byteLength)
+    const { unixTimestamp: now } = ACCOUNT.clock.decode(getBase64Encoder().encode(clock.data[0]))
 
-    const approvedAt = proposalView.getBigInt64(PROPOSAL_OFFSET.statusTimestamp, true)
-    const now = clockView.getBigInt64(CLOCK_OFFSET.unixTimestamp, true)
-    const timeLock = BigInt(multisigView.getUint32(MULTISIG_OFFSET.timeLock, true))
-
-    return now - approvedAt >= timeLock
+    return now - approvedAt >= BigInt(timeLock)
   }
 
   /**
@@ -1117,14 +1069,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       throw new Error(`The clock sysvar ${PROGRAM_ADDRESS.clockSysvar} could not be read.`)
     }
 
-    const clockData = getBase64Encoder().encode(clock.data[0])
-    const clockView = new DataView(clockData.buffer, clockData.byteOffset, clockData.byteLength)
-
     return {
       multisig: this._decodeMultisigAccount(multisigPda, multisig),
       proposal: this._decodeProposalAccount(proposalPda, proposal),
       transaction: this._decodeTransactionAccount(transactionPda, transaction),
-      now: clockView.getBigInt64(CLOCK_OFFSET.unixTimestamp, true)
+      now: ACCOUNT.clock.decode(getBase64Encoder().encode(clock.data[0])).unixTimestamp
     }
   }
 
@@ -1154,21 +1103,15 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const data = value && getBase64Encoder().encode(value.data[0])
 
-    if (!data || !this._hasDiscriminator(data, DISCRIMINATOR.programConfig)) {
+    if (!data || !this._hasDiscriminator(data, ACCOUNT_DISCRIMINATOR.programConfig)) {
       throw new Error(
         `The Squads program config account ${programConfigPda} could not be read.`
       )
     }
 
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    const { creationFee, treasury } = ACCOUNT.programConfig.decode(data)
 
-    return {
-      programConfigPda,
-      creationFee: view.getBigUint64(PROGRAM_CONFIG_OFFSET.creationFee, true),
-      treasury: getBase58Decoder().decode(
-        data.subarray(PROGRAM_CONFIG_OFFSET.treasury, PROGRAM_CONFIG_OFFSET.treasury + SIZE.address)
-      )
-    }
+    return { programConfigPda, creationFee, treasury }
   }
 
   /**
@@ -1309,15 +1252,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
   /** @private */
   _getTransactionSeeds (multisigPda, index) {
-    const transactionIndex = new Uint8Array(SIZE.transactionIndex)
-
-    new DataView(transactionIndex.buffer).setBigUint64(0, index, true)
-
     return [
       SEED.prefix,
       getAddressEncoder().encode(address(multisigPda)),
       SEED.transaction,
-      transactionIndex
+      getU64Encoder().encode(index)
     ]
   }
 
@@ -1339,52 +1278,32 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const data = getBase64Encoder().encode(account.data[0])
 
-    if (account.owner !== this._programId || !this._hasDiscriminator(data, DISCRIMINATOR.multisig)) {
+    if (
+      account.owner !== this._programId ||
+      !this._hasDiscriminator(data, ACCOUNT_DISCRIMINATOR.multisig)
+    ) {
       throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
     }
 
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-    const addressDecoder = getBase58Decoder()
-
-    const authority = addressDecoder.decode(
-      data.subarray(MULTISIG_OFFSET.configAuthority, MULTISIG_OFFSET.configAuthority + SIZE.address)
-    )
-    const configAuthority = authority === PROGRAM_ADDRESS.default ? null : authority
-
-    const hasRentCollector = data[MULTISIG_OFFSET.rentCollector] === 1
-
-    let offset = MULTISIG_OFFSET.rentCollector + SIZE.optionTag
-    const rentCollector = hasRentCollector
-      ? addressDecoder.decode(data.subarray(offset, offset + SIZE.address))
-      : null
-
-    if (hasRentCollector) {
-      offset += SIZE.address
-    }
-
-    offset += SIZE.bump
-
-    const count = view.getUint32(offset, true)
-    offset += SIZE.vecPrefix
-
-    const members = []
-
-    for (let i = 0; i < count; i++) {
-      members.push({
-        address: addressDecoder.decode(data.subarray(offset, offset + SIZE.address)),
-        mask: data[offset + SIZE.address]
-      })
-      offset += SIZE.member
-    }
+    const {
+      configAuthority,
+      threshold,
+      timeLock,
+      transactionIndex,
+      staleTransactionIndex,
+      rentCollector,
+      members
+    } = ACCOUNT.multisig.decode(data)
 
     return {
       address: multisigPda,
       isCreated: true,
-      configAuthority,
-      threshold: view.getUint16(MULTISIG_OFFSET.threshold, true),
-      timeLock: view.getUint32(MULTISIG_OFFSET.timeLock, true),
-      transactionIndex: view.getBigUint64(MULTISIG_OFFSET.transactionIndex, true),
-      staleTransactionIndex: view.getBigUint64(MULTISIG_OFFSET.staleTransactionIndex, true),
+      // Squads writes the default address rather than an option when the multisig governs itself.
+      configAuthority: configAuthority === PROGRAM_ADDRESS.default ? null : configAuthority,
+      threshold,
+      timeLock,
+      transactionIndex,
+      staleTransactionIndex,
       rentCollector,
       members
     }
@@ -1410,33 +1329,19 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const data = getBase64Encoder().encode(account.data[0])
 
-    if (account.owner !== this._programId || !this._hasDiscriminator(data, DISCRIMINATOR.proposal)) {
+    if (
+      account.owner !== this._programId ||
+      !this._hasDiscriminator(data, ACCOUNT_DISCRIMINATOR.proposal)
+    ) {
       return absent
     }
 
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-    const addressDecoder = getBase58Decoder()
-    const status = data[PROPOSAL_OFFSET.status]
-
-    const statusSize = status === PROPOSAL_STATUS.executing
-      ? SIZE.enumTag
-      : SIZE.enumTag + SIZE.timestamp
-
-    let offset = PROPOSAL_OFFSET.status + statusSize + SIZE.bump
-
-    const readVoters = () => {
-      const count = view.getUint32(offset, true)
-      offset += SIZE.vecPrefix
-
-      const voters = []
-
-      for (let i = 0; i < count; i++) {
-        voters.push(addressDecoder.decode(data.subarray(offset, offset + SIZE.address)))
-        offset += SIZE.address
-      }
-
-      return voters
-    }
+    const {
+      status: { status, timestamp },
+      approved,
+      rejected,
+      cancelled
+    } = ACCOUNT.proposal.decode(data)
 
     return {
       address: proposalPda,
@@ -1444,12 +1349,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       status,
       statusName: PROPOSAL_STATUS_NAMES[status] ?? `Unknown(${status})`,
       statusPhrase: PROPOSAL_STATUS_PHRASES[status] ?? `in an unknown status (${status})`,
-      statusTimestamp: status === PROPOSAL_STATUS.executing
-        ? null
-        : view.getBigInt64(PROPOSAL_OFFSET.statusTimestamp, true),
-      approved: readVoters(),
-      rejected: readVoters(),
-      cancelled: readVoters()
+      statusTimestamp: timestamp,
+      approved,
+      rejected,
+      cancelled
     }
   }
 
@@ -1470,154 +1373,44 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     }
 
     const data = getBase64Encoder().encode(account.data[0])
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
 
-    if (this._hasDiscriminator(data, DISCRIMINATOR.vaultTransaction)) {
-      const ephemeralSignerCount = view.getUint32(VAULT_TRANSACTION_OFFSET.ephemeralBumps, true)
+    if (this._hasDiscriminator(data, ACCOUNT_DISCRIMINATOR.vaultTransaction)) {
+      const { vaultIndex, ephemeralSignerBumps, message } = ACCOUNT.vaultTransaction.decode(data)
 
       return {
         ...absent,
         exists: true,
         kind: TRANSACTION_KIND.vault,
-        vaultIndex: data[VAULT_TRANSACTION_OFFSET.vaultIndex],
-        ephemeralSignerCount,
-        message: this._decodeVaultTransactionMessage(
-          data,
-          view,
-          VAULT_TRANSACTION_OFFSET.ephemeralBumps + SIZE.vecPrefix + ephemeralSignerCount
-        )
+        vaultIndex,
+        ephemeralSignerCount: ephemeralSignerBumps.length,
+        message: {
+          numSigners: message.numSigners,
+          numWritableSigners: message.numWritableSigners,
+          numWritableNonSigners: message.numWritableNonSigners,
+          accountKeys: message.accountKeys,
+          addressTableLookups: message.addressTableLookups
+        }
       }
     }
 
-    if (this._hasDiscriminator(data, DISCRIMINATOR.configTransaction)) {
+    if (this._hasDiscriminator(data, ACCOUNT_DISCRIMINATOR.configTransaction)) {
       return {
         ...absent,
         exists: true,
         kind: TRANSACTION_KIND.config,
-        actions: this._decodeConfigActions(data, view, CONFIG_TRANSACTION_OFFSET.actions)
+        actions: ACCOUNT.configTransaction.decode(data).actions.map((action) => ({
+          kind: action.__kind,
+          // The only two actions whose spending limit the executor has to pass through.
+          createKey: action.__kind === 'AddSpendingLimit' ? action.createKey : null,
+          spendingLimit: action.__kind === 'RemoveSpendingLimit' ? action.spendingLimit : null
+        }))
       }
     }
 
-    if (this._hasDiscriminator(data, DISCRIMINATOR.batch)) {
+    if (this._hasDiscriminator(data, ACCOUNT_DISCRIMINATOR.batch)) {
       return { ...absent, exists: true, kind: TRANSACTION_KIND.batch }
     }
 
     return { ...absent, exists: true }
-  }
-
-  /** @private */
-  _decodeVaultTransactionMessage (data, view, start) {
-    const addressDecoder = getBase58Decoder()
-
-    let offset = start + SIZE.messageHeader
-
-    const readAddress = () => {
-      const value = addressDecoder.decode(data.subarray(offset, offset + SIZE.address))
-      offset += SIZE.address
-
-      return value
-    }
-
-    const readLength = () => {
-      const length = view.getUint32(offset, true)
-      offset += SIZE.vecPrefix
-
-      return length
-    }
-
-    const keyCount = readLength()
-    const accountKeys = []
-
-    for (let i = 0; i < keyCount; i++) {
-      accountKeys.push(readAddress())
-    }
-
-    const instructionCount = readLength()
-
-    for (let i = 0; i < instructionCount; i++) {
-      offset += SIZE.programIdIndex
-
-      const accountIndexCount = readLength()
-      offset += accountIndexCount
-
-      const dataLength = readLength()
-      offset += dataLength
-    }
-
-    const lookupCount = readLength()
-    const addressTableLookups = []
-
-    for (let i = 0; i < lookupCount; i++) {
-      const accountKey = readAddress()
-      const writableCount = readLength()
-      const writableIndexes = Array.from(data.subarray(offset, offset + writableCount))
-
-      offset += writableCount
-
-      const readonlyCount = readLength()
-      const readonlyIndexes = Array.from(data.subarray(offset, offset + readonlyCount))
-
-      offset += readonlyCount
-
-      addressTableLookups.push({ accountKey, writableIndexes, readonlyIndexes })
-    }
-
-    return {
-      numSigners: data[start],
-      numWritableSigners: data[start + 1],
-      numWritableNonSigners: data[start + 2],
-      accountKeys,
-      addressTableLookups
-    }
-  }
-
-  /** @private */
-  _decodeConfigActions (data, view, start) {
-    const addressDecoder = getBase58Decoder()
-
-    let offset = start
-
-    const count = view.getUint32(offset, true)
-    offset += SIZE.vecPrefix
-
-    const actions = []
-
-    for (let i = 0; i < count; i++) {
-      const tag = data[offset]
-      const kind = CONFIG_ACTION_NAMES[tag]
-
-      if (kind === undefined) {
-        throw new Error(
-          `Unknown Squads config action ${tag}. This package cannot read config transactions created by a newer program version.`
-        )
-      }
-
-      offset += SIZE.enumTag
-
-      let createKey = null
-      let spendingLimit = null
-
-      if (tag === CONFIG_ACTION.addSpendingLimit) {
-        createKey = addressDecoder.decode(data.subarray(offset, offset + SIZE.address))
-        offset += SIZE.addSpendingLimitFixed
-
-        const memberCount = view.getUint32(offset, true)
-        offset += SIZE.vecPrefix + SIZE.address * memberCount
-
-        const destinationCount = view.getUint32(offset, true)
-        offset += SIZE.vecPrefix + SIZE.address * destinationCount
-      } else if (tag === CONFIG_ACTION.removeSpendingLimit) {
-        spendingLimit = addressDecoder.decode(data.subarray(offset, offset + SIZE.address))
-        offset += CONFIG_ACTION_BODY_SIZES[tag]
-      } else if (tag === CONFIG_ACTION.setRentCollector) {
-        offset += SIZE.optionTag + (data[offset] === 1 ? SIZE.address : 0)
-      } else {
-        offset += CONFIG_ACTION_BODY_SIZES[tag]
-      }
-
-      actions.push({ kind, createKey, spendingLimit })
-    }
-
-    return actions
   }
 }

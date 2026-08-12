@@ -220,8 +220,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /** @private */
     private _getCreateKeySigner;
     /** @private */
-    /** @private */
     private _proposeVaultTransaction;
+    /** @private */
+    private _proposeConfigTransaction;
     /** @private */
     private _requireDeployed;
     /** @private */
@@ -249,31 +250,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /** @private */
     private _getLookupTableAddresses;
     /** @private */
-    /** @private */
-    /** @private */
-    private _encodeProposalVoteData;
-    /** @private */
     private _requireAutonomous;
     /** @private */
     private _validateThreshold;
     /** @private */
     private _requireCanPropose;
     /** @private */
-    /** @private */
     private _requireViableMembers;
-    /** @private */
-    private _encodeRemoveMemberAction;
-    /** @private */
-    private _encodeAddMemberAction;
-    /** @private */
-    private _encodeChangeThresholdAction;
-    /** @private */
-    private _encodeConfigTransactionCreateData;
-    /** @private */
-    private _encodeVaultTransactionCreateData;
-    /** @private */
-    /** @private */
-    private _encodeMultisigCreateV2Data;
 }
 export type IWalletAccountMultisig = import("@tetherto/wdk-wallet/multisig").IWalletAccountMultisig;
 export type IMultisigOwnerManagement = import("@tetherto/wdk-wallet/multisig").IMultisigOwnerManagement;

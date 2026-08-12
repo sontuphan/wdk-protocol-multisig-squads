@@ -26,7 +26,16 @@ import { NotSupportedError } from './errors.js'
 
 import { address, getAddressEncoder, getProgramDerivedAddress } from '@solana/addresses'
 
-import { getBase58Decoder, getBase58Encoder, getBase64Encoder } from '@solana/codecs'
+import { getBase58Encoder, getBase64Encoder } from '@solana/codecs'
+
+import {
+  ACCOUNT,
+  CONFIG_ACTION,
+  INSTRUCTION,
+  PROPOSAL_STATUS,
+  SYSTEM_TRANSFER,
+  TRANSACTION_MESSAGE
+} from './layouts.js'
 
 import { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes } from '@solana/signers'
 
@@ -83,52 +92,16 @@ const PROGRAM_ADDRESS = {
   addressLookupTable: 'AddressLookupTab1e1111111111111111111111111'
 }
 
-const DISCRIMINATOR = {
-  multisigCreateV2: [50, 221, 199, 93, 40, 245, 139, 233],
-  vaultTransactionCreate: [48, 250, 78, 168, 208, 226, 218, 211],
-  proposalCreate: [220, 60, 73, 224, 30, 108, 79, 159],
-  configTransactionCreate: [155, 236, 87, 228, 137, 75, 81, 39],
-  proposalApprove: [144, 37, 164, 136, 188, 216, 42, 248],
-  proposalReject: [243, 62, 134, 156, 230, 106, 246, 135],
-  vaultTransactionExecute: [194, 8, 161, 87, 153, 164, 25, 171],
-  configTransactionExecute: [114, 146, 244, 189, 252, 140, 36, 40]
-}
-
 const ACCOUNT_ROLE = { readonly: 0, writable: 1, readonlySigner: 2, writableSigner: 3 }
-
-const PROPOSAL_STATUS = { active: 1, approved: 3 }
-
-const CONFIG_ACTION = { addMember: 0, removeMember: 1, changeThreshold: 2 }
-
-const OPTION = { none: 0, some: 1 }
 
 const SEED = { prefix: 'multisig', multisig: 'multisig' }
 
-const SIZE = {
-  address: 32,
-  member: 33,
-  privateKey: 32,
-  keyPair: 64,
-  optionTag: 1,
-  enumTag: 1,
-  threshold: 2,
-  vecPrefix: 4,
-  smallPrefix: 1,
-  dataPrefix: 2,
-  messageHeader: 3,
-  programIdIndex: 1,
-  systemTransferData: 12,
-  createArgsTrailing: 6
-}
-
-const CREATE_ARGS_OFFSET = { configAuthority: 8, threshold: 9, memberCount: 11 }
-
-const LOOKUP_TABLE_ADDRESSES_OFFSET = 56
+const SIZE = { privateKey: 32, keyPair: 64 }
 
 const DEFAULT = { threshold: 1, timeLock: 0, vaultIndex: 0 }
 
-const SYSTEM_TRANSFER_INSTRUCTION = 2
 const NO_EPHEMERAL_SIGNERS = 0
+const NO_MEMO = null
 
 /**
  * Solana Squads multisig wallet account implementation.
@@ -364,7 +337,17 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         { address: address(this._signerAddress), role: ACCOUNT_ROLE.writableSigner },
         { address: address(PROGRAM_ADDRESS.system), role: ACCOUNT_ROLE.readonly }
       ],
-      data: this._encodeMultisigCreateV2Data(members, threshold)
+      data: INSTRUCTION.multisigCreateV2.encode({
+        configAuthority: null,
+        threshold,
+        members: members.map((member) => ({
+          address: address(member),
+          mask: ALMIGHTY_PERMISSIONS
+        })),
+        timeLock: DEFAULT.timeLock,
+        rentCollector: null,
+        memo: NO_MEMO
+      })
     }
 
     const { hash } = await this._signerAccount.sendTransaction({ instructions: [instruction] })
@@ -487,7 +470,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
 
     const instruction = this._buildProposalVoteInstruction(
-      DISCRIMINATOR.proposalApprove,
+      INSTRUCTION.proposalApprove,
       multisig.address,
       signerAddress,
       proposal.address,
@@ -527,7 +510,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
 
     const instruction = this._buildProposalVoteInstruction(
-      DISCRIMINATOR.proposalReject,
+      INSTRUCTION.proposalReject,
       multisig.address,
       signerAddress,
       proposal.address,
@@ -634,13 +617,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     this._requireViableMembers(resulting, options.threshold ?? multisig.threshold, multisig.address)
 
-    const actions = [this._encodeAddMemberAction(newOwner, mask)]
+    const actions = [CONFIG_ACTION.addMember(newOwner, mask)]
 
     if (options.threshold !== undefined) {
-      actions.push(this._encodeChangeThresholdAction(options.threshold))
+      actions.push(CONFIG_ACTION.changeThreshold(options.threshold))
     }
 
-    return this._proposeTransaction(multisig, this._encodeConfigTransactionCreateData(actions))
+    return this._proposeConfigTransaction(multisig, actions)
   }
 
   /**
@@ -669,13 +652,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     this._requireViableMembers(remaining, options.threshold ?? multisig.threshold, multisig.address)
 
-    const actions = [this._encodeRemoveMemberAction(owner)]
+    const actions = [CONFIG_ACTION.removeMember(owner)]
 
     if (options.threshold !== undefined) {
-      actions.push(this._encodeChangeThresholdAction(options.threshold))
+      actions.push(CONFIG_ACTION.changeThreshold(options.threshold))
     }
 
-    return this._proposeTransaction(multisig, this._encodeConfigTransactionCreateData(actions))
+    return this._proposeConfigTransaction(multisig, actions)
   }
 
   /**
@@ -724,15 +707,15 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     this._requireViableMembers(resulting, options.threshold ?? multisig.threshold, multisig.address)
 
     const actions = [
-      this._encodeRemoveMemberAction(oldOwner),
-      this._encodeAddMemberAction(newOwner, replaced.mask)
+      CONFIG_ACTION.removeMember(oldOwner),
+      CONFIG_ACTION.addMember(newOwner, replaced.mask)
     ]
 
     if (options.threshold !== undefined) {
-      actions.push(this._encodeChangeThresholdAction(options.threshold))
+      actions.push(CONFIG_ACTION.changeThreshold(options.threshold))
     }
 
-    return this._proposeTransaction(multisig, this._encodeConfigTransactionCreateData(actions))
+    return this._proposeConfigTransaction(multisig, actions)
   }
 
   /**
@@ -757,10 +740,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     this._requireViableMembers(multisig.members, newThreshold, multisig.address)
 
-    return this._proposeTransaction(
-      multisig,
-      this._encodeConfigTransactionCreateData([this._encodeChangeThresholdAction(newThreshold)])
-    )
+    return this._proposeConfigTransaction(multisig, [
+      CONFIG_ACTION.changeThreshold(newThreshold)
+    ])
   }
 
   /**
@@ -818,10 +800,23 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     return this._proposeTransaction(
       multisig,
-      this._encodeVaultTransactionCreateData(compiled.bytes),
+      INSTRUCTION.vaultTransactionCreate.encode({
+        vaultIndex: DEFAULT.vaultIndex,
+        ephemeralSigners: NO_EPHEMERAL_SIGNERS,
+        transactionMessage: compiled.bytes,
+        memo: NO_MEMO
+      }),
       options.autoExecute
         ? (context) => this._buildAutoExecuteInstructions(multisig, compiled, context)
         : null
+    )
+  }
+
+  /** @private */
+  async _proposeConfigTransaction (multisig, actions) {
+    return this._proposeTransaction(
+      multisig,
+      INSTRUCTION.configTransactionCreate.encode({ actions, memo: NO_MEMO })
     )
   }
 
@@ -857,10 +852,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     const creator = { address: address(signerAddress), role: ACCOUNT_ROLE.writableSigner }
     const systemProgram = { address: address(PROGRAM_ADDRESS.system), role: ACCOUNT_ROLE.readonly }
-    const proposalCreateData = new Uint8Array(DISCRIMINATOR.proposalCreate.length + 8 + 1)
-
-    proposalCreateData.set(DISCRIMINATOR.proposalCreate, 0)
-    new DataView(proposalCreateData.buffer).setBigUint64(DISCRIMINATOR.proposalCreate.length, index, true)
 
     const instructions = [
       {
@@ -883,7 +874,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
           creator,
           systemProgram
         ],
-        data: proposalCreateData
+        data: INSTRUCTION.proposalCreate.encode({ transactionIndex: index, draft: false })
       }
     ]
 
@@ -931,7 +922,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     return [
       this._buildProposalVoteInstruction(
-        DISCRIMINATOR.proposalApprove, multisig.address, signerAddress, proposalPda
+        INSTRUCTION.proposalApprove, multisig.address, signerAddress, proposalPda
       ),
       {
         programAddress: this._programId,
@@ -942,7 +933,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
           { address: address(signerAddress), role: ACCOUNT_ROLE.readonlySigner },
           ...await this._resolveExecutionAccounts(transaction, vaultPda)
         ],
-        data: Uint8Array.from(DISCRIMINATOR.vaultTransactionExecute)
+        data: INSTRUCTION.vaultTransactionExecute.encode()
       }
     ]
   }
@@ -953,12 +944,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       throw new NotImplementedError('propose(tx) for anything but a native transfer')
     }
 
-    const data = new Uint8Array(SIZE.systemTransferData)
-    const view = new DataView(data.buffer)
-
-    view.setUint32(0, SYSTEM_TRANSFER_INSTRUCTION, true)
-    view.setBigUint64(4, BigInt(tx.value), true)
-
     return this._compileTransactionMessage(address(vaultPda), [
       {
         programAddress: address(PROGRAM_ADDRESS.system),
@@ -966,7 +951,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
           { address: address(vaultPda), role: ACCOUNT_ROLE.writableSigner },
           { address: address(tx.to), role: ACCOUNT_ROLE.writable }
         ],
-        data
+        data: SYSTEM_TRANSFER.encode({ lamports: BigInt(tx.value) })
       }
     ])
   }
@@ -1015,62 +1000,21 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       data: instruction.data
     }))
 
-    const size =
-      SIZE.messageHeader +
-      SIZE.smallPrefix + SIZE.address * keys.length +
-      SIZE.smallPrefix +
-      compiled.reduce(
-        (total, instruction) =>
-          total +
-          SIZE.programIdIndex +
-          SIZE.smallPrefix + instruction.accountIndexes.length +
-          SIZE.dataPrefix + instruction.data.length,
-        0
-      ) +
-      SIZE.smallPrefix
-
-    const message = new Uint8Array(size)
-    const view = new DataView(message.buffer)
-    const addressEncoder = getAddressEncoder()
-
-    message[0] = entries.filter(([, role]) => role.signer).length
-    message[1] = group(true, true).length
-    message[2] = group(false, true).length
-
-    let offset = SIZE.messageHeader
-
-    message[offset] = keys.length
-    offset += SIZE.smallPrefix
-
-    for (const key of keys) {
-      message.set(addressEncoder.encode(key), offset)
-      offset += SIZE.address
-    }
-
-    message[offset] = compiled.length
-    offset += SIZE.smallPrefix
-
-    for (const instruction of compiled) {
-      message[offset] = instruction.programIdIndex
-      offset += SIZE.programIdIndex
-
-      message[offset] = instruction.accountIndexes.length
-      offset += SIZE.smallPrefix
-      message.set(instruction.accountIndexes, offset)
-      offset += instruction.accountIndexes.length
-
-      view.setUint16(offset, instruction.data.length, true)
-      offset += SIZE.dataPrefix
-      message.set(instruction.data, offset)
-      offset += instruction.data.length
+    const header = {
+      numSigners: entries.filter(([, role]) => role.signer).length,
+      numWritableSigners: group(true, true).length,
+      numWritableNonSigners: group(false, true).length
     }
 
     return {
-      bytes: message,
+      bytes: TRANSACTION_MESSAGE.encode({
+        ...header,
+        accountKeys: keys,
+        instructions: compiled,
+        addressTableLookups: []
+      }),
       accountKeys: keys,
-      numSigners: message[0],
-      numWritableSigners: message[1],
-      numWritableNonSigners: message[2]
+      ...header
     }
   }
 
@@ -1127,7 +1071,11 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /** @private */
-  _buildProposalVoteInstruction (discriminator, multisigPda, signerAddress, proposalPda, memo) {
+  _buildProposalVoteInstruction (vote, multisigPda, signerAddress, proposalPda, memo) {
+    if (memo !== undefined && memo !== null && typeof memo !== 'string') {
+      throw new Error(`Invalid memo ${memo}. It must be a string.`)
+    }
+
     return {
       programAddress: this._programId,
       accounts: [
@@ -1135,7 +1083,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         { address: address(signerAddress), role: ACCOUNT_ROLE.writableSigner },
         { address: address(proposalPda), role: ACCOUNT_ROLE.writable }
       ],
-      data: this._encodeProposalVoteData(discriminator, memo)
+      data: vote.encode({ memo: memo ?? NO_MEMO })
     }
   }
 
@@ -1167,7 +1115,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         { address: address(PROGRAM_ADDRESS.system), role: ACCOUNT_ROLE.readonly },
         ...spendingLimits.map((spendingLimit) => ({ address: spendingLimit, role: ACCOUNT_ROLE.writable }))
       ],
-      data: Uint8Array.from(DISCRIMINATOR.configTransactionExecute)
+      data: INSTRUCTION.configTransactionExecute.encode()
     }
   }
 
@@ -1190,7 +1138,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         { address: address(signerAddress), role: ACCOUNT_ROLE.readonlySigner },
         ...await this._resolveExecutionAccounts(transaction, vaultPda)
       ],
-      data: Uint8Array.from(DISCRIMINATOR.vaultTransactionExecute)
+      data: INSTRUCTION.vaultTransactionExecute.encode()
     }
   }
 
@@ -1254,7 +1202,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       .getMultipleAccounts(keys, { commitment: this._commitment, encoding: 'base64' })
       .send()
 
-    const addressDecoder = getBase58Decoder()
     const tables = new Map()
 
     value.forEach((account, i) => {
@@ -1264,51 +1211,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         )
       }
 
-      const data = getBase64Encoder().encode(account.data[0])
-      const addresses = []
-
-      for (let offset = LOOKUP_TABLE_ADDRESSES_OFFSET; offset < data.length; offset += SIZE.address) {
-        addresses.push(addressDecoder.decode(data.subarray(offset, offset + SIZE.address)))
-      }
-
-      tables.set(keys[i], addresses)
+      tables.set(
+        keys[i],
+        ACCOUNT.lookupTableAddresses.decode(getBase64Encoder().encode(account.data[0]))
+      )
     })
 
     return tables
-  }
-
-  /** @private */
-  _encodeProposalVoteData (discriminator, memo) {
-    if (memo === undefined || memo === null) {
-      const data = new Uint8Array(discriminator.length + SIZE.optionTag)
-
-      data.set(discriminator, 0)
-      data[discriminator.length] = OPTION.none
-
-      return data
-    }
-
-    if (typeof memo !== 'string') {
-      throw new Error(`Invalid memo ${memo}. It must be a string.`)
-    }
-
-    const bytes = new TextEncoder().encode(memo)
-    const data = new Uint8Array(
-      discriminator.length + SIZE.optionTag + SIZE.vecPrefix + bytes.length
-    )
-    const view = new DataView(data.buffer)
-
-    data.set(discriminator, 0)
-    data[discriminator.length] = OPTION.some
-
-    let offset = discriminator.length + SIZE.optionTag
-
-    view.setUint32(offset, bytes.length, true)
-    offset += SIZE.vecPrefix
-
-    data.set(bytes, offset)
-
-    return data
   }
 
   /** @private */
@@ -1364,114 +1273,5 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
 
     this._validateThreshold(threshold, members.filter((member) => member.mask & PERMISSION.vote).length)
-  }
-
-  /** @private */
-  _encodeRemoveMemberAction (owner) {
-    const action = new Uint8Array(SIZE.enumTag + SIZE.address)
-
-    action[0] = CONFIG_ACTION.removeMember
-    action.set(getAddressEncoder().encode(owner), SIZE.enumTag)
-
-    return action
-  }
-
-  /** @private */
-  _encodeAddMemberAction (owner, mask) {
-    const action = new Uint8Array(SIZE.enumTag + SIZE.address + 1)
-
-    action[0] = CONFIG_ACTION.addMember
-    action.set(getAddressEncoder().encode(owner), SIZE.enumTag)
-    action[SIZE.enumTag + SIZE.address] = mask
-
-    return action
-  }
-
-  /** @private */
-  _encodeChangeThresholdAction (threshold) {
-    const action = new Uint8Array(SIZE.enumTag + SIZE.threshold)
-
-    action[0] = CONFIG_ACTION.changeThreshold
-    new DataView(action.buffer).setUint16(SIZE.enumTag, threshold, true)
-
-    return action
-  }
-
-  /** @private */
-  _encodeConfigTransactionCreateData (actions) {
-    const body = actions.reduce((total, action) => total + action.length, 0)
-    const data = new Uint8Array(
-      DISCRIMINATOR.configTransactionCreate.length + SIZE.vecPrefix + body + SIZE.optionTag
-    )
-    const view = new DataView(data.buffer)
-
-    data.set(DISCRIMINATOR.configTransactionCreate, 0)
-
-    let offset = DISCRIMINATOR.configTransactionCreate.length
-
-    view.setUint32(offset, actions.length, true)
-    offset += SIZE.vecPrefix
-
-    for (const action of actions) {
-      data.set(action, offset)
-      offset += action.length
-    }
-
-    data[offset] = OPTION.none
-
-    return data
-  }
-
-  /** @private */
-  _encodeVaultTransactionCreateData (message) {
-    const data = new Uint8Array(
-      DISCRIMINATOR.vaultTransactionCreate.length + 2 + SIZE.vecPrefix + message.length + 1
-    )
-    const view = new DataView(data.buffer)
-
-    data.set(DISCRIMINATOR.vaultTransactionCreate, 0)
-
-    let offset = DISCRIMINATOR.vaultTransactionCreate.length
-
-    data[offset] = DEFAULT.vaultIndex
-    data[offset + 1] = NO_EPHEMERAL_SIGNERS
-    offset += 2
-
-    view.setUint32(offset, message.length, true)
-    offset += SIZE.vecPrefix
-
-    data.set(message, offset)
-    data[offset + message.length] = OPTION.none
-
-    return data
-  }
-
-  /** @private */
-  _encodeMultisigCreateV2Data (owners, threshold) {
-    const data = new Uint8Array(
-      CREATE_ARGS_OFFSET.memberCount +
-      SIZE.vecPrefix +
-      SIZE.member * owners.length +
-      SIZE.createArgsTrailing
-    )
-    const view = new DataView(data.buffer)
-    const addressEncoder = getAddressEncoder()
-
-    data.set(DISCRIMINATOR.multisigCreateV2, 0)
-    data[CREATE_ARGS_OFFSET.configAuthority] = OPTION.none
-    view.setUint16(CREATE_ARGS_OFFSET.threshold, threshold, true)
-    view.setUint32(CREATE_ARGS_OFFSET.memberCount, owners.length, true)
-
-    let offset = CREATE_ARGS_OFFSET.memberCount + SIZE.vecPrefix
-
-    for (const owner of owners) {
-      data.set(addressEncoder.encode(address(owner)), offset)
-      data[offset + SIZE.address] = ALMIGHTY_PERMISSIONS
-      offset += SIZE.member
-    }
-
-    view.setUint32(offset, DEFAULT.timeLock, true)
-
-    return data
   }
 }

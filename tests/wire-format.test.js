@@ -15,10 +15,10 @@
 'use strict'
 
 // Everything this package puts on the wire, checked two ways. `instruction data` and the
-// blocks around it diff the encoders against @sqds/multisig, which defines the format; the
-// `instruction assembly` block drives the public API and reads the submitted transaction back,
-// so a byte-perfect encoder called with the wrong arguments still fails. The SDK is a dev-time
-// reference only; it is never imported by src.
+// blocks around it diff the schemas in `src/layouts.js` against @sqds/multisig, which defines the
+// format; the `instruction assembly` block drives the public API and reads the submitted
+// transaction back, so a byte-perfect schema called with the wrong arguments still fails. The SDK
+// is a dev-time reference only; it is never imported by src.
 
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals'
 
@@ -40,6 +40,8 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
 import WalletManagerMultisigSolanaSquads, {
   SQUADS_PROGRAM_ADDRESS
 } from '@tetherto/wdk-protocol-multisig-squads'
+
+import { CONFIG_ACTION, CONFIG_ACTION_ENCODER, INSTRUCTION } from '../src/layouts.js'
 
 import { lookupTableAccount, multipleAccounts, stubSolanaRpc } from './helpers/rpc.js'
 import { instructionShape, submittedInstructions } from './helpers/transaction.js'
@@ -264,10 +266,18 @@ describe('wire format', () => {
       return Array.from(bytes)
     }
 
+    /**
+     * Encodes a `configTransactionCreate` over the given actions.
+     *
+     * @param {Object[]} actions - The config actions.
+     * @returns {Uint8Array} The instruction data.
+     */
+    function encode (actions) {
+      return INSTRUCTION.configTransactionCreate.encode({ actions, memo: null })
+    }
+
     it('matches the SDK for a lone AddMember', () => {
-      const mine = account._encodeConfigTransactionCreateData([
-        account._encodeAddMemberAction(address(NEW_OWNER), 7)
-      ])
+      const mine = encode([CONFIG_ACTION.addMember(address(NEW_OWNER), 7)])
 
       expect(mine).toHaveLength(47)
       expect(Array.from(mine)).toEqual(reference([
@@ -276,9 +286,7 @@ describe('wire format', () => {
     })
 
     it('matches the SDK for a lone RemoveMember', () => {
-      const mine = account._encodeConfigTransactionCreateData([
-        account._encodeRemoveMemberAction(address(NEW_OWNER))
-      ])
+      const mine = encode([CONFIG_ACTION.removeMember(address(NEW_OWNER))])
 
       // One byte shorter than AddMember, which also carries a permissions mask.
       expect(mine).toHaveLength(46)
@@ -288,9 +296,9 @@ describe('wire format', () => {
     })
 
     it('matches the SDK for RemoveMember plus ChangeThreshold', () => {
-      const mine = account._encodeConfigTransactionCreateData([
-        account._encodeRemoveMemberAction(address(NEW_OWNER)),
-        account._encodeChangeThresholdAction(1)
+      const mine = encode([
+        CONFIG_ACTION.removeMember(address(NEW_OWNER)),
+        CONFIG_ACTION.changeThreshold(1)
       ])
 
       expect(mine).toHaveLength(49)
@@ -301,9 +309,9 @@ describe('wire format', () => {
     })
 
     it('matches the SDK for AddMember plus ChangeThreshold', () => {
-      const mine = account._encodeConfigTransactionCreateData([
-        account._encodeAddMemberAction(address(NEW_OWNER), 7),
-        account._encodeChangeThresholdAction(2)
+      const mine = encode([
+        CONFIG_ACTION.addMember(address(NEW_OWNER), 7),
+        CONFIG_ACTION.changeThreshold(2)
       ])
 
       expect(mine).toHaveLength(50)
@@ -318,9 +326,9 @@ describe('wire format', () => {
       ['inheriting a limited mask', 5, 80]
     ])('matches the SDK for a swap %s', (_label, mask, size) => {
       const OLD = OWNERS[0]
-      const mine = account._encodeConfigTransactionCreateData([
-        account._encodeRemoveMemberAction(address(OLD)),
-        account._encodeAddMemberAction(address(NEW_OWNER), mask)
+      const mine = encode([
+        CONFIG_ACTION.removeMember(address(OLD)),
+        CONFIG_ACTION.addMember(address(NEW_OWNER), mask)
       ])
 
       expect(mine).toHaveLength(size)
@@ -332,10 +340,10 @@ describe('wire format', () => {
 
     it('matches the SDK for a swap plus ChangeThreshold', () => {
       const OLD = OWNERS[0]
-      const mine = account._encodeConfigTransactionCreateData([
-        account._encodeRemoveMemberAction(address(OLD)),
-        account._encodeAddMemberAction(address(NEW_OWNER), 7),
-        account._encodeChangeThresholdAction(2)
+      const mine = encode([
+        CONFIG_ACTION.removeMember(address(OLD)),
+        CONFIG_ACTION.addMember(address(NEW_OWNER), 7),
+        CONFIG_ACTION.changeThreshold(2)
       ])
 
       expect(mine).toHaveLength(83)
@@ -349,9 +357,7 @@ describe('wire format', () => {
     it.each([
       [1], [2], [255], [256], [65535]
     ])('encodes a threshold of %i as a u16', (threshold) => {
-      const mine = account._encodeConfigTransactionCreateData([
-        account._encodeChangeThresholdAction(threshold)
-      ])
+      const mine = encode([CONFIG_ACTION.changeThreshold(threshold)])
 
       expect(Array.from(mine)).toEqual(reference([
         { __kind: 'ChangeThreshold', newThreshold: threshold }
@@ -359,9 +365,7 @@ describe('wire format', () => {
     })
 
     it('matches the SDK for a lone ChangeThreshold', () => {
-      const mine = account._encodeConfigTransactionCreateData([
-        account._encodeChangeThresholdAction(2)
-      ])
+      const mine = encode([CONFIG_ACTION.changeThreshold(2)])
 
       // The smallest config transaction this package can build.
       expect(mine).toHaveLength(16)
@@ -372,9 +376,9 @@ describe('wire format', () => {
       expect(Array.from(generated.configTransactionCreateInstructionDiscriminator))
         .toEqual([155, 236, 87, 228, 137, 75, 81, 39])
       // Tag 0 is AddMember, 1 RemoveMember, 2 ChangeThreshold.
-      expect(account._encodeAddMemberAction(address(NEW_OWNER), 7)[0]).toBe(0)
-      expect(account._encodeRemoveMemberAction(address(NEW_OWNER))[0]).toBe(1)
-      expect(account._encodeChangeThresholdAction(1)[0]).toBe(2)
+      expect(CONFIG_ACTION_ENCODER.encode(CONFIG_ACTION.addMember(address(NEW_OWNER), 7))[0]).toBe(0)
+      expect(CONFIG_ACTION_ENCODER.encode(CONFIG_ACTION.removeMember(address(NEW_OWNER)))[0]).toBe(1)
+      expect(CONFIG_ACTION_ENCODER.encode(CONFIG_ACTION.changeThreshold(1))[0]).toBe(2)
     })
   })
 
@@ -382,8 +386,8 @@ describe('wire format', () => {
     // Approve and reject share `ProposalVoteArgs`, so one encoder serves both and the diff
     // has to cover both discriminators.
     const VOTES = [
-      ['proposalApprove', [144, 37, 164, 136, 188, 216, 42, 248], 'proposalApproveStruct', 'proposalApproveInstructionDiscriminator'],
-      ['proposalReject', [243, 62, 134, 156, 230, 106, 246, 135], 'proposalRejectStruct', 'proposalRejectInstructionDiscriminator']
+      ['proposalApprove', 'proposalApproveStruct', 'proposalApproveInstructionDiscriminator'],
+      ['proposalReject', 'proposalRejectStruct', 'proposalRejectInstructionDiscriminator']
     ]
     const MEMOS = [
       ['no memo', undefined, 9],
@@ -393,17 +397,17 @@ describe('wire format', () => {
       ['a multi-byte memo', 'schön 👍', 24]
     ]
 
-    const CASES = VOTES.flatMap(([name, discriminator, struct, tag]) =>
-      MEMOS.map(([label, memo, size]) => [name, label, discriminator, struct, tag, memo, size])
+    const CASES = VOTES.flatMap(([name, struct, tag]) =>
+      MEMOS.map(([label, memo, size]) => [name, label, struct, tag, memo, size])
     )
 
-    it.each(CASES)('matches the SDK for %s with %s', (_name, _label, discriminator, struct, tag, memo, size) => {
+    it.each(CASES)('matches the SDK for %s with %s', (name, _label, struct, tag, memo, size) => {
       const [bytes] = generated[struct].serialize({
         instructionDiscriminator: generated[tag],
         args: { memo: memo ?? null }
       })
 
-      const mine = account._encodeProposalVoteData(discriminator, memo)
+      const mine = INSTRUCTION[name].encode({ memo: memo ?? null })
 
       expect(mine).toHaveLength(size)
       expect(Array.from(mine)).toEqual(Array.from(bytes))
@@ -441,6 +445,24 @@ describe('wire format', () => {
       return Array.from(bytes)
     }
 
+    /**
+     * Encodes a `multisigCreateV2` over the given owners, each almighty, as `deploy` does.
+     *
+     * @param {string[]} owners - The member addresses.
+     * @param {number} threshold - The approval threshold.
+     * @returns {Uint8Array} The instruction data.
+     */
+    function encode (owners, threshold) {
+      return INSTRUCTION.multisigCreateV2.encode({
+        configAuthority: null,
+        threshold,
+        members: owners.map((owner) => ({ address: address(owner), mask: ALMIGHTY })),
+        timeLock: 0,
+        rentCollector: null,
+        memo: null
+      })
+    }
+
     it.each([
       [1, 1],
       [2, 2],
@@ -448,14 +470,13 @@ describe('wire format', () => {
     ])('matches the SDK for %i owner(s) at threshold %i', (count, threshold) => {
       const owners = OWNERS.slice(0, count)
 
-      expect(Array.from(account._encodeMultisigCreateV2Data(owners, threshold)))
-        .toEqual(reference(owners, threshold))
+      expect(Array.from(encode(owners, threshold))).toEqual(reference(owners, threshold))
     })
 
     it('is 21 bytes plus 33 per owner', () => {
-      expect(account._encodeMultisigCreateV2Data(OWNERS.slice(0, 1), 1)).toHaveLength(54)
-      expect(account._encodeMultisigCreateV2Data(OWNERS.slice(0, 2), 2)).toHaveLength(87)
-      expect(account._encodeMultisigCreateV2Data(OWNERS, 2)).toHaveLength(120)
+      expect(encode(OWNERS.slice(0, 1), 1)).toHaveLength(54)
+      expect(encode(OWNERS.slice(0, 2), 2)).toHaveLength(87)
+      expect(encode(OWNERS, 2)).toHaveLength(120)
     })
   })
 
