@@ -65,6 +65,24 @@ import {
   transformDecoder
 } from '@solana/codecs'
 
+/** @typedef {import('@solana/codecs').Codec<any>} AnyCodec */
+/** @typedef {import('@solana/codecs').Encoder<any>} AnyEncoder */
+/** @typedef {import('@solana/codecs').Decoder<any>} AnyDecoder */
+/** @typedef {import('@solana/codecs').FixedSizeDecoder<any>} FixedSizeAnyDecoder */
+/** @typedef {import('@solana/codecs').Encoder<ConfigAction>} ConfigActionEncoder */
+/** @typedef {import('@solana/codecs').Encoder<ConfigAction[]>} ConfigActionsEncoder */
+/** @typedef {import('@solana/codecs').Encoder<{ lamports: bigint }>} SystemTransferEncoder */
+/**
+ * A configuration action, as `CONFIG_ACTION_ENCODER` takes it: a `__kind` tag naming the variant
+ * and that variant's fields beside it.
+ *
+ * @typedef {{ __kind: string } & Record<string, any>} ConfigAction
+ */
+/** @typedef {'multisigCreateV2' | 'vaultTransactionCreate' | 'vaultTransactionExecute' | 'configTransactionCreate' | 'configTransactionExecute' | 'proposalCreate' | 'proposalApprove' | 'proposalReject'} SquadsInstructionName */
+/** @typedef {'multisig' | 'multisigHeader' | 'proposal' | 'vaultTransaction' | 'configTransaction' | 'programConfig' | 'clock' | 'lookupTableAddresses'} SquadsAccountName */
+/** @typedef {{ [K in SquadsInstructionName]: AnyEncoder }} SquadsInstructionEncoders */
+/** @typedef {{ [K in SquadsAccountName]: AnyDecoder } & { multisigHeader: FixedSizeAnyDecoder }} SquadsAccountDecoders */
+
 const INSTRUCTION_DISCRIMINATOR = {
   multisigCreateV2: Uint8Array.from([50, 221, 199, 93, 40, 245, 139, 233]),
   vaultTransactionCreate: Uint8Array.from([48, 250, 78, 168, 208, 226, 218, 211]),
@@ -133,6 +151,7 @@ const smallArrayEncoder = (item) => getArrayEncoder(item, { size: getU8Encoder()
 
 // Both sides of the enum are built from one variant list, in tag order, so the three kinds this
 // package writes and the seven it reads cannot drift apart.
+/** @type {[string, AnyCodec][]} */
 const CONFIG_ACTION_VARIANTS = [
   ['AddMember', getStructCodec([['newMember', MEMBER]])],
   ['RemoveMember', getStructCodec([['oldMember', ADDRESS]])],
@@ -154,7 +173,7 @@ const CONFIG_ACTION_VARIANTS = [
 /**
  * The configuration actions this package proposes, as the values `CONFIG_ACTION_ENCODER` takes.
  *
- * @type {{ addMember: (address: string, mask: number) => Object, removeMember: (address: string) => Object, changeThreshold: (threshold: number) => Object }}
+ * @type {{ addMember: (address: string, mask: number) => ConfigAction, removeMember: (address: string) => ConfigAction, changeThreshold: (threshold: number) => ConfigAction }}
  */
 export const CONFIG_ACTION = {
   addMember: (address, mask) => ({ __kind: 'AddMember', newMember: { address, mask } }),
@@ -162,7 +181,7 @@ export const CONFIG_ACTION = {
   changeThreshold: (threshold) => ({ __kind: 'ChangeThreshold', newThreshold: threshold })
 }
 
-/** @type {import('@solana/codecs').Encoder<Object>} */
+/** @type {ConfigActionEncoder} */
 export const CONFIG_ACTION_ENCODER = getDiscriminatedUnionEncoder(CONFIG_ACTION_VARIANTS)
 
 /**
@@ -170,11 +189,11 @@ export const CONFIG_ACTION_ENCODER = getDiscriminatedUnionEncoder(CONFIG_ACTION_
  * stores it. Exported for its `getSizeFromValue`, which is what a `ConfigTransaction` account's
  * size is measured with.
  *
- * @type {import('@solana/codecs').Encoder<any[]>}
+ * @type {ConfigActionsEncoder}
  */
 export const CONFIG_ACTIONS_ENCODER = getArrayEncoder(CONFIG_ACTION_ENCODER)
 
-/** @type {import('@solana/codecs').Decoder<Object>} */
+/** @type {AnyDecoder} */
 export const CONFIG_ACTION_DECODER = getUnionDecoder(
   CONFIG_ACTION_VARIANTS.map(([kind, variant]) => transformDecoder(
     getTupleDecoder([getU8Decoder(), variant]),
@@ -213,7 +232,7 @@ const PROPOSAL_STATUS_DECODER = createDecoder({
 /**
  * The message a `vaultTransactionCreate` carries, in the `SmallVec` form the instruction takes.
  *
- * @type {import('@solana/codecs').Encoder<Object>}
+ * @type {AnyEncoder}
  */
 export const TRANSACTION_MESSAGE = getStructEncoder([
   ['numSigners', getU8Encoder()],
@@ -236,7 +255,7 @@ export const TRANSACTION_MESSAGE = getStructEncoder([
  * The same message as the program stores it, once the instruction's `SmallVec`s have been widened
  * to `Vec`s. Written only to measure the account the program will allocate, never submitted.
  *
- * @type {import('@solana/codecs').Encoder<any>}
+ * @type {AnyEncoder}
  */
 export const STORED_TRANSACTION_MESSAGE = getStructEncoder([
   ['numSigners', getU8Encoder()],
@@ -284,7 +303,7 @@ const MULTISIG_HEADER_FIELDS = [
 /**
  * The data of the System program transfer a native `propose` wraps.
  *
- * @type {import('@solana/codecs').Encoder<{ lamports: bigint }>}
+ * @type {SystemTransferEncoder}
  */
 export const SYSTEM_TRANSFER = getHiddenPrefixEncoder(
   getStructEncoder([['lamports', getU64Encoder()]]),
@@ -294,7 +313,7 @@ export const SYSTEM_TRANSFER = getHiddenPrefixEncoder(
 /**
  * The data of each Squads instruction this package submits, keyed by instruction.
  *
- * @type {{ [K in 'multisigCreateV2' | 'vaultTransactionCreate' | 'vaultTransactionExecute' | 'configTransactionCreate' | 'configTransactionExecute' | 'proposalCreate' | 'proposalApprove' | 'proposalReject']: import('@solana/codecs').Encoder<any> }}
+ * @type {SquadsInstructionEncoders}
  */
 export const INSTRUCTION = {
   multisigCreateV2: anchorInstruction(
@@ -353,7 +372,7 @@ export const INSTRUCTION = {
  * The accounts this package reads, keyed by account. `multisigHeader` is the fixed-size prefix of
  * a multisig, for the reads that slice one rather than fetching it whole.
  *
- * @type {{ [K in 'multisig' | 'multisigHeader' | 'proposal' | 'vaultTransaction' | 'configTransaction' | 'programConfig' | 'clock' | 'lookupTableAddresses']: import('@solana/codecs').Decoder<any> }}
+ * @type {SquadsAccountDecoders}
  */
 export const ACCOUNT = {
   multisig: anchorAccount(ACCOUNT_DISCRIMINATOR.multisig, [
