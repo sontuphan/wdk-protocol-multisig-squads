@@ -348,6 +348,24 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     quoteDeploy(memberCount?: number): Promise<Omit<TransactionResult, "hash">>;
     /**
+     * Returns the size of the `Multisig` account a multisig of the given membership is stored in.
+     *
+     * @protected
+     * @param {number} memberCount - How many members the multisig holds.
+     * @returns {number} The account's size, in bytes.
+     */
+    protected _multisigAccountSize(memberCount: number): number;
+    /**
+     * Adds up what creating a multisig costs: the account's rent, the protocol's creation fee, and
+     * the two signatures `multisigCreateV2` needs.
+     *
+     * @protected
+     * @param {bigint} creationFee - The protocol's multisig creation fee.
+     * @param {bigint} rent - The multisig account's rent-exempt minimum.
+     * @returns {bigint} The whole cost, in lamports.
+     */
+    protected _quoteDeployFrom(creationFee: bigint, rent: bigint): bigint;
+    /**
      * Quotes the costs of a propose operation.
      *
      * @param {SolanaTransaction} tx - The transaction to quote, either arm of `SolanaTransaction`.
@@ -454,6 +472,20 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @returns {number} The account's size, in bytes.
      */
     protected _configTransactionSize(actionsSize: number): number;
+    /**
+     * Quotes a proposal of a message of the given size: the rent of the two accounts it creates,
+     * and that rent plus the proposer's signature, which is what the caller is debited.
+     *
+     * @protected
+     * @param {number} transactionSize - The size of the transaction account, in bytes.
+     * @param {number} memberCount - How many members the multisig holds.
+     * @returns {Promise<{ rent: bigint, fee: bigint }>} The rent alone, and the whole cost.
+     * @throws {Error} If the wallet is not connected to a provider, or if the RPC request fails.
+     */
+    protected _quoteProposal(transactionSize: number, memberCount: number): Promise<{
+        rent: bigint;
+        fee: bigint;
+    }>;
     /**
      * Quotes the rent of the two accounts a proposal creates, the transaction and the proposal.
      *

@@ -854,16 +854,38 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       throw new Error('The wallet must be connected to a provider to quote deploy operations.')
     }
 
-    const [{ creationFee }, rent] = await Promise.all([
+    const [programConfig, rent] = await Promise.all([
       this._getProgramConfig(),
       this._rpc
-        .getMinimumBalanceForRentExemption(BigInt(SIZE.multisigBase + SIZE.member * memberCount))
+        .getMinimumBalanceForRentExemption(BigInt(this._multisigAccountSize(memberCount)))
         .send()
     ])
 
-    return {
-      fee: rent + creationFee + SIGNATURE_BASE_FEE * COUNT.multisigCreateSignatures
-    }
+    return { fee: this._quoteDeployFrom(programConfig.creationFee, rent) }
+  }
+
+  /**
+   * Returns the size of the `Multisig` account a multisig of the given membership is stored in.
+   *
+   * @protected
+   * @param {number} memberCount - How many members the multisig holds.
+   * @returns {number} The account's size, in bytes.
+   */
+  _multisigAccountSize (memberCount) {
+    return SIZE.multisigBase + SIZE.member * memberCount
+  }
+
+  /**
+   * Adds up what creating a multisig costs: the account's rent, the protocol's creation fee, and
+   * the two signatures `multisigCreateV2` needs.
+   *
+   * @protected
+   * @param {bigint} creationFee - The protocol's multisig creation fee.
+   * @param {bigint} rent - The multisig account's rent-exempt minimum.
+   * @returns {bigint} The whole cost, in lamports.
+   */
+  _quoteDeployFrom (creationFee, rent) {
+    return rent + creationFee + SIGNATURE_BASE_FEE * COUNT.multisigCreateSignatures
   }
 
   /**
@@ -895,12 +917,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       account._toProposedInstructions(vaultPda, tx)
     )
 
-    const rent = await account._quoteProposalRent(
+    const { fee } = await account._quoteProposal(
       account._vaultTransactionSize(compiled.storedSize),
       owners.length
     )
 
-    return { fee: rent + SIGNATURE_BASE_FEE }
+    return { fee }
   }
 
   /**
@@ -941,12 +963,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       .send()
     const messageSize = recipientAtaAccount ? SIZE.splTransferMessage : SIZE.splTransferWithAtaMessage
 
-    const rent = await account._quoteProposalRent(
+    const { fee } = await account._quoteProposal(
       account._vaultTransactionSize(messageSize),
       owners.length
     )
 
-    return { fee: rent + SIGNATURE_BASE_FEE }
+    return { fee }
   }
 
   /**
@@ -1259,6 +1281,22 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    */
   _configTransactionSize (actionsSize) {
     return SIZE.configTransactionBase + actionsSize
+  }
+
+  /**
+   * Quotes a proposal of a message of the given size: the rent of the two accounts it creates,
+   * and that rent plus the proposer's signature, which is what the caller is debited.
+   *
+   * @protected
+   * @param {number} transactionSize - The size of the transaction account, in bytes.
+   * @param {number} memberCount - How many members the multisig holds.
+   * @returns {Promise<{ rent: bigint, fee: bigint }>} The rent alone, and the whole cost.
+   * @throws {Error} If the wallet is not connected to a provider, or if the RPC request fails.
+   */
+  async _quoteProposal (transactionSize, memberCount) {
+    const rent = await this._quoteProposalRent(transactionSize, memberCount)
+
+    return { rent, fee: rent + SIGNATURE_BASE_FEE }
   }
 
   /**

@@ -16,6 +16,14 @@ export const PERMISSION: {
  */
 export default class WalletAccountMultisigSolanaSquads extends WalletAccountReadOnlyMultisigSolanaSquads implements IWalletAccountMultisig, IMultisigOwnerManagement {
     /**
+     * Builds the signer a multisig is created with, from the secret its create key derives from.
+     *
+     * @param {string | Uint8Array} createKeySecret - The create key's secret. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
+     * @returns {Promise<KeyPairSigner>} The create key signer.
+     * @throws {Error} If the secret is missing, or is neither 32 nor 64 bytes.
+     */
+    static getCreateKeySigner(createKeySecret: string | Uint8Array): Promise<KeyPairSigner>;
+    /**
      * Creates a new Solana Squads multisig wallet account.
      *
      * @param {string | Uint8Array} seed - The wallet's [BIP-39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki) seed phrase.
@@ -222,7 +230,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     dispose(): void;
     /** @private */
-    private _getCreateKeySigner;
     /** @private */
     private _proposeVaultTransaction;
     /** @private */
@@ -288,6 +295,7 @@ export type MultisigSignature = import("@tetherto/wdk-wallet/multisig").Multisig
 export type TransactionResult = import("@tetherto/wdk-wallet").TransactionResult;
 export type TransferOptions = import("@tetherto/wdk-wallet").TransferOptions;
 export type KeyPair = import("@tetherto/wdk-wallet").KeyPair;
+export type KeyPairSigner = import("@solana/signers").KeyPairSigner;
 export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
 export type SolanaMultisigSquadsConfig = import("./wallet-account-read-only-multisig-solana-squads.js").SolanaMultisigSquadsConfig;
 import WalletAccountReadOnlyMultisigSolanaSquads from './wallet-account-read-only-multisig-solana-squads.js';

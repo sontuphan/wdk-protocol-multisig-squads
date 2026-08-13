@@ -23,6 +23,7 @@ import { NoSuchElementError, ValueError } from '@tetherto/wdk-wallet'
 import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 
 import WalletManagerMultisigSolanaSquads, {
+  WalletAccountMultisigSolanaSquads,
   WalletAccountReadOnlyMultisigSolanaSquads,
   PERMISSION,
   SQUADS_PROGRAM_ADDRESS,
@@ -525,6 +526,36 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     expect(error).not.toBeInstanceOf(NotSupportedError)
   })
 
+  describe('getCreateKeySigner', () => {
+    it('derives the create key from a 32-byte private key', async () => {
+      const { address } = await WalletAccountMultisigSolanaSquads.getCreateKeySigner(CREATE_KEY_SECRET)
+
+      expect(address).toBe(CREATE_KEY)
+    })
+
+    it('derives the same key from the 64-byte keypair', async () => {
+      const signer = await WalletAccountMultisigSolanaSquads.getCreateKeySigner(CREATE_KEY_SECRET)
+      const keyPair = new Uint8Array(64)
+
+      keyPair.set(new Uint8Array(32).fill(9), 0)
+      keyPair.set(getBase58Encoder().encode(signer.address), 32)
+
+      const { address } = await WalletAccountMultisigSolanaSquads.getCreateKeySigner(keyPair)
+
+      expect(address).toBe(CREATE_KEY)
+    })
+
+    it('refuses a missing secret', async () => {
+      await expect(WalletAccountMultisigSolanaSquads.getCreateKeySigner(undefined))
+        .rejects.toThrow('A `createKeySecret` is required to create a multisig. Provide it in the configuration.')
+    })
+
+    it('refuses a secret of the wrong length', async () => {
+      await expect(WalletAccountMultisigSolanaSquads.getCreateKeySigner(new Uint8Array(31)))
+        .rejects.toThrow('Invalid createKeySecret of 31 bytes. Expected 32 or 64.')
+    })
+  })
+
   describe('deploy', () => {
     // Program-derived, so identical on every cluster.
     const PROGRAM_CONFIG_PDA = 'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr'
@@ -560,7 +591,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const multisigValue = deployed ? multisigAccountValue([{ address: TEST_SIGNER }]) : null
 
-      stubSolanaRpc({
+      const rpc = stubSolanaRpc({
         getAccountInfo: ([queried]) =>
           serveValue(queried === PROGRAM_CONFIG_PDA ? programConfigValue : multisigValue),
         getMinimumBalanceForRentExemption: () => 2039280
@@ -569,7 +600,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const sendTransaction = jest.fn(async () => ({ hash: DUMMY_DEPLOY_HASH, fee: DUMMY_FEE }))
       account._signerAccount.sendTransaction = sendTransaction
 
-      return { account, sendTransaction }
+      return { account, sendTransaction, rpc }
     }
 
     it('sends six accounts with createKey and creator as signers', async () => {
@@ -624,6 +655,17 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const account = await wallet.getAccount(0)
 
       await expect(account.deploy()).rejects.toThrow(/createKeySecret. is required/)
+    })
+
+    it('reads the program config once', async () => {
+      const { account, rpc } = await deployingAccount()
+
+      await account.deploy()
+
+      const reads = rpcRequests(rpc, 'getAccountInfo')
+        .filter(([queried]) => queried === PROGRAM_CONFIG_PDA)
+
+      expect(reads).toHaveLength(1)
     })
 
     it('throws when the multisig already exists', async () => {
@@ -2512,6 +2554,18 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const { account } = await transferringAccount({ mintExists: false })
 
       await expect(account.transfer(OPTIONS)).rejects.toThrow(/mint .* does not exist/)
+    })
+
+    it('reads the multisig once and the recipient ATA once', async () => {
+      const { account, rpc } = await transferringAccount()
+
+      await account.transfer(OPTIONS)
+
+      // One getAccountInfo for the multisig, one getMultipleAccounts for the mint and the ATA,
+      // and one rent lookup per created account. The quote and the charge share all four.
+      expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(1)
+      expect(rpcRequests(rpc, 'getMultipleAccounts')).toHaveLength(1)
+      expect(rpcRequests(rpc, 'getMinimumBalanceForRentExemption')).toHaveLength(2)
     })
 
     it('refuses when the quote exceeds transferMaxFee', async () => {

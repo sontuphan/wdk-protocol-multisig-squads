@@ -72,6 +72,7 @@ import {
 /** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
 /** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
 /** @typedef {import('@tetherto/wdk-wallet').KeyPair} KeyPair */
+/** @typedef {import('@solana/signers').KeyPairSigner} KeyPairSigner */
 
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 
@@ -111,6 +112,37 @@ const NO_MEMO = null
  * @implements {IMultisigOwnerManagement}
  */
 export default class WalletAccountMultisigSolanaSquads extends WalletAccountReadOnlyMultisigSolanaSquads {
+  /**
+   * Builds the signer a multisig is created with, from the secret its create key derives from.
+   *
+   * @param {string | Uint8Array} createKeySecret - The create key's secret. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
+   * @returns {Promise<KeyPairSigner>} The create key signer.
+   * @throws {Error} If the secret is missing, or is neither 32 nor 64 bytes.
+   */
+  static async getCreateKeySigner (createKeySecret) {
+    if (!createKeySecret) {
+      throw new Error(
+        'A `createKeySecret` is required to create a multisig. Provide it in the configuration.'
+      )
+    }
+
+    const bytes = typeof createKeySecret === 'string'
+      ? getBase58Encoder().encode(createKeySecret)
+      : createKeySecret
+
+    if (bytes.length === SIZE.privateKey) {
+      return createKeyPairSignerFromPrivateKeyBytes(bytes)
+    }
+
+    if (bytes.length === SIZE.keyPair) {
+      return createKeyPairSignerFromBytes(bytes)
+    }
+
+    throw new Error(
+      `Invalid createKeySecret of ${bytes.length} bytes. Expected ${SIZE.privateKey} or ${SIZE.keyPair}.`
+    )
+  }
+
   /**
    * Creates a new Solana Squads multisig wallet account.
    *
@@ -168,7 +200,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    */
   async getAddress () {
     if (!this._multisigPda && this._config.createKeySecret) {
-      const { address } = await this._getCreateKeySigner()
+      const { address } = await WalletAccountMultisigSolanaSquads.getCreateKeySigner(this._config.createKeySecret)
 
       this._multisigPda = this._toMultisigPda(address)
     }
@@ -283,7 +315,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @throws {Error} If `createKeySecret` is missing, the arguments are invalid, the multisig already exists, or the quote exceeds `createMaxFee`.
    */
   async deploy (owners, threshold = DEFAULT.threshold) {
-    const createKeySigner = await this._getCreateKeySigner()
+    const createKeySigner = await WalletAccountMultisigSolanaSquads.getCreateKeySigner(
+      this._config.createKeySecret
+    )
     const [expectedPda] = getProgramDerivedAddressSync({
       programAddress: this._programId,
       seeds: [SEED.prefix, SEED.multisig, getAddressEncoder().encode(createKeySigner.address)]
@@ -317,14 +351,19 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       throw new Error(`The multisig account ${expectedPda} already exists.`)
     }
 
-    const { fee } = await this.quoteDeploy(members.length)
+    const [{ programConfigPda, treasury, creationFee }, rent] = await Promise.all([
+      this._getProgramConfig(),
+      this._rpc
+        .getMinimumBalanceForRentExemption(BigInt(this._multisigAccountSize(members.length)))
+        .send()
+    ])
+
+    const fee = this._quoteDeployFrom(creationFee, rent)
     const { createMaxFee } = this._config
 
     if (createMaxFee !== undefined && fee >= BigInt(createMaxFee)) {
       throw new Error('Exceeded maximum fee cost for the deploy operation.')
     }
-
-    const { programConfigPda, treasury } = await this._getProgramConfig()
 
     const instruction = {
       programAddress: this._programId,
@@ -394,12 +433,14 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     const mint = address(transferOptions.token)
     const recipient = address(transferOptions.recipient)
-    const vaultPda = await this.getVaultAddress(DEFAULT.vaultIndex)
+    const vaultPda = address(await this.getVaultAddress(DEFAULT.vaultIndex))
 
     const [source, destination] = await Promise.all([
-      findAssociatedTokenPda({ mint, owner: address(vaultPda), tokenProgram: TOKEN_PROGRAM_ADDRESS }),
+      findAssociatedTokenPda({ mint, owner: vaultPda, tokenProgram: TOKEN_PROGRAM_ADDRESS }),
       findAssociatedTokenPda({ mint, owner: recipient, tokenProgram: TOKEN_PROGRAM_ADDRESS })
     ])
+
+    const multisig = await this._getMultisigAccount()
 
     const { value } = await this._rpc
       .getMultipleAccounts([mint, destination[0]], {
@@ -421,13 +462,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       )
     }
 
-    const { fee } = await this.quoteTransfer(transferOptions)
-    const { transferMaxFee } = this._config
-
-    if (transferMaxFee !== undefined && fee >= BigInt(transferMaxFee)) {
-      throw new Error('Exceeded maximum fee cost for the transfer operation.')
-    }
-
     const instructions = []
 
     if (!destinationAccount) {
@@ -445,15 +479,23 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       getTransferInstruction({
         source: source[0],
         destination: destination[0],
-        authority: address(vaultPda),
+        authority: vaultPda,
         amount: BigInt(transferOptions.amount)
       })
     )
 
-    return this._proposeVaultTransaction(
-      this._compileTransactionMessage(address(vaultPda), instructions),
-      transactionOptions
+    const compiled = this._compileTransactionMessage(vaultPda, instructions)
+    const { rent, fee } = await this._quoteProposal(
+      this._vaultTransactionSize(compiled.storedSize),
+      multisig.members.length
     )
+    const { transferMaxFee } = this._config
+
+    if (transferMaxFee !== undefined && fee >= BigInt(transferMaxFee)) {
+      throw new Error('Exceeded maximum fee cost for the transfer operation.')
+    }
+
+    return this._proposeVaultTransaction(compiled, { ...transactionOptions, multisig, rent })
   }
 
   /**
@@ -783,33 +825,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /** @private */
-  async _getCreateKeySigner () {
-    const secret = this._config.createKeySecret
-
-    if (!secret) {
-      throw new Error(
-        'A `createKeySecret` is required to create a multisig. Provide it in the configuration.'
-      )
-    }
-
-    const bytes = typeof secret === 'string' ? getBase58Encoder().encode(secret) : secret
-
-    if (bytes.length === SIZE.privateKey) {
-      return createKeyPairSignerFromPrivateKeyBytes(bytes)
-    }
-
-    if (bytes.length === SIZE.keyPair) {
-      return createKeyPairSignerFromBytes(bytes)
-    }
-
-    throw new Error(
-      `Invalid createKeySecret of ${bytes.length} bytes. Expected ${SIZE.privateKey} or ${SIZE.keyPair}.`
-    )
-  }
-
-  /** @private */
   async _proposeVaultTransaction (compiled, options = {}) {
-    const multisig = await this._getMultisigAccount()
+    const multisig = options.multisig ?? await this._getMultisigAccount()
 
     return this._proposeTransaction(
       multisig,
@@ -820,9 +837,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         memo: NO_MEMO
       }),
       this._vaultTransactionSize(compiled.storedSize),
-      options.autoExecute
-        ? (context) => this._buildAutoExecuteInstructions(multisig, compiled, context)
-        : null
+      {
+        buildExtraInstructions: options.autoExecute
+          ? (context) => this._buildAutoExecuteInstructions(multisig, compiled, context)
+          : null,
+        rent: options.rent
+      }
     )
   }
 
@@ -845,7 +865,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /** @private */
-  async _proposeTransaction (multisig, data, transactionSize, buildExtraInstructions = null) {
+  async _proposeTransaction (multisig, data, transactionSize, options = {}) {
     const { address: multisigPda, threshold, transactionIndex, members } = multisig
 
     this._requireDeployed(multisig, 'proposing transactions')
@@ -891,13 +911,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       }
     ]
 
-    const extra = buildExtraInstructions
-      ? await buildExtraInstructions({ index, transactionPda, proposalPda, signerAddress })
+    const extra = options.buildExtraInstructions
+      ? await options.buildExtraInstructions({ index, transactionPda, proposalPda, signerAddress })
       : []
 
     instructions.push(...extra)
 
-    const rent = await this._quoteProposalRent(transactionSize, members.length)
+    const rent = options.rent ?? await this._quoteProposalRent(transactionSize, members.length)
     const { hash, fee } = await this._signerAccount.sendTransaction({ instructions })
     const executed = extra.length > 0
 
