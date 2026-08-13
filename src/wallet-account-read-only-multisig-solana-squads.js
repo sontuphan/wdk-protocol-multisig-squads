@@ -1286,6 +1286,20 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If the id is not an integer between 0 and `MAX.proposalIndex`.
    */
   _toProposalIndex (proposalId) {
+    const invalid = new Error(
+      `Invalid proposal id ${String(proposalId)}. It must be an integer between 0 and ${MAX.proposalIndex}.`
+    )
+
+    // `BigInt()` reads far more than the accepted `number | bigint | string`: '' and [] are 0,
+    // true is 1, and '0x1f' is 31. The shape is checked first so only those three types pass.
+    if (typeof proposalId === 'string' && !/^\d+$/.test(proposalId)) {
+      throw invalid
+    }
+
+    if (typeof proposalId !== 'string' && typeof proposalId !== 'number' && typeof proposalId !== 'bigint') {
+      throw invalid
+    }
+
     let index = null
 
     try {
@@ -1293,9 +1307,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     } catch {}
 
     if (index === null || index < 0n || index > MAX.proposalIndex) {
-      throw new Error(
-        `Invalid proposal id ${proposalId}. It must be an integer between 0 and ${MAX.proposalIndex}.`
-      )
+      throw invalid
     }
 
     return index

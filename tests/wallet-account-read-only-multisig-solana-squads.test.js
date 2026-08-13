@@ -1370,6 +1370,33 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         .rejects.toThrow(`Invalid proposal id ${bad}. It must be an integer between 0 and 18446744073709551615.`)
     })
 
+    // `BigInt()` reads all of these as a number, so without a shape check each named proposal 0,
+    // 1 or 5 and returned real data for an id the caller never meant.
+    it.each([
+      ['an empty string', ''],
+      ['whitespace', ' '],
+      ['an empty array', []],
+      ['false', false],
+      ['true', true],
+      ['a one-element array', ['5']],
+      ['hexadecimal', '0x1f'],
+      ['exponent notation', '1e3'],
+      ['null', null],
+      ['undefined', undefined],
+      ['an object', {}]
+    ])('refuses %s as a proposal id', async (_label, bad) => {
+      const { account, rpc } = mockProposals([proposalAccountValue({})])
+
+      await expect(account.getProposals([bad])).rejects.toThrow(/Invalid proposal id/)
+      expect(rpcRequests(rpc, 'getMultipleAccounts')).toHaveLength(0)
+    })
+
+    it.each([[0], ['0'], [7], ['7'], [7n], ['18446744073709551615']])('accepts %s', async (good) => {
+      const { account } = mockProposals([proposalAccountValue({})])
+
+      await expect(account.getProposals([good])).resolves.toBeDefined()
+    })
+
     it('throws when the multisig does not exist', async () => {
       const { account } = mockProposals([], null)
 
