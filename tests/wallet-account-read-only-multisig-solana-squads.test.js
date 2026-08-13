@@ -396,7 +396,8 @@ function mockExecutable ({
   staleTransactionIndex = 0n,
   transactionType = VAULT_TRANSACTION_DISCRIMINATOR,
   proposalExists = true,
-  transactionExists = true
+  transactionExists = true,
+  owner = SQUADS_PROGRAM_ADDRESS
 } = {}) {
   const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
     provider: TEST_RPC_URL,
@@ -419,7 +420,10 @@ function mockExecutable ({
   ]
 
   const rpc = stubSolanaRpc({
-    getMultipleAccounts: () => ({ context: { slot: 1 }, value })
+    getMultipleAccounts: () => ({
+      context: { slot: 1 },
+      value: value.map((account, index) => account && index < 3 ? { ...account, owner } : account)
+    })
   })
 
   return { account, rpc }
@@ -1512,6 +1516,15 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         transactionType: CONFIG_TRANSACTION_DISCRIMINATOR,
         staleTransactionIndex: 100n
       })
+
+      expect(await account.isReadyToExecute(1)).toBe(false)
+    })
+
+    it('returns false when another program owns the accounts', async () => {
+      // A discriminator is eight bytes any program can write. The addresses are PDAs of the Squads
+      // program, so this is not reachable in practice, but the decode paths beside this one all
+      // check the owner and this one now agrees with them.
+      const { account } = mockExecutable({ owner: SYSTEM_PROGRAM_ADDRESS })
 
       expect(await account.isReadyToExecute(1)).toBe(false)
     })

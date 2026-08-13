@@ -748,6 +748,14 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       return false
     }
 
+    if (
+      multisig.owner !== this._programId ||
+      proposal.owner !== this._programId ||
+      transaction.owner !== this._programId
+    ) {
+      return false
+    }
+
     const proposalData = getBase64Encoder().encode(proposal.data[0])
     const multisigData = getBase64Encoder().encode(multisig.data[0])
 
