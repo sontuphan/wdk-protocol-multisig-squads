@@ -238,6 +238,7 @@ const SIZE = {
   systemTransferData: 12,
   multisigBase: 132,
   vaultTransactionBase: 83,
+  configTransactionBase: 81,
   proposalBase: 70,
   proposalMember: 96,
   splTransferMessage: 164,
@@ -881,15 +882,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       (SIZE.vecPrefix + SIZE.address * COUNT.solTransferAccountKeys) +
       (SIZE.vecPrefix + instructionSize) +
       SIZE.vecPrefix
-    const transactionSize = SIZE.vaultTransactionBase + SIZE.vecPrefix + messageSize
-    const proposalSize = SIZE.proposalBase + SIZE.proposalMember * owners.length
+    const rent = await account._quoteProposalRent(
+      account._vaultTransactionSize(messageSize),
+      owners.length
+    )
 
-    const [transactionRent, proposalRent] = await Promise.all([
-      account._rpc.getMinimumBalanceForRentExemption(BigInt(transactionSize)).send(),
-      account._rpc.getMinimumBalanceForRentExemption(BigInt(proposalSize)).send()
-    ])
-
-    return { fee: transactionRent + proposalRent + SIGNATURE_BASE_FEE }
+    return { fee: rent + SIGNATURE_BASE_FEE }
   }
 
   /**
@@ -929,15 +927,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       })
       .send()
     const messageSize = recipientAtaAccount ? SIZE.splTransferMessage : SIZE.splTransferWithAtaMessage
-    const transactionSize = SIZE.vaultTransactionBase + SIZE.vecPrefix + messageSize
-    const proposalSize = SIZE.proposalBase + SIZE.proposalMember * owners.length
 
-    const [transactionRent, proposalRent] = await Promise.all([
-      account._rpc.getMinimumBalanceForRentExemption(BigInt(transactionSize)).send(),
-      account._rpc.getMinimumBalanceForRentExemption(BigInt(proposalSize)).send()
-    ])
+    const rent = await account._quoteProposalRent(
+      account._vaultTransactionSize(messageSize),
+      owners.length
+    )
 
-    return { fee: transactionRent + proposalRent + SIGNATURE_BASE_FEE }
+    return { fee: rent + SIGNATURE_BASE_FEE }
   }
 
   /**
@@ -1087,6 +1083,52 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     const { creationFee, treasury } = ACCOUNT.programConfig.decode(data)
 
     return { programConfigPda, creationFee, treasury }
+  }
+
+  /**
+   * Returns the size of the `VaultTransaction` account a message of the given size is stored in.
+   *
+   * @protected
+   * @param {number} messageSize - The size of the compiled transaction message, in bytes.
+   * @returns {number} The account's size, in bytes.
+   */
+  _vaultTransactionSize (messageSize) {
+    return SIZE.vaultTransactionBase + SIZE.vecPrefix + messageSize
+  }
+
+  /**
+   * Returns the size of the `ConfigTransaction` account the given actions are stored in.
+   *
+   * @protected
+   * @param {number} actionsSize - The size of the encoded action list, its length prefix included.
+   * @returns {number} The account's size, in bytes.
+   */
+  _configTransactionSize (actionsSize) {
+    return SIZE.configTransactionBase + actionsSize
+  }
+
+  /**
+   * Quotes the rent of the two accounts a proposal creates, the transaction and the proposal.
+   *
+   * @protected
+   * @param {number} transactionSize - The size of the transaction account, in bytes.
+   * @param {number} memberCount - How many members the multisig holds.
+   * @returns {Promise<bigint>} The rent both accounts lock up, in lamports.
+   * @throws {Error} If the wallet is not connected to a provider, or if the RPC request fails.
+   */
+  async _quoteProposalRent (transactionSize, memberCount) {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to quote account rent.')
+    }
+
+    const proposalSize = SIZE.proposalBase + SIZE.proposalMember * memberCount
+
+    const [transactionRent, proposalRent] = await Promise.all([
+      this._rpc.getMinimumBalanceForRentExemption(BigInt(transactionSize)).send(),
+      this._rpc.getMinimumBalanceForRentExemption(BigInt(proposalSize)).send()
+    ])
+
+    return transactionRent + proposalRent
   }
 
   /**

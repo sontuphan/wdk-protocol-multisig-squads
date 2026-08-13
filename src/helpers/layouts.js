@@ -165,6 +165,15 @@ export const CONFIG_ACTION = {
 /** @type {import('@solana/codecs').Encoder<Object>} */
 export const CONFIG_ACTION_ENCODER = getDiscriminatedUnionEncoder(CONFIG_ACTION_VARIANTS)
 
+/**
+ * The action list a config transaction carries, as the instruction writes it and as the account
+ * stores it. Exported for its `getSizeFromValue`, which is what a `ConfigTransaction` account's
+ * size is measured with.
+ *
+ * @type {import('@solana/codecs').Encoder<any[]>}
+ */
+export const CONFIG_ACTIONS_ENCODER = getArrayEncoder(CONFIG_ACTION_ENCODER)
+
 /** @type {import('@solana/codecs').Decoder<Object>} */
 export const CONFIG_ACTION_DECODER = getUnionDecoder(
   CONFIG_ACTION_VARIANTS.map(([kind, variant]) => transformDecoder(
@@ -223,8 +232,30 @@ export const TRANSACTION_MESSAGE = getStructEncoder([
   ]))]
 ])
 
-// The same message as the program stores it, once the instruction's `SmallVec`s have been
-// widened to `Vec`s.
+/**
+ * The same message as the program stores it, once the instruction's `SmallVec`s have been widened
+ * to `Vec`s. Written only to measure the account the program will allocate, never submitted.
+ *
+ * @type {import('@solana/codecs').Encoder<any>}
+ */
+export const STORED_TRANSACTION_MESSAGE = getStructEncoder([
+  ['numSigners', getU8Encoder()],
+  ['numWritableSigners', getU8Encoder()],
+  ['numWritableNonSigners', getU8Encoder()],
+  ['accountKeys', getArrayEncoder(ADDRESS_ENCODER)],
+  ['instructions', getArrayEncoder(getStructEncoder([
+    ['programIdIndex', getU8Encoder()],
+    ['accountIndexes', getArrayEncoder(getU8Encoder())],
+    ['data', addEncoderSizePrefix(getBytesEncoder(), getU32Encoder())]
+  ]))],
+  ['addressTableLookups', getArrayEncoder(getStructEncoder([
+    ['accountKey', ADDRESS_ENCODER],
+    ['writableIndexes', getArrayEncoder(getU8Encoder())],
+    ['readonlyIndexes', getArrayEncoder(getU8Encoder())]
+  ]))]
+])
+
+// The decoder side of the same stored format.
 const STORED_TRANSACTION_MESSAGE_DECODER = getStructDecoder([
   ['numSigners', getU8Decoder()],
   ['numWritableSigners', getU8Decoder()],
@@ -293,7 +324,7 @@ export const INSTRUCTION = {
   configTransactionCreate: anchorInstruction(
     INSTRUCTION_DISCRIMINATOR.configTransactionCreate,
     getStructEncoder([
-      ['actions', getArrayEncoder(CONFIG_ACTION_ENCODER)],
+      ['actions', CONFIG_ACTIONS_ENCODER],
       ['memo', MEMO]
     ])
   ),

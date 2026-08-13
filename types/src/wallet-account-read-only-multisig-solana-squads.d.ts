@@ -407,6 +407,32 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     protected _getProgramConfig(): Promise<SquadsProgramConfig>;
     /**
+     * Returns the size of the `VaultTransaction` account a message of the given size is stored in.
+     *
+     * @protected
+     * @param {number} messageSize - The size of the compiled transaction message, in bytes.
+     * @returns {number} The account's size, in bytes.
+     */
+    protected _vaultTransactionSize(messageSize: number): number;
+    /**
+     * Returns the size of the `ConfigTransaction` account the given actions are stored in.
+     *
+     * @protected
+     * @param {number} actionsSize - The size of the encoded action list, its length prefix included.
+     * @returns {number} The account's size, in bytes.
+     */
+    protected _configTransactionSize(actionsSize: number): number;
+    /**
+     * Quotes the rent of the two accounts a proposal creates, the transaction and the proposal.
+     *
+     * @protected
+     * @param {number} transactionSize - The size of the transaction account, in bytes.
+     * @param {number} memberCount - How many members the multisig holds.
+     * @returns {Promise<bigint>} The rent both accounts lock up, in lamports.
+     * @throws {Error} If the wallet is not connected to a provider, or if the RPC request fails.
+     */
+    protected _quoteProposalRent(transactionSize: number, memberCount: number): Promise<bigint>;
+    /**
      * Normalizes a proposal id into the Squads transaction index it refers to.
      *
      * @protected

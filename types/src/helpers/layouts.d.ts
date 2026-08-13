@@ -37,6 +37,14 @@ export const CONFIG_ACTION: {
 };
 /** @type {import('@solana/codecs').Encoder<Object>} */
 export const CONFIG_ACTION_ENCODER: import("@solana/codecs").Encoder<any>;
+/**
+ * The action list a config transaction carries, as the instruction writes it and as the account
+ * stores it. Exported for its `getSizeFromValue`, which is what a `ConfigTransaction` account's
+ * size is measured with.
+ *
+ * @type {import('@solana/codecs').Encoder<any[]>}
+ */
+export const CONFIG_ACTIONS_ENCODER: import("@solana/codecs").Encoder<any[]>;
 /** @type {import('@solana/codecs').Decoder<Object>} */
 export const CONFIG_ACTION_DECODER: import("@solana/codecs").Decoder<any>;
 /**
@@ -45,6 +53,13 @@ export const CONFIG_ACTION_DECODER: import("@solana/codecs").Decoder<any>;
  * @type {import('@solana/codecs').Encoder<Object>}
  */
 export const TRANSACTION_MESSAGE: import("@solana/codecs").Encoder<any>;
+/**
+ * The same message as the program stores it, once the instruction's `SmallVec`s have been widened
+ * to `Vec`s. Written only to measure the account the program will allocate, never submitted.
+ *
+ * @type {import('@solana/codecs').Encoder<any>}
+ */
+export const STORED_TRANSACTION_MESSAGE: import("@solana/codecs").Encoder<any>;
 /**
  * The data of the System program transfer a native `propose` wraps.
  *
