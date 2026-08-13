@@ -716,7 +716,9 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns whether a proposal can be executed right now.
+   * Returns whether a proposal can be executed right now, meaning `executeProposal` would submit
+   * it rather than throw. A batch reads as not ready for that reason, though the program would
+   * execute one.
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @returns {Promise<boolean>} Whether the proposal can be executed.
@@ -766,7 +768,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     const transactionData = getBase64Encoder().encode(transaction.data[0])
 
     // The transaction account is read for its discriminator alone: only a config transaction goes
-    // stale, and `config_transaction_execute` is the one instruction that checks the index.
+    // stale, and `config_transaction_execute` is the one instruction that checks the index. A batch
+    // is neither, and `executeProposal` refuses it, so an approved one is not ready either.
+    if (this._hasDiscriminator(transactionData, ACCOUNT_DISCRIMINATOR.batch)) {
+      return false
+    }
+
     if (
       this._hasDiscriminator(transactionData, ACCOUNT_DISCRIMINATOR.configTransaction) &&
       index <= staleTransactionIndex

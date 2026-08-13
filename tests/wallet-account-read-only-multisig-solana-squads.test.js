@@ -1498,14 +1498,15 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       expect(await account.isReadyToExecute(1)).toBe(true)
     })
 
-    it('returns true for a stale approved batch', async () => {
-      // batch_execute_transaction performs no staleness check either.
+    it.each([0n, 100n])('returns false for an approved batch, stale index %s', async (staleTransactionIndex) => {
+      // The program would execute a batch, stale or not, but `executeProposal` refuses one, so
+      // reporting it ready would send a caller into a guaranteed throw.
       const { account } = mockExecutable({
         transactionType: BATCH_DISCRIMINATOR,
-        staleTransactionIndex: 100n
+        staleTransactionIndex
       })
 
-      expect(await account.isReadyToExecute(1)).toBe(true)
+      expect(await account.isReadyToExecute(1)).toBe(false)
     })
 
     it('treats an index equal to the stale index as stale for config transactions', async () => {

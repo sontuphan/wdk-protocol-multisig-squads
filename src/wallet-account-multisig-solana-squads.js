@@ -363,7 +363,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * SOL transfer or a message carrying `instructions`, which the vault executes as they stand.
    *
    * @param {SolanaTransaction} tx - The transaction to propose.
-   * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options.
+   * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
    * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {ValueError} If `tx` is neither `{ to, value }` nor a message the vault can execute.
    * @throws {Error} If the multisig does not exist, the signer cannot propose, or the RPC request fails.
@@ -382,7 +382,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * Proposes an SPL token transfer to the multisig.
    *
    * @param {TransferOptions} transferOptions - The transfer options.
-   * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options.
+   * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
    * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} If the transfer options are invalid, the signer cannot propose, or the quote exceeds `transferMaxFee`.
    * @throws {NotSupportedError} If the mint belongs to the Token-2022 program. @todo Support Token-2022 (Token Extensions Program).
@@ -542,7 +542,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @returns {Promise<TransactionResult>} The execution transaction's result.
    * @throws {NoSuchElementError} If no proposal exists at that id.
-   * @throws {ValueError} If the proposal has not reached the approval threshold.
+   * @throws {ValueError} If the proposal has not reached the approval threshold, or its transaction account has been closed.
    * @throws {Error} If the proposal cannot be executed by this signer yet, or the RPC request fails.
    * @throws {NotImplementedError} If the proposal backs a batch.
    */
@@ -578,6 +578,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     if (remaining > 0n) {
       throw new Error(
         `The proposal ${index} is under a time lock for another ${remaining} seconds.`
+      )
+    }
+
+    if (!transaction.exists) {
+      throw new ValueError(
+        `The transaction account ${transaction.address} behind proposal ${index} has been closed.`
       )
     }
 

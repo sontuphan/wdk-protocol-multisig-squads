@@ -306,7 +306,9 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     getProposal(proposalId: number | bigint | string): Promise<SolanaMultisigProposal | null>;
     /**
-     * Returns whether a proposal can be executed right now.
+     * Returns whether a proposal can be executed right now, meaning `executeProposal` would submit
+     * it rather than throw. A batch reads as not ready for that reason, though the program would
+     * execute one.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @returns {Promise<boolean>} Whether the proposal can be executed.

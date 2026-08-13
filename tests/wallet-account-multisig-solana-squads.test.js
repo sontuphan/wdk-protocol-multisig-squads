@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals'
 
 import { getBase58Decoder, getBase58Encoder, getBase64Decoder } from '@solana/codecs'
 
-import { ValueError } from '@tetherto/wdk-wallet'
+import { NoSuchElementError, ValueError } from '@tetherto/wdk-wallet'
 
 import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 
@@ -2244,6 +2244,21 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const { account, sendTransaction } = await executingAccount({ transaction: accountValue(data) })
 
       await expect(account.executeProposal(3)).rejects.toThrow(/batch/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('refuses a proposal whose transaction account has been closed', async () => {
+      // Squads closes the transaction account after execution or once stale, so an approved
+      // proposal can outlive it. The account is gone, which is not the same as an unknown kind.
+      const { account, sendTransaction } = await executingAccount({ transaction: null })
+
+      const error = await account.executeProposal(3).catch((thrown) => thrown)
+
+      // ValueError, not NoSuchElementError: the id named a real proposal, its state is the problem.
+      expect(error).toBeInstanceOf(ValueError)
+      expect(error).not.toBeInstanceOf(NoSuchElementError)
+      expect(error.message)
+        .toBe(`The transaction account ${TEST_TRANSACTION_PDA_3} behind proposal 3 has been closed.`)
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 
