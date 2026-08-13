@@ -513,6 +513,27 @@ function mockFailingAccount (error) {
 }
 
 describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
+  describe('toMultisigPda', () => {
+    it('passes an off-curve address through as the multisig', () => {
+      expect(WalletAccountReadOnlyMultisigSolanaSquads.toMultisigPda(SQUADS_PROGRAM_ADDRESS, TEST_MULTISIG_PDA))
+        .toBe(TEST_MULTISIG_PDA)
+    })
+
+    it('derives the PDA of an on-curve create key', () => {
+      expect(WalletAccountReadOnlyMultisigSolanaSquads.toMultisigPda(SQUADS_PROGRAM_ADDRESS, TEST_CREATE_KEY))
+        .toBe(TEST_DERIVED_PDA)
+    })
+
+    it('returns nothing when the config names neither', () => {
+      expect(WalletAccountReadOnlyMultisigSolanaSquads.toMultisigPda(SQUADS_PROGRAM_ADDRESS)).toBeUndefined()
+    })
+
+    it('derives under the program it is given', () => {
+      expect(WalletAccountReadOnlyMultisigSolanaSquads.toMultisigPda(SYSTEM_PROGRAM_ADDRESS, TEST_CREATE_KEY))
+        .not.toBe(TEST_DERIVED_PDA)
+    })
+  })
+
   describe('createRpc', () => {
     it('builds no client without a provider', () => {
       expect(WalletAccountReadOnlyMultisigSolanaSquads.createRpc({})).toBeUndefined()
@@ -2620,7 +2641,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     it('throws without hitting the RPC when nothing is configured', async () => {
       const { account, rpc } = mockAccount(null, {})
 
-      await expect(account.isDeployed()).rejects.toThrow(/Provide `multisigPdaOrCreateKey`/)
+      await expect(account.isDeployed()).rejects.toThrow(/address must be set/)
       expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(0)
     })
   })

@@ -24,7 +24,7 @@ import { createSolanaRpc } from '@solana/rpc'
 
 import { address, getAddressEncoder, isOffCurveAddress } from '@solana/addresses'
 
-import { getBase58Encoder, getBase64Encoder, getU64Encoder } from '@solana/codecs'
+import { getBase58Decoder, getBase58Encoder, getBase64Encoder, getU64Encoder } from '@solana/codecs'
 
 import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token'
 
@@ -38,6 +38,8 @@ import {
 } from './helpers/layouts.js'
 
 import { getProgramDerivedAddressSync } from './helpers/program-derived-address.js'
+
+import { ed25519 } from '@noble/curves/ed25519'
 
 /** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
 /** @typedef {import('@solana/rpc-types').Commitment} Commitment */
@@ -266,6 +268,8 @@ const SEED = {
 
 const DEFAULT = { vaultIndex: 0, memberCount: 1 }
 
+export const SECRET_SIZE = { privateKey: 32, keyPair: 64 }
+
 const MAX = {
   vaultIndex: 255,
   memberCount: 65535,
@@ -288,7 +292,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {SolanaMultisigSquadsReadOnlyConfig} config - The configuration object.
    */
   constructor (signerAddress, config) {
-    super(signerAddress)
+    const programId = address(config.programId ?? SQUADS_PROGRAM_ADDRESS)
+    const identity = config.multisigPdaOrCreateKey ?? (config.createKeySecret &&
+      WalletAccountReadOnlyMultisigSolanaSquads.getCreateKey(config.createKeySecret))
+
+    super(WalletAccountReadOnlyMultisigSolanaSquads.toMultisigPda(programId, identity))
 
     /**
      * The multisig Squads configuration. It carries the signing fields too when a signing
@@ -313,17 +321,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @protected
      * @type {Address}
      */
-    this._programId = address(config.programId ?? SQUADS_PROGRAM_ADDRESS)
-
-    /**
-     * The address of the Squads multisig account.
-     *
-     * @protected
-     * @type {string | undefined}
-     */
-    this._multisigPda = config.multisigPdaOrCreateKey
-      ? this._toMultisigPda(config.multisigPdaOrCreateKey)
-      : undefined
+    this._programId = programId
 
     /**
      * The commitment level for transactions.
@@ -340,6 +338,79 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @type {SolanaRpc | undefined}
      */
     this._rpc = WalletAccountReadOnlyMultisigSolanaSquads.createRpc(config)
+  }
+
+  /**
+   * Normalizes a create key secret to bytes, rejecting what cannot be one. Both the address
+   * derivation and the signer build read a secret through this, so they refuse the same inputs.
+   *
+   * @param {string | Uint8Array} createKeySecret - The secret, base58 or raw bytes.
+   * @returns {Uint8Array} The secret's bytes, either 32 or 64 of them.
+   * @throws {Error} If the secret is missing, or is neither 32 nor 64 bytes.
+   */
+  static toCreateKeySecretBytes (createKeySecret) {
+    if (!createKeySecret) {
+      throw new Error(
+        'A `createKeySecret` is required to create a multisig. Provide it in the configuration.'
+      )
+    }
+
+    const bytes = typeof createKeySecret === 'string'
+      ? getBase58Encoder().encode(createKeySecret)
+      : createKeySecret
+
+    if (bytes.length !== SECRET_SIZE.privateKey && bytes.length !== SECRET_SIZE.keyPair) {
+      throw new Error(
+        `Invalid createKeySecret of ${bytes.length} bytes. Expected ${SECRET_SIZE.privateKey} or ${SECRET_SIZE.keyPair}.`
+      )
+    }
+
+    return bytes
+  }
+
+  /**
+   * Derives the create key's address from its secret, without building a signer. Synchronous, so a
+   * multisig's address is known at construction rather than on the first call that needs it.
+   *
+   * @param {string | Uint8Array} createKeySecret - The create key's secret. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
+   * @returns {string} The create key's address.
+   */
+  static getCreateKey (createKeySecret) {
+    const bytes = this.toCreateKeySecretBytes(createKeySecret)
+
+    return getBase58Decoder().decode(
+      bytes.length === SECRET_SIZE.privateKey
+        ? ed25519.getPublicKey(bytes)
+        : bytes.subarray(SECRET_SIZE.privateKey)
+    )
+  }
+
+  /**
+   * Resolves what a config names, an address or a create key, to the multisig's address. A create
+   * key is on the ed25519 curve and a multisig address is not, so the two need no disambiguation
+   * beyond the value itself.
+   *
+   * @param {string} programId - The Squads program the multisig belongs to.
+   * @param {string} [multisigPdaOrCreateKey] - The multisig address, or the create key it derives from.
+   * @returns {Address | undefined} The multisig address, or undefined when neither is given.
+   */
+  static toMultisigPda (programId, multisigPdaOrCreateKey) {
+    if (!multisigPdaOrCreateKey) {
+      return undefined
+    }
+
+    const identity = address(multisigPdaOrCreateKey)
+
+    if (isOffCurveAddress(identity)) {
+      return identity
+    }
+
+    const [multisigPda] = getProgramDerivedAddressSync({
+      programAddress: address(programId),
+      seeds: [SEED.prefix, SEED.multisig, getAddressEncoder().encode(identity)]
+    })
+
+    return multisigPda
   }
 
   /**
@@ -365,22 +436,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     }
 
     return provider ? createSolanaRpc(provider) : undefined
-  }
-
-  /**
-   * Returns the address of the Squads multisig account.
-   *
-   * @returns {Promise<string>} The multisig address.
-   * @throws {Error} If no `multisigPdaOrCreateKey` is configured.
-   */
-  async getAddress () {
-    if (!this._multisigPda) {
-      throw new Error(
-        'No multisig address is configured. Provide `multisigPdaOrCreateKey` in the config.'
-      )
-    }
-
-    return this._multisigPda
   }
 
   /**
@@ -1329,33 +1384,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     }
 
     return index
-  }
-
-  /**
-   * Resolves what the config names, an address or a create key, to the multisig address.
-   *
-   * @protected
-   * @param {string} multisigPdaOrCreateKey - The multisig address, or the create key it derives from.
-   * @returns {Address} The multisig address.
-   * @throws {Error} If the value is not an address.
-   */
-  _toMultisigPda (multisigPdaOrCreateKey) {
-    const identity = address(multisigPdaOrCreateKey)
-
-    if (isOffCurveAddress(identity)) {
-      return identity
-    }
-
-    const [multisigPda] = getProgramDerivedAddressSync({
-      programAddress: this._programId,
-      seeds: [
-        SEED.prefix,
-        SEED.multisig,
-        getAddressEncoder().encode(identity)
-      ]
-    })
-
-    return multisigPda
   }
 
   /**

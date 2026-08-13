@@ -149,6 +149,10 @@ export const SQUADS_PROGRAM_ADDRESS: "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pC
  * @type {{ [K in SquadsTransactionKind]: K }}
  */
 export const TRANSACTION_KIND: { [K in SquadsTransactionKind]: K; };
+export namespace SECRET_SIZE {
+    let privateKey: number;
+    let keyPair: number;
+}
 /**
  * Read-only Solana Squads multisig wallet account implementation.
  *
@@ -179,13 +183,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     protected _programId: Address;
     /**
-     * The address of the Squads multisig account.
-     *
-     * @protected
-     * @type {string | undefined}
-     */
-    protected _multisigPda: string | undefined;
-    /**
      * The commitment level for transactions.
      *
      * @protected
@@ -200,6 +197,33 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     protected _rpc: SolanaRpc | undefined;
     /**
+     * Normalizes a create key secret to bytes, rejecting what cannot be one. Both the address
+     * derivation and the signer build read a secret through this, so they refuse the same inputs.
+     *
+     * @param {string | Uint8Array} createKeySecret - The secret, base58 or raw bytes.
+     * @returns {Uint8Array} The secret's bytes, either 32 or 64 of them.
+     * @throws {Error} If the secret is missing, or is neither 32 nor 64 bytes.
+     */
+    static toCreateKeySecretBytes(createKeySecret: string | Uint8Array): Uint8Array;
+    /**
+     * Derives the create key's address from its secret, without building a signer. Synchronous, so a
+     * multisig's address is known at construction rather than on the first call that needs it.
+     *
+     * @param {string | Uint8Array} createKeySecret - The create key's secret. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
+     * @returns {string} The create key's address.
+     */
+    static getCreateKey(createKeySecret: string | Uint8Array): string;
+    /**
+     * Resolves what a config names, an address or a create key, to the multisig's address. A create
+     * key is on the ed25519 curve and a multisig address is not, so the two need no disambiguation
+     * beyond the value itself.
+     *
+     * @param {string} programId - The Squads program the multisig belongs to.
+     * @param {string} [multisigPdaOrCreateKey] - The multisig address, or the create key it derives from.
+     * @returns {Address | undefined} The multisig address, or undefined when neither is given.
+     */
+    static toMultisigPda(programId: string, multisigPdaOrCreateKey?: string): Address | undefined;
+    /**
      * Builds the RPC client a configuration asks for: one client per URL behind a failover proxy
      * when it names a list, a single client when it names one URL, and none when it names neither.
      *
@@ -213,13 +237,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @param {string | undefined} signerAddress - The signer's address, or undefined for a pure read-only account.
      * @param {SolanaMultisigSquadsReadOnlyConfig} config - The configuration object.
      */
-    /**
-     * Returns the address of the Squads multisig account.
-     *
-     * @returns {Promise<string>} The multisig address.
-     * @throws {Error} If no `multisigPdaOrCreateKey` is configured.
-     */
-    getAddress(): Promise<string>;
     /**
      * Returns whether the multisig account exists on-chain.
      *
@@ -356,24 +373,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     quoteDeploy(memberCount?: number): Promise<Omit<TransactionResult, "hash">>;
     /**
-     * Returns the size of the `Multisig` account a multisig of the given membership is stored in.
-     *
-     * @protected
-     * @param {number} memberCount - How many members the multisig holds.
-     * @returns {number} The account's size, in bytes.
-     */
-    protected _multisigAccountSize(memberCount: number): number;
-    /**
-     * Adds up what creating a multisig costs: the account's rent, the protocol's creation fee, and
-     * the two signatures `multisigCreateV2` needs.
-     *
-     * @protected
-     * @param {bigint} creationFee - The protocol's multisig creation fee.
-     * @param {bigint} rent - The multisig account's rent-exempt minimum.
-     * @returns {bigint} The whole cost, in lamports.
-     */
-    protected _quoteDeployFrom(creationFee: bigint, rent: bigint): bigint;
-    /**
      * Quotes the costs of a propose operation.
      *
      * @param {SolanaTransaction} tx - The transaction to quote, either arm of `SolanaTransaction`.
@@ -465,6 +464,33 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
         numWritableNonSigners: number;
     };
     /**
+     * Validates a multisig's membership size against what the program can hold.
+     *
+     * @protected
+     * @param {number} memberCount - How many members the multisig would hold.
+     * @returns {void} Nothing; throws when the count is out of range.
+     * @throws {Error} If the count is not an integer between 1 and 65,535.
+     */
+    protected _validateMemberCount(memberCount: number): void;
+    /**
+     * Returns the size of the `Multisig` account a multisig of the given membership is stored in.
+     *
+     * @protected
+     * @param {number} memberCount - How many members the multisig holds.
+     * @returns {number} The account's size, in bytes.
+     */
+    protected _multisigAccountSize(memberCount: number): number;
+    /**
+     * Adds up what creating a multisig costs: the account's rent, the protocol's creation fee, and
+     * the two signatures `multisigCreateV2` needs.
+     *
+     * @protected
+     * @param {bigint} creationFee - The protocol's multisig creation fee.
+     * @param {bigint} rent - The multisig account's rent-exempt minimum.
+     * @returns {bigint} The whole cost, in lamports.
+     */
+    protected _quoteDeployFrom(creationFee: bigint, rent: bigint): bigint;
+    /**
      * Returns the size of the `VaultTransaction` account a message of the given size is stored in.
      *
      * @protected
@@ -513,15 +539,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @throws {Error} If the id is not an integer between 0 and `MAX.proposalIndex`.
      */
     protected _toProposalIndex(proposalId: number | bigint | string): bigint;
-    /**
-     * Resolves what the config names, an address or a create key, to the multisig address.
-     *
-     * @protected
-     * @param {string} multisigPdaOrCreateKey - The multisig address, or the create key it derives from.
-     * @returns {Address} The multisig address.
-     * @throws {Error} If the value is not an address.
-     */
-    protected _toMultisigPda(multisigPdaOrCreateKey: string): Address;
     /**
      * Derives the address of the transaction account stored at the given index.
      *

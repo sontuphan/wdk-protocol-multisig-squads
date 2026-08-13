@@ -35,7 +35,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *
      * @param {string | Uint8Array} createKeySecret - The create key's secret. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
      * @returns {Promise<KeyPairSigner>} The create key signer.
-     * @throws {Error} If the secret is missing, or is neither 32 nor 64 bytes.
      */
     static getCreateKeySigner(createKeySecret: string | Uint8Array): Promise<KeyPairSigner>;
     /**
@@ -56,14 +55,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @type {KeyPair}
      */
     get keyPair(): KeyPair;
-    /**
-     * Returns the address of the Squads multisig account, resolving it from `createKeySecret` when
-     * the config names no multisig itself.
-     *
-     * @returns {Promise<string>} The multisig address.
-     * @throws {Error} If the multisig address cannot be resolved.
-     */
-    getAddress(): Promise<string>;
     /**
      * Returns the address of the member this account votes and proposes as.
      *

@@ -1147,7 +1147,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
     it('refuses to read a multisig with no address configured', async () => {
       const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, { provider: TEST_RPC_URL })
 
-      await expect(account.getAddress()).rejects.toThrow(/No multisig address is configured/)
+      await expect(account.getAddress()).rejects.toThrow(/address must be set/)
     })
   })
 })

@@ -19,6 +19,7 @@ import { NoSuchElementError, NotImplementedError, ValueError } from '@tetherto/w
 import { WalletAccountSolana } from '@tetherto/wdk-wallet-solana'
 
 import WalletAccountReadOnlyMultisigSolanaSquads, {
+  SECRET_SIZE,
   TRANSACTION_KIND
 } from './wallet-account-read-only-multisig-solana-squads.js'
 
@@ -26,7 +27,7 @@ import { NotSupportedError } from './errors.js'
 
 import { address, getAddressEncoder } from '@solana/addresses'
 
-import { getBase58Encoder, getBase64Encoder } from '@solana/codecs'
+import { getBase64Encoder } from '@solana/codecs'
 
 import {
   ACCOUNT,
@@ -96,8 +97,6 @@ const ACCOUNT_ROLE = { readonly: 0, writable: 1, readonlySigner: 2, writableSign
 
 const SEED = { prefix: 'multisig', multisig: 'multisig' }
 
-const SIZE = { privateKey: 32, keyPair: 64 }
-
 const DEFAULT = { threshold: 1, timeLock: 0, vaultIndex: 0 }
 
 const NO_EPHEMERAL_SIGNERS = 0
@@ -136,30 +135,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {string | Uint8Array} createKeySecret - The create key's secret. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
    * @returns {Promise<KeyPairSigner>} The create key signer.
-   * @throws {Error} If the secret is missing, or is neither 32 nor 64 bytes.
    */
   static async getCreateKeySigner (createKeySecret) {
-    if (!createKeySecret) {
-      throw new Error(
-        'A `createKeySecret` is required to create a multisig. Provide it in the configuration.'
-      )
-    }
+    const bytes = this.toCreateKeySecretBytes(createKeySecret)
 
-    const bytes = typeof createKeySecret === 'string'
-      ? getBase58Encoder().encode(createKeySecret)
-      : createKeySecret
-
-    if (bytes.length === SIZE.privateKey) {
-      return createKeyPairSignerFromPrivateKeyBytes(bytes)
-    }
-
-    if (bytes.length === SIZE.keyPair) {
-      return createKeyPairSignerFromBytes(bytes)
-    }
-
-    throw new Error(
-      `Invalid createKeySecret of ${bytes.length} bytes. Expected ${SIZE.privateKey} or ${SIZE.keyPair}.`
-    )
+    return bytes.length === SECRET_SIZE.privateKey
+      ? createKeyPairSignerFromPrivateKeyBytes(bytes)
+      : createKeyPairSignerFromBytes(bytes)
   }
 
   /**
@@ -187,23 +169,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    */
   get keyPair () {
     return this._signerAccount.keyPair
-  }
-
-  /**
-   * Returns the address of the Squads multisig account, resolving it from `createKeySecret` when
-   * the config names no multisig itself.
-   *
-   * @returns {Promise<string>} The multisig address.
-   * @throws {Error} If the multisig address cannot be resolved.
-   */
-  async getAddress () {
-    if (!this._multisigPda && this._config.createKeySecret) {
-      const { address } = await WalletAccountMultisigSolanaSquads.getCreateKeySigner(this._config.createKeySecret)
-
-      this._multisigPda = this._toMultisigPda(address)
-    }
-
-    return super.getAddress()
   }
 
   /**
@@ -321,13 +286,11 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       seeds: [SEED.prefix, SEED.multisig, getAddressEncoder().encode(createKeySigner.address)]
     })
 
-    if (this._multisigPda && this._multisigPda !== expectedPda) {
+    if (this._address && this._address !== expectedPda) {
       throw new Error(
-        `The configured multisig ${this._multisigPda} does not derive from the configured createKeySecret (${expectedPda}).`
+        `The configured multisig ${this._address} does not derive from the configured createKeySecret (${expectedPda}).`
       )
     }
-
-    this._multisigPda = expectedPda
 
     const members = owners ?? [await this.getSignerAddress()]
 

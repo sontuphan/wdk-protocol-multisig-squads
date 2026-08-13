@@ -28,6 +28,7 @@
     "test:integration:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest tests/integration --coverage"
   },
   "dependencies": {
+    "@noble/curves": "1.9.7",
     "@noble/hashes": "2.2.0",
     "@solana-program/token": "0.7.0",
     "@solana/addresses": "3.0.3",

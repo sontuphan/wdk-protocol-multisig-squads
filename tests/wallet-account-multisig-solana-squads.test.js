@@ -421,6 +421,14 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     expect(await account.getAddress()).toBe(TEST_MULTISIG_PDA)
   })
 
+  // Pins REVIEW.logic.md L18: the base class's address field holds the multisig, never the
+  // signer's address, so the two cannot be confused.
+  it('holds the multisig address in the base class, not the signer', async () => {
+    expect(account._address).toBe(TEST_MULTISIG_PDA)
+    expect(await account.getAddress()).toBe(TEST_MULTISIG_PDA)
+    expect(await account.getSignerAddress()).toBe(TEST_SIGNER)
+  })
+
   it('exposes the signer address', async () => {
     expect(await account.getSignerAddress()).toBe(TEST_SIGNER)
   })
@@ -449,7 +457,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     })
 
     await expect((await nameless.getAccount(0)).toReadOnlyAccount())
-      .rejects.toThrow('No multisig address is configured. Provide `multisigPdaOrCreateKey` in the config.')
+      .rejects.toThrow("The account's address must be set to perform this operation.")
   })
 
   it('refuses a message carrying no instruction, before touching the network', async () => {
@@ -524,6 +532,42 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
     expect(error).toBeInstanceOf(ValueError)
     expect(error).not.toBeInstanceOf(NotSupportedError)
+  })
+
+  describe('getCreateKey', () => {
+    it('derives the create key from a 32-byte private key, synchronously', () => {
+      expect(WalletAccountMultisigSolanaSquads.getCreateKey(CREATE_KEY_SECRET)).toBe(CREATE_KEY)
+    })
+
+    it('reads the create key out of a 64-byte keypair', () => {
+      const keyPair = new Uint8Array(64)
+
+      keyPair.set(getBase58Encoder().encode(CREATE_KEY_SECRET), 0)
+      keyPair.set(getBase58Encoder().encode(CREATE_KEY), 32)
+
+      expect(WalletAccountMultisigSolanaSquads.getCreateKey(keyPair)).toBe(CREATE_KEY)
+    })
+
+    it('agrees with the signer it would build', async () => {
+      const signer = await WalletAccountMultisigSolanaSquads.getCreateKeySigner(CREATE_KEY_SECRET)
+
+      expect(WalletAccountMultisigSolanaSquads.getCreateKey(CREATE_KEY_SECRET)).toBe(signer.address)
+    })
+
+    it.each([[undefined], [new Uint8Array(31)]])('refuses %s', (bad) => {
+      expect(() => WalletAccountMultisigSolanaSquads.getCreateKey(bad)).toThrow(/createKeySecret/)
+    })
+
+    it('knows the multisig address at construction', async () => {
+      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: TEST_RPC_URL,
+        createKeySecret: CREATE_KEY_SECRET
+      })
+      const account = await wallet.getAccount(0)
+
+      // No RPC, no await on the derivation: the constructor resolved it.
+      expect(account._address).toBe(DERIVED_MULTISIG_PDA)
+    })
   })
 
   describe('getCreateKeySigner', () => {
