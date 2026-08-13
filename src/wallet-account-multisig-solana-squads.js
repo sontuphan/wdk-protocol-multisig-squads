@@ -339,7 +339,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
           role: ACCOUNT_ROLE.readonlySigner,
           signer: createKeySigner
         },
-        { address: address(this._signerAddress), role: ACCOUNT_ROLE.writableSigner },
+        this._getRentPayerAccount(this._signerAddress),
         { address: address(PROGRAM_ADDRESS.system), role: ACCOUNT_ROLE.readonly }
       ],
       data: INSTRUCTION.multisigCreateV2.encode({
@@ -810,6 +810,14 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /** @private */
+  _getRentPayerAccount (signerAddress) {
+    return {
+      address: address(this._config.rentPayer ?? signerAddress),
+      role: ACCOUNT_ROLE.writableSigner
+    }
+  }
+
+  /** @private */
   async _proposeConfigTransaction (multisig, actions) {
     return this._proposeTransaction(
       multisig,
@@ -846,7 +854,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const transactionPda = this._getTransactionPda(multisigPda, index)
     const proposalPda = this._getProposalPda(multisigPda, index)
 
-    const creator = { address: address(signerAddress), role: ACCOUNT_ROLE.writableSigner }
+    const rentPayer = this._getRentPayerAccount(signerAddress)
+    const creator = rentPayer.address === signerAddress
+      ? rentPayer
+      : { address: address(signerAddress), role: ACCOUNT_ROLE.readonlySigner }
     const systemProgram = { address: address(PROGRAM_ADDRESS.system), role: ACCOUNT_ROLE.readonly }
 
     const instructions = [
@@ -856,7 +867,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
           { address: address(multisigPda), role: ACCOUNT_ROLE.writable },
           { address: transactionPda, role: ACCOUNT_ROLE.writable },
           creator,
-          creator,
+          rentPayer,
           systemProgram
         ],
         data
@@ -867,7 +878,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
           { address: address(multisigPda), role: ACCOUNT_ROLE.readonly },
           { address: proposalPda, role: ACCOUNT_ROLE.writable },
           creator,
-          creator,
+          rentPayer,
           systemProgram
         ],
         data: INSTRUCTION.proposalCreate.encode({ transactionIndex: index, draft: false })

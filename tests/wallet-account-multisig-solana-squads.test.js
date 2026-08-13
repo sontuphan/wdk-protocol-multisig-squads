@@ -664,6 +664,21 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(instruction.programAddress).toBe(SQUADS_PROGRAM_ADDRESS)
     })
 
+    it('charges a configured rentPayer for the creation rather than the signer', async () => {
+      const { account, sendTransaction } = await deployingAccount({
+        config: { rentPayer: OTHER_MEMBER }
+      })
+
+      await account.deploy()
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+      const [instruction] = instructions
+
+      expect(instruction.accounts).toHaveLength(6)
+      expect(instruction.accounts.map((a) => a.role)).toEqual([0, 1, 1, 2, 3, 0])
+      expect(instruction.accounts[4].address).toBe(OTHER_MEMBER)
+    })
+
     it('defaults to the signer alone with threshold 1', async () => {
       const { account, sendTransaction } = await deployingAccount()
 
@@ -871,11 +886,13 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       isMember = true,
       deployed = true,
       threshold = 2,
-      timeLock = 0
+      timeLock = 0,
+      config = {}
     } = {}) {
       const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
         provider: TEST_RPC_URL,
-        multisigPdaOrCreateKey: TEST_MULTISIG_PDA
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA,
+        ...config
       })
       const account = await wallet.getAccount(0)
 
@@ -910,6 +927,34 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         .toEqual([48, 250, 78, 168, 208, 226, 218, 211])
       expect(Array.from(instructions[1].data.slice(0, 8)))
         .toEqual([220, 60, 73, 224, 30, 108, 79, 159])
+    })
+
+    it('puts the signer in both the creator and the rent payer slot by default', async () => {
+      const { account, sendTransaction } = await proposingAccount()
+
+      await account.propose(TX)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+
+      for (const { accounts } of instructions) {
+        expect(accounts[2]).toEqual({ address: TEST_SIGNER, role: 3 })
+        expect(accounts[3]).toEqual({ address: TEST_SIGNER, role: 3 })
+      }
+    })
+
+    it('keeps the signer as creator and charges a configured rentPayer for the rent', async () => {
+      const { account, sendTransaction } = await proposingAccount({
+        config: { rentPayer: OTHER_MEMBER }
+      })
+
+      await account.propose(TX)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+
+      for (const { accounts } of instructions) {
+        expect(accounts[2]).toEqual({ address: TEST_SIGNER, role: 2 })
+        expect(accounts[3]).toEqual({ address: OTHER_MEMBER, role: 3 })
+      }
     })
 
     it('proposes at the next transaction index', async () => {
