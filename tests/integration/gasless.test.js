@@ -30,7 +30,11 @@ import {
   deployTestToken,
   sendTestTokensTo
 } from './helpers/chain.js'
-import { GASLESS_PACKAGE_PATH, createGaslessMultisig, isGaslessPackageAvailable } from './helpers/gasless.js'
+import {
+  GASLESS_PACKAGE_PATH,
+  createGaslessMultisig,
+  isGaslessPackageAvailable
+} from './helpers/gasless.js'
 import { startKoraPaymaster } from './helpers/kora.js'
 import { startSolanaTestValidator } from './helpers/validator.js'
 
@@ -46,6 +50,9 @@ const SEED_PHRASE =
 const CREATE_KEY_SIZE = 32
 const FEE_IN_TOKEN = 10_000
 const MEMBER_TOKENS = 10_000_000n
+// The rent the multisig account itself locks up, measured against the validator.
+const MULTISIG_RENT = 2_039_280n
+
 // The lamport network fee `quoteDeploy` folds into its quote, which the paymaster now pays.
 const NETWORK_FEE_QUOTED = 10_000n
 const VAULT_FUNDING = 2n * LAMPORTS_PER_SOL
@@ -307,6 +314,73 @@ describe('@tetherto/wdk-protocol-multisig-squads + @tetherto/wdk-wallet-solana-g
 
       // A lamport-denominated rent quote, unrelated to the token amount actually charged.
       expect(fee).toBeGreaterThan(BigInt(FEE_IN_TOKEN) * 100n)
+    })
+  })
+
+  describe('with `rentPayer` set to the paymaster', () => {
+    it('runs the whole lifecycle from members holding no lamports at all', async () => {
+      const { Manager } = await createGaslessMultisig()
+
+      const manager = new Manager(SEED_PHRASE, {
+        provider: TEST_RPC_URL,
+        commitment: 'confirmed',
+        createKeySecret: new Uint8Array(randomBytes(CREATE_KEY_SIZE)),
+        rentPayer: paymaster.address,
+        paymasterUrl: paymaster.url,
+        paymasterAddress: paymaster.address,
+        paymasterToken: { address: testToken.mint }
+      })
+
+      // Two members that never held SOL, funded with the fee token only.
+      const sponsored = [await manager.getAccount(3), await manager.getAccount(4)]
+      const members = await Promise.all(sponsored.map((account) => account.getSignerAddress()))
+
+      for (const member of members) {
+        await sendTestTokensTo(rpc, testToken, member, MEMBER_TOKENS)
+        expect(await solBalance(member)).toBe(0n)
+      }
+
+      const paymasterSolBefore = await solBalance(paymaster.address)
+
+      const deployed = await sponsored[0].deploy(members, 2)
+
+      await confirmTransaction(rpc, deployed.hash)
+
+      expect(await sponsored[0].isDeployed()).toBe(true)
+      expect(await sponsored[0].getThreshold()).toBe(2)
+
+      const vault = await sponsored[0].getVaultAddress(0)
+
+      await airdrop(rpc, vault, VAULT_FUNDING)
+
+      const recipient = await generateKeyPairSigner()
+      const proposal = await sponsored[0].propose({
+        to: recipient.address,
+        value: VAULT_TRANSFER
+      })
+
+      await confirmTransaction(rpc, proposal.hash)
+
+      for (const account of sponsored) {
+        const approval = await account.approveProposal(proposal.proposalId)
+
+        await confirmTransaction(rpc, approval.hash)
+      }
+
+      const executed = await sponsored[1].executeProposal(proposal.proposalId)
+
+      await confirmTransaction(rpc, executed.hash)
+
+      expect(await solBalance(recipient.address)).toBe(VAULT_TRANSFER)
+
+      // Not one lamport left either member: the paymaster carried the rent as well as the fee.
+      for (const member of members) {
+        expect(await solBalance(member)).toBe(0n)
+      }
+
+      expect(paymasterSolBefore - await solBalance(paymaster.address)).toBeGreaterThan(
+        MULTISIG_RENT
+      )
     })
   })
 
