@@ -348,10 +348,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Quotes the costs of a propose operation.
      *
-     * @param {SolanaTransaction} tx - The transaction to quote.
+     * @param {SolanaTransaction} tx - The transaction to quote, either arm of `SolanaTransaction`.
      * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged over this account's configuration.
-     * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transaction quote, in lamports.
-     * @throws {Error} If the multisig does not exist, the transaction is malformed, or the RPC request fails.
+     * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transaction quote, in lamports. Sized from the message the proposal would store, so it is exact for any transaction `propose` accepts.
+     * @throws {ValueError} If `tx` is neither `{ to, value }` nor a message the vault can execute.
+     * @throws {Error} If the multisig does not exist or the RPC request fails.
      */
     quotePropose(tx: SolanaTransaction, config?: SolanaMultisigSquadsConfig): Promise<Omit<TransactionResult, "hash">>;
     /**
@@ -406,6 +407,35 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @throws {Error} If the account is missing or is not a program config.
      */
     protected _getProgramConfig(): Promise<SquadsProgramConfig>;
+    /**
+     * Normalizes a proposed transaction into the instruction list a vault transaction executes. A
+     * `{ to, value }` transaction becomes a single SOL transfer; a message is taken as it stands,
+     * minus the lifetime and version a stored message has no room for.
+     *
+     * @protected
+     * @param {Address} vaultPda - The vault the instructions execute from.
+     * @param {SolanaTransaction} tx - The transaction to propose.
+     * @returns {Object[]} The instructions, in kit's shape.
+     * @throws {ValueError} If the transaction is neither arm of `SolanaTransaction`, carries no instruction, names a different fee payer, or requires a signature the vault cannot give.
+     */
+    protected _toProposedInstructions(vaultPda: Address, tx: SolanaTransaction): any[];
+    /**
+     * Compiles instructions into the message a vault transaction stores, in both the form the
+     * create instruction carries and the size the account will be allocated at.
+     *
+     * @protected
+     * @param {Address} payer - The vault the message is executed from, which is its first key.
+     * @param {Object[]} instructions - The instructions, in kit's shape.
+     * @returns {{ bytes: Uint8Array, storedSize: number, accountKeys: Address[], numSigners: number, numWritableSigners: number, numWritableNonSigners: number }} The compiled message.
+     */
+    protected _compileTransactionMessage(payer: Address, instructions: any[]): {
+        bytes: Uint8Array;
+        storedSize: number;
+        accountKeys: Address[];
+        numSigners: number;
+        numWritableSigners: number;
+        numWritableNonSigners: number;
+    };
     /**
      * Returns the size of the `VaultTransaction` account a message of the given size is stored in.
      *

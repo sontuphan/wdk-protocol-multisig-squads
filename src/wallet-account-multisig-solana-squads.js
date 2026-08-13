@@ -33,10 +33,7 @@ import {
   CONFIG_ACTION,
   CONFIG_ACTIONS_ENCODER,
   INSTRUCTION,
-  PROPOSAL_STATUS,
-  STORED_TRANSACTION_MESSAGE,
-  SYSTEM_TRANSFER,
-  TRANSACTION_MESSAGE
+  PROPOSAL_STATUS
 } from './helpers/layouts.js'
 
 import { getProgramDerivedAddressSync } from './helpers/program-derived-address.js'
@@ -362,21 +359,23 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /**
-   * Proposes a transaction to the multisig, open for voting.
+   * Proposes a transaction to the multisig, open for voting. `tx` is either `{ to, value }` for a
+   * SOL transfer or a message carrying `instructions`, which the vault executes as they stand.
    *
    * @param {SolanaTransaction} tx - The transaction to propose.
    * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options.
    * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
+   * @throws {ValueError} If `tx` is neither `{ to, value }` nor a message the vault can execute.
    * @throws {Error} If the multisig does not exist, the signer cannot propose, or the RPC request fails.
-   * @throws {NotImplementedError} If `tx` is anything but a native transfer.
    */
   async propose (tx, transactionOptions = {}) {
-    const vaultPda = await this.getVaultAddress(DEFAULT.vaultIndex)
-
-    return this._proposeVaultTransaction(
-      this._encodeTransactionMessage(vaultPda, tx),
-      transactionOptions
+    const vaultPda = address(await this.getVaultAddress(DEFAULT.vaultIndex))
+    const compiled = this._compileTransactionMessage(
+      vaultPda,
+      this._toProposedInstructions(vaultPda, tx)
     )
+
+    return this._proposeVaultTransaction(compiled, transactionOptions)
   }
 
   /**
@@ -945,89 +944,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         data: INSTRUCTION.vaultTransactionExecute.encode()
       }
     ]
-  }
-
-  /** @private */
-  _encodeTransactionMessage (vaultPda, tx) {
-    if (!tx || tx.to === undefined || tx.value === undefined) {
-      throw new NotImplementedError('propose(tx) for anything but a native transfer')
-    }
-
-    return this._compileTransactionMessage(address(vaultPda), [
-      {
-        programAddress: address(PROGRAM_ADDRESS.system),
-        accounts: [
-          { address: address(vaultPda), role: ACCOUNT_ROLE.writableSigner },
-          { address: address(tx.to), role: ACCOUNT_ROLE.writable }
-        ],
-        data: SYSTEM_TRANSFER.encode({ lamports: BigInt(tx.value) })
-      }
-    ])
-  }
-
-  /** @private */
-  _compileTransactionMessage (payer, instructions) {
-    const roles = new Map()
-    const note = (candidate, signer, writable) => {
-      const current = roles.get(candidate) ?? { signer: false, writable: false }
-
-      roles.set(candidate, {
-        signer: current.signer || signer,
-        writable: current.writable || writable
-      })
-    }
-
-    note(payer, true, true)
-
-    for (const instruction of instructions) {
-      note(instruction.programAddress, false, false)
-
-      for (const account of instruction.accounts) {
-        note(
-          account.address,
-          account.role === ACCOUNT_ROLE.readonlySigner || account.role === ACCOUNT_ROLE.writableSigner,
-          account.role === ACCOUNT_ROLE.writable || account.role === ACCOUNT_ROLE.writableSigner
-        )
-      }
-    }
-
-    const entries = [...roles.entries()]
-    const group = (signer, writable) => entries
-      .filter(([, role]) => role.signer === signer && role.writable === writable)
-      .map(([candidate]) => candidate)
-
-    const keys = [
-      ...group(true, true),
-      ...group(true, false),
-      ...group(false, true),
-      ...group(false, false)
-    ]
-
-    const compiled = instructions.map((instruction) => ({
-      programIdIndex: keys.indexOf(instruction.programAddress),
-      accountIndexes: instruction.accounts.map((account) => keys.indexOf(account.address)),
-      data: instruction.data
-    }))
-
-    const header = {
-      numSigners: entries.filter(([, role]) => role.signer).length,
-      numWritableSigners: group(true, true).length,
-      numWritableNonSigners: group(false, true).length
-    }
-
-    const message = {
-      ...header,
-      accountKeys: keys,
-      instructions: compiled,
-      addressTableLookups: []
-    }
-
-    return {
-      bytes: TRANSACTION_MESSAGE.encode(message),
-      storedSize: STORED_TRANSACTION_MESSAGE.getSizeFromValue(message),
-      accountKeys: keys,
-      ...header
-    }
   }
 
   /** @private */

@@ -24,7 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals
 
 import * as multisig from '@sqds/multisig'
 import { generated, utils } from '@sqds/multisig'
-import { PublicKey, TransactionMessage, SystemProgram } from '@solana/web3.js'
+import { PublicKey, TransactionInstruction, TransactionMessage, SystemProgram } from '@solana/web3.js'
 import { getBase58Decoder, getBase58Encoder, getU64Encoder } from '@solana/codecs'
 
 import { address, getProgramDerivedAddress } from '@solana/addresses'
@@ -76,6 +76,7 @@ const OWNERS = [
 // transfer target.
 const SIGNER = OWNERS[0]
 const SECOND_OWNER = OWNERS[1]
+const MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'
 const PAYEE = OWNERS[2]
 
 const SYSTEM_PROGRAM = '11111111111111111111111111111111'
@@ -207,6 +208,38 @@ function toWeb3 (instruction) {
     })),
     data: Buffer.from(instruction.data)
   }
+}
+
+/**
+ * Converts a web3.js instruction into the kit shape `propose` takes, so one instruction can drive
+ * both this package and the SDK reference.
+ *
+ * @param {Object} instruction - A web3.js `TransactionInstruction`.
+ * @returns {Object} The instruction in kit's shape.
+ */
+function toKitInstruction ({ programId, keys, data }) {
+  return {
+    programAddress: programId.toBase58(),
+    accounts: keys.map(({ pubkey, isSigner, isWritable }) => ({
+      address: pubkey.toBase58(),
+      role: (isSigner ? 2 : 0) | (isWritable ? 1 : 0)
+    })),
+    data: new Uint8Array(data)
+  }
+}
+
+/**
+ * Reads the stored message out of a `vaultTransactionCreate` instruction's data: discriminator(8),
+ * vaultIndex(1), ephemeralSigners(1), then the message behind a u32 length.
+ *
+ * @param {Uint8Array} data - The instruction's data.
+ * @returns {number[]} The message bytes.
+ */
+function proposedMessageBytes (data) {
+  const bytes = Uint8Array.from(data)
+  const length = new DataView(bytes.buffer).getUint32(10, true)
+
+  return Array.from(bytes.slice(14, 14 + length))
 }
 
 describe('wire format', () => {
@@ -931,21 +964,43 @@ describe('wire format', () => {
       )
     }
 
+    /**
+     * Proposes a transfer and returns the message `vaultTransactionCreate` carries, which is the
+     * one the program stores. Driving `propose` rather than the compiler keeps the account roles
+     * and the transfer instruction inside what is being diffed.
+     *
+     * @param {bigint} value - The lamports to transfer.
+     * @returns {Promise<number[]>} The message bytes.
+     */
+    async function proposedMessage (value) {
+      stubSolanaRpc({
+        getAccountInfo: () => ({ context: { slot: 1 }, value: multisigAccount() }),
+        getMinimumBalanceForRentExemption: () => 1000000
+      })
+
+      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_SIGNATURE, fee: 5000n }))
+
+      account._signerAccount.sendTransaction = sendTransaction
+
+      await account.propose({ to: RECIPIENT, value })
+
+      // vaultTransactionCreate: discriminator(8), vaultIndex(1), ephemeralSigners(1), then the
+      // message behind a u32 length.
+      const { data } = sendTransaction.mock.calls[0][0].instructions[0]
+      const length = new DataView(data.buffer, data.byteOffset).getUint32(10, true)
+
+      return Array.from(data.slice(14, 14 + length))
+    }
+
     it.each([1n, 1000000n, 18446744073709551615n])(
       'matches the SDK for a transfer of %s lamports',
       async (value) => {
-        const vault = TEST_OWN_VAULT
-
-        expect(Array.from(account._encodeTransactionMessage(vault, { to: RECIPIENT, value }).bytes))
-          .toEqual(reference(vault, value))
+        expect(await proposedMessage(value)).toEqual(reference(TEST_OWN_VAULT, value))
       }
     )
 
     it('is 120 bytes for a native transfer', async () => {
-      const vault = TEST_OWN_VAULT
-
-      expect(account._encodeTransactionMessage(vault, { to: RECIPIENT, value: 1n }).bytes)
-        .toHaveLength(120)
+      expect(await proposedMessage(1n)).toHaveLength(120)
     })
 
   })
@@ -1185,13 +1240,61 @@ describe('wire format', () => {
           .toEqual([TEST_OWN_VAULT, PAYEE, SYSTEM_PROGRAM])
       })
 
-      it('refuses a transaction that is not a native transfer', async () => {
-      const error = await account.propose({ instructions: [] }).catch((thrown) => thrown)
+      it('proposes the instructions a message carries, byte-for-byte with the SDK', async () => {
+        serve({ [TEST_OWN_MULTISIG]: multisigAccount() })
 
-      expect(error).toBeInstanceOf(NotImplementedError)
-      expect(error.message)
-        .toBe("Method 'propose(tx) for anything but a native transfer' must be implemented.")
-    })
+        const vault = new PublicKey(TEST_OWN_VAULT)
+        const transfer = SystemProgram.transfer({
+          fromPubkey: vault, toPubkey: new PublicKey(PAYEE), lamports: 1000
+        })
+        const memo = new TransactionInstruction({
+          programId: new PublicKey(MEMO_PROGRAM),
+          keys: [{ pubkey: vault, isSigner: true, isWritable: false }],
+          data: Buffer.from('hi')
+        })
+
+        const expected = Array.from(utils.transactionMessageToMultisigTransactionMessageBytes({
+          message: new TransactionMessage({
+            payerKey: vault,
+            recentBlockhash: '11111111111111111111111111111111',
+            instructions: [transfer, memo]
+          }),
+          vaultPda: vault
+        }))
+
+        await account.propose({ instructions: [transfer, memo].map(toKitInstruction) })
+
+        const [create] = submitted()
+
+        expect(proposedMessageBytes(create.data)).toEqual(expected)
+      })
+
+      it('refuses an instruction needing a signature the vault cannot give', async () => {
+        serve({ [TEST_OWN_MULTISIG]: multisigAccount() })
+
+        const error = await account.propose({
+          instructions: [{
+            programAddress: MEMO_PROGRAM,
+            accounts: [{ address: SIGNER, role: 3 }],
+            data: new Uint8Array([1])
+          }]
+        }).catch((thrown) => thrown)
+
+        expect(error.message)
+          .toBe(`The instruction needs ${SIGNER} to sign, which the vault ${TEST_OWN_VAULT} cannot do.`)
+      })
+
+      it('refuses a message that pays from somewhere else', async () => {
+        serve({ [TEST_OWN_MULTISIG]: multisigAccount() })
+
+        const error = await account.propose({
+          feePayer: SIGNER,
+          instructions: [{ programAddress: MEMO_PROGRAM, accounts: [], data: new Uint8Array([1]) }]
+        }).catch((thrown) => thrown)
+
+        expect(error.message)
+          .toBe(`The transaction pays from ${SIGNER}, but a proposal executes from the vault ${TEST_OWN_VAULT}.`)
+      })
 
     it('leaves the flag inert above threshold 1', async () => {
         serve({ [TEST_OWN_MULTISIG]: multisigAccount({ owners: [SIGNER, SECOND_OWNER], threshold: 2 }) })

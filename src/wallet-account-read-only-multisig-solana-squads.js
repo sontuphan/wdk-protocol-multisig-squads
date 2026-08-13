@@ -14,7 +14,7 @@
 
 'use strict'
 
-import { NoSuchElementError, WalletAccountReadOnly } from '@tetherto/wdk-wallet'
+import { NoSuchElementError, ValueError, WalletAccountReadOnly } from '@tetherto/wdk-wallet'
 
 import FailoverProvider from '@tetherto/wdk-failover-provider'
 
@@ -28,7 +28,14 @@ import { getBase58Encoder, getBase64Encoder, getU64Encoder } from '@solana/codec
 
 import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token'
 
-import { ACCOUNT, ACCOUNT_DISCRIMINATOR, PROPOSAL_STATUS } from './helpers/layouts.js'
+import {
+  ACCOUNT,
+  ACCOUNT_DISCRIMINATOR,
+  PROPOSAL_STATUS,
+  STORED_TRANSACTION_MESSAGE,
+  SYSTEM_TRANSFER,
+  TRANSACTION_MESSAGE
+} from './helpers/layouts.js'
 
 import { getProgramDerivedAddressSync } from './helpers/program-derived-address.js'
 
@@ -204,8 +211,11 @@ export const TRANSACTION_KIND = { vault: 'vault', config: 'config', batch: 'batc
 
 const PROGRAM_ADDRESS = {
   default: '11111111111111111111111111111111',
+  system: '11111111111111111111111111111111',
   clockSysvar: 'SysvarC1ock11111111111111111111111111111111'
 }
+
+const ACCOUNT_ROLE = { readonly: 0, writable: 1, readonlySigner: 2, writableSigner: 3 }
 
 const PROPOSAL_STATUS_NAMES = [
   'Draft',
@@ -229,13 +239,9 @@ const PROPOSAL_STATUS_PHRASES = [
 // What is left of the byte arithmetic: the account sizes the rent quotes are computed from, which
 // `src/helpers/layouts.js` cannot supply because the accounts are sized before they hold anything.
 const SIZE = {
-  address: 32,
   member: 33,
   vecPrefix: 4,
   signature: 64,
-  messageHeader: 3,
-  programIdIndex: 1,
-  systemTransferData: 12,
   multisigBase: 132,
   vaultTransactionBase: 83,
   configTransactionBase: 81,
@@ -245,11 +251,7 @@ const SIZE = {
   splTransferWithAtaMessage: 308
 }
 
-const COUNT = {
-  systemTransferAccountIndexes: 2,
-  solTransferAccountKeys: 3,
-  multisigCreateSignatures: 2n
-}
+const COUNT = { multisigCreateSignatures: 2n }
 
 const SEED = {
   prefix: 'multisig',
@@ -852,10 +854,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   /**
    * Quotes the costs of a propose operation.
    *
-   * @param {SolanaTransaction} tx - The transaction to quote.
+   * @param {SolanaTransaction} tx - The transaction to quote, either arm of `SolanaTransaction`.
    * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged over this account's configuration.
-   * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transaction quote, in lamports.
-   * @throws {Error} If the multisig does not exist, the transaction is malformed, or the RPC request fails.
+   * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transaction quote, in lamports. Sized from the message the proposal would store, so it is exact for any transaction `propose` accepts.
+   * @throws {ValueError} If `tx` is neither `{ to, value }` nor a message the vault can execute.
+   * @throws {Error} If the multisig does not exist or the RPC request fails.
    */
   async quotePropose (tx, config) {
     const account = await this._withConfig(config)
@@ -871,19 +874,14 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       throw new Error('The wallet must be connected to a provider to quote transactions.')
     }
 
-    address(tx.to)
+    const vaultPda = address(await account.getVaultAddress(DEFAULT.vaultIndex))
+    const compiled = account._compileTransactionMessage(
+      vaultPda,
+      account._toProposedInstructions(vaultPda, tx)
+    )
 
-    const instructionSize =
-      SIZE.programIdIndex +
-      (SIZE.vecPrefix + COUNT.systemTransferAccountIndexes) +
-      (SIZE.vecPrefix + SIZE.systemTransferData)
-    const messageSize =
-      SIZE.messageHeader +
-      (SIZE.vecPrefix + SIZE.address * COUNT.solTransferAccountKeys) +
-      (SIZE.vecPrefix + instructionSize) +
-      SIZE.vecPrefix
     const rent = await account._quoteProposalRent(
-      account._vaultTransactionSize(messageSize),
+      account._vaultTransactionSize(compiled.storedSize),
       owners.length
     )
 
@@ -1083,6 +1081,147 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     const { creationFee, treasury } = ACCOUNT.programConfig.decode(data)
 
     return { programConfigPda, creationFee, treasury }
+  }
+
+  /**
+   * Normalizes a proposed transaction into the instruction list a vault transaction executes. A
+   * `{ to, value }` transaction becomes a single SOL transfer; a message is taken as it stands,
+   * minus the lifetime and version a stored message has no room for.
+   *
+   * @protected
+   * @param {Address} vaultPda - The vault the instructions execute from.
+   * @param {SolanaTransaction} tx - The transaction to propose.
+   * @returns {Object[]} The instructions, in kit's shape.
+   * @throws {ValueError} If the transaction is neither arm of `SolanaTransaction`, carries no instruction, names a different fee payer, or requires a signature the vault cannot give.
+   */
+  _toProposedInstructions (vaultPda, tx) {
+    if (tx && tx.to !== undefined && tx.value !== undefined) {
+      return [
+        {
+          programAddress: address(PROGRAM_ADDRESS.system),
+          accounts: [
+            { address: vaultPda, role: ACCOUNT_ROLE.writableSigner },
+            { address: address(tx.to), role: ACCOUNT_ROLE.writable }
+          ],
+          data: SYSTEM_TRANSFER.encode({ lamports: BigInt(tx.value) })
+        }
+      ]
+    }
+
+    if (!tx || !Array.isArray(tx.instructions)) {
+      throw new ValueError(
+        'A proposed transaction must be either `{ to, value }` or a message carrying `instructions`.'
+      )
+    }
+
+    if (tx.instructions.length === 0) {
+      throw new ValueError('A proposed transaction must carry at least one instruction.')
+    }
+
+    const feePayer = typeof tx.feePayer === 'string' ? tx.feePayer : tx.feePayer?.address
+
+    if (feePayer !== undefined && feePayer !== vaultPda) {
+      throw new ValueError(
+        `The transaction pays from ${feePayer}, but a proposal executes from the vault ${vaultPda}.`
+      )
+    }
+
+    return tx.instructions.map((instruction) => {
+      const accounts = (instruction.accounts ?? []).map((account) => ({
+        address: address(account.address),
+        role: account.role
+      }))
+
+      for (const account of accounts) {
+        const signs = account.role === ACCOUNT_ROLE.readonlySigner ||
+          account.role === ACCOUNT_ROLE.writableSigner
+
+        if (signs && account.address !== vaultPda) {
+          throw new ValueError(
+            `The instruction needs ${account.address} to sign, which the vault ${vaultPda} cannot do.`
+          )
+        }
+      }
+
+      return {
+        programAddress: address(instruction.programAddress),
+        accounts,
+        data: instruction.data ?? new Uint8Array()
+      }
+    })
+  }
+
+  /**
+   * Compiles instructions into the message a vault transaction stores, in both the form the
+   * create instruction carries and the size the account will be allocated at.
+   *
+   * @protected
+   * @param {Address} payer - The vault the message is executed from, which is its first key.
+   * @param {Object[]} instructions - The instructions, in kit's shape.
+   * @returns {{ bytes: Uint8Array, storedSize: number, accountKeys: Address[], numSigners: number, numWritableSigners: number, numWritableNonSigners: number }} The compiled message.
+   */
+  _compileTransactionMessage (payer, instructions) {
+    const roles = new Map()
+    const note = (candidate, signer, writable) => {
+      const current = roles.get(candidate) ?? { signer: false, writable: false }
+
+      roles.set(candidate, {
+        signer: current.signer || signer,
+        writable: current.writable || writable
+      })
+    }
+
+    note(payer, true, true)
+
+    for (const instruction of instructions) {
+      note(instruction.programAddress, false, false)
+
+      for (const account of instruction.accounts) {
+        note(
+          account.address,
+          account.role === ACCOUNT_ROLE.readonlySigner || account.role === ACCOUNT_ROLE.writableSigner,
+          account.role === ACCOUNT_ROLE.writable || account.role === ACCOUNT_ROLE.writableSigner
+        )
+      }
+    }
+
+    const entries = [...roles.entries()]
+    const group = (signer, writable) => entries
+      .filter(([, role]) => role.signer === signer && role.writable === writable)
+      .map(([candidate]) => candidate)
+
+    const keys = [
+      ...group(true, true),
+      ...group(true, false),
+      ...group(false, true),
+      ...group(false, false)
+    ]
+
+    const compiled = instructions.map((instruction) => ({
+      programIdIndex: keys.indexOf(instruction.programAddress),
+      accountIndexes: instruction.accounts.map((account) => keys.indexOf(account.address)),
+      data: instruction.data
+    }))
+
+    const header = {
+      numSigners: entries.filter(([, role]) => role.signer).length,
+      numWritableSigners: group(true, true).length,
+      numWritableNonSigners: group(false, true).length
+    }
+
+    const message = {
+      ...header,
+      accountKeys: keys,
+      instructions: compiled,
+      addressTableLookups: []
+    }
+
+    return {
+      bytes: TRANSACTION_MESSAGE.encode(message),
+      storedSize: STORED_TRANSACTION_MESSAGE.getSizeFromValue(message),
+      accountKeys: keys,
+      ...header
+    }
   }
 
   /**

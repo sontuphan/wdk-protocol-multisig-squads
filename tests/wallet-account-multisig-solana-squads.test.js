@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals'
 
 import { getBase58Decoder, getBase58Encoder, getBase64Decoder } from '@solana/codecs'
 
-import { NotImplementedError } from '@tetherto/wdk-wallet'
+import { ValueError } from '@tetherto/wdk-wallet'
 
 import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 
@@ -451,9 +451,14 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       .rejects.toThrow('No multisig address is configured. Provide `multisigPdaOrCreateKey` in the config.')
   })
 
-  it('throws NotImplementedError for messages beyond a native transfer', async () => {
-    // The last write path that still refuses before touching the network.
-    await expect(account.propose({ instructions: [] })).rejects.toThrow(NotImplementedError)
+  it('refuses a message carrying no instruction, before touching the network', async () => {
+    await expect(account.propose({ instructions: [] }))
+      .rejects.toThrow('A proposed transaction must carry at least one instruction.')
+  })
+
+  it('refuses a transaction that is neither arm of SolanaTransaction', async () => {
+    await expect(account.propose({ value: 1n }))
+      .rejects.toThrow('A proposed transaction must be either `{ to, value }` or a message carrying `instructions`.')
   })
 
   // Not pending work: Squads cannot produce a multisig signature at all.
@@ -511,10 +516,13 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       .rejects.toThrow('The wallet account has been disposed.')
   })
 
-  it('separates unsupported message proposals from unimplemented writes', async () => {
-    // A consumer catching NotImplementedError to mean "unfinished" must not also catch
+  it('separates a malformed proposal from what the protocol cannot do', async () => {
+    // A consumer catching ValueError to mean "my argument was wrong" must not also catch
     // "this protocol cannot do it".
-    await expect(account.propose({ instructions: [] })).rejects.not.toThrow(NotSupportedError)
+    const error = await account.propose({ instructions: [] }).catch((thrown) => thrown)
+
+    expect(error).toBeInstanceOf(ValueError)
+    expect(error).not.toBeInstanceOf(NotSupportedError)
   })
 
   describe('deploy', () => {

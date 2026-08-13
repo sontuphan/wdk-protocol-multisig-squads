@@ -2135,6 +2135,33 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       expect(fee - rent).toBe(5000n)
     })
 
+    it('sizes an arbitrary message from the message itself', async () => {
+      const { account, rpc } = mockQuote(2)
+
+      // One instruction with no accounts and two bytes of data: 3 header + (4 + 32 vault key)
+      // + (4 + 1 program index + 4 + 0 indexes + 4 + 2 data) + 4 lookups = 90 B stored, so the
+      // transaction account is 83 + 4 + 90.
+      const { fee } = await account.quotePropose({
+        instructions: [{
+          programAddress: TEST_MULTISIG_PDA,
+          accounts: [],
+          data: new Uint8Array([1, 2])
+        }]
+      })
+
+      expect(rpcRequests(rpc, 'getMinimumBalanceForRentExemption')[0])
+        .toEqual([177, { commitment: 'confirmed' }])
+      expect(fee).toBe(4842200n)
+    })
+
+    it('refuses a message the vault cannot execute, before quoting', async () => {
+      const { account, rpc } = mockQuote(2)
+
+      await expect(account.quotePropose({ instructions: [] }))
+        .rejects.toThrow('A proposed transaction must carry at least one instruction.')
+      expect(rpcRequests(rpc, 'getMinimumBalanceForRentExemption')).toHaveLength(0)
+    })
+
     it('throws on a malformed recipient', async () => {
       const { account } = mockQuote(2)
 
