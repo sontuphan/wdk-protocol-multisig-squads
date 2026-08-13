@@ -18,14 +18,13 @@ import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals
 
 import { getBase58Decoder, getBase58Encoder, getBase64Decoder, getBase64Encoder } from '@solana/codecs'
 
-import { NoSuchElementError, NotImplementedError } from '@tetherto/wdk-wallet'
+import { NoSuchElementError, NotImplementedError, UnsupportedOperationError, WdkError } from '@tetherto/wdk-wallet'
 
 import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 
 import {
   WalletAccountReadOnlyMultisigSolanaSquads,
-  SQUADS_PROGRAM_ADDRESS,
-  NotSupportedError
+  SQUADS_PROGRAM_ADDRESS
 } from '@tetherto/wdk-protocol-multisig-squads'
 
 const TEST_RPC_URL = 'https://dummy-url.com'
@@ -2537,7 +2536,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
   })
 
-  describe('unsupported message operations', () => {
+  describe('unsupported operations', () => {
     let account
 
     beforeEach(() => {
@@ -2547,39 +2546,32 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       })
     })
 
-    it('throws NotSupportedError from getMessageProposals', async () => {
-      await expect(account.getMessageProposals(['abc'])).rejects.toThrow(NotSupportedError)
+    it('names verify as the unsupported method', async () => {
+      const error = await account.verify('hello', 'sig').catch((e) => e)
+
+      expect(error).toBeInstanceOf(UnsupportedOperationError)
+      expect(error.message).toBe("Method 'verify(message, signature)' is not supported.")
     })
 
-    it('throws NotSupportedError from getMessageProposal', async () => {
-      await expect(account.getMessageProposal('abc')).rejects.toThrow(NotSupportedError)
-    })
-
-    it('names getMessageProposal as the unsupported method', async () => {
-      const error = await account.getMessageProposal('abc').catch((e) => e)
-
-      expect(error.methodName).toBe('getMessageProposal(messageId)')
-    })
-
-    it('throws NotSupportedError from verify', async () => {
-      await expect(account.verify('hello', 'sig')).rejects.toThrow(NotSupportedError)
+    it('does not expose the message-proposal surface at all', () => {
+      expect(account.getMessageProposal).toBeUndefined()
+      expect(account.getMessageProposals).toBeUndefined()
     })
 
     // A caller doing capability detection has to tell "this protocol cannot" from "not built
     // yet", so each half is its own test.
-    it('refuses to quote a send, naming the method and the reason', async () => {
+    it('names quoteSendTransaction as the unsupported method', async () => {
       const error = await account.quoteSendTransaction({ to: MEMBER_A, value: 1n })
         .catch((thrown) => thrown)
 
-      expect(error).toBeInstanceOf(NotSupportedError)
-      expect(error.methodName).toBe('quoteSendTransaction(tx)')
-      expect(error.reason).toMatch(/does not submit transactions directly/)
+      expect(error).toBeInstanceOf(UnsupportedOperationError)
+      expect(error.message).toBe("Method 'quoteSendTransaction(tx)' is not supported.")
     })
 
-    it('reports an unsupported operation as NotSupportedError', async () => {
-      const error = await account.getMessageProposals(['abc']).catch((thrown) => thrown)
+    it('reports an unsupported operation as a WdkError', async () => {
+      const error = await account.verify('hello', 'sig').catch((thrown) => thrown)
 
-      expect(error).toBeInstanceOf(NotSupportedError)
+      expect(error).toBeInstanceOf(WdkError)
     })
 
     it('does not report pending work as unsupported', async () => {
@@ -2591,26 +2583,17 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       // quoteDeploy fails because the multisig is absent, not because Squads cannot do it.
       const error = await account.quoteDeploy().catch((thrown) => thrown)
 
-      expect(error).not.toBeInstanceOf(NotSupportedError)
+      expect(error).not.toBeInstanceOf(UnsupportedOperationError)
       expect(error.message).toMatch(/could not be read/)
     })
 
     it('is not a NotImplementedError', async () => {
       // Deliberate: a consumer catching NotImplementedError to mean "unfinished" must
       // not also swallow "this protocol cannot do it".
-      const error = await account.getMessageProposals(['abc']).catch((e) => e)
+      const error = await account.verify('hello', 'sig').catch((e) => e)
 
-      expect(error).toBeInstanceOf(NotSupportedError)
+      expect(error).toBeInstanceOf(UnsupportedOperationError)
       expect(error).not.toBeInstanceOf(NotImplementedError)
-    })
-
-    it('carries the method name and a reason', async () => {
-      const error = await account.getMessageProposals(['abc']).catch((e) => e)
-
-      expect(error.name).toBe('NotSupportedError')
-      expect(error.methodName).toBe('getMessageProposals(messageIds)')
-      expect(error.reason).toMatch(/no message-signing primitive/)
-      expect(error.message).toContain('is not supported:')
     })
   })
 

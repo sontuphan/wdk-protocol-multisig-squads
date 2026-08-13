@@ -14,11 +14,9 @@
 
 'use strict'
 
-import { NoSuchElementError, ValueError, WalletAccountReadOnly } from '@tetherto/wdk-wallet'
+import { NoSuchElementError, UnsupportedOperationError, ValueError, WalletAccountReadOnly } from '@tetherto/wdk-wallet'
 
 import FailoverProvider from '@tetherto/wdk-failover-provider'
-
-import { NotSupportedError } from './errors.js'
 
 import { createSolanaRpc } from '@solana/rpc'
 
@@ -53,7 +51,6 @@ import { ed25519 } from '@noble/curves/ed25519'
  *
  * @typedef {MultisigInfo & { masks: number[], isCreated: boolean }} SolanaMultisigInfo
  */
-/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessageProposal} MultisigMessageProposal */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
  * `MultisigProposal` widened with the proposal's Squads status and its vote lists.
@@ -698,13 +695,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {string} message - The signed message.
    * @param {string} signature - The signature to verify.
    * @returns {Promise<boolean>} Whether the signature is valid.
-   * @throws {NotSupportedError} Always, since a multisig address has no private key.
+   * @throws {UnsupportedOperationError} A Squads multisig address is a program-derived address
+   *   with no private key, so no signature can be attributed to it, and Solana has no equivalent
+   *   of EIP-1271. Verify an individual member's signature against that member's own address
+   *   instead.
    */
   async verify (message, signature) {
-    throw new NotSupportedError(
-      'verify(message, signature)',
-      'a Squads multisig address is a program-derived address with no private key, so no signature can be attributed to it, and Solana has no equivalent of EIP-1271. Verify an individual member\'s signature against that member\'s own address instead.'
-    )
+    throw new UnsupportedOperationError('verify(message, signature)')
   }
 
   /**
@@ -812,45 +809,16 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the signed-message proposals for the given message hashes. Not supported by Squads.
-   *
-   * @param {string[]} messageIds - The message hashes.
-   * @returns {Promise<Record<string, MultisigMessageProposal | null>>} For each hash, the message proposal, or null if it has not been found.
-   * @throws {NotSupportedError} Always, since Squads has no message-signing primitive.
-   */
-  async getMessageProposals (messageIds) {
-    throw new NotSupportedError(
-      'getMessageProposals(messageIds)',
-      'Squads has no message-signing primitive, and its accounts are keyed by sequential transaction index rather than by message hash'
-    )
-  }
-
-  /**
-   * Returns the signed-message proposal for the given message hash. Not supported by Squads.
-   *
-   * @param {string} messageId - The message's hash.
-   * @returns {Promise<MultisigMessageProposal | null>} The message proposal, or null if it has not been found.
-   * @throws {NotSupportedError} Always, since Squads has no message-signing primitive.
-   */
-  async getMessageProposal (messageId) {
-    throw new NotSupportedError(
-      'getMessageProposal(messageId)',
-      'Squads has no message-signing primitive, and its accounts are keyed by sequential transaction index rather than by message hash'
-    )
-  }
-
-  /**
    * Quotes the costs of a send transaction operation. Not supported by Squads.
    *
    * @param {SolanaTransaction} tx - The transaction to quote.
    * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transaction's quote.
-   * @throws {NotSupportedError} Always, since a multisig does not submit transactions itself.
+   * @throws {UnsupportedOperationError} A Squads multisig does not submit transactions
+   *   directly: it proposes them and executes once the approval threshold is met. Quote the two
+   *   steps with quotePropose(tx) and quoteExecuteProposal(proposalId) instead.
    */
   async quoteSendTransaction (tx) {
-    throw new NotSupportedError(
-      'quoteSendTransaction(tx)',
-      'a Squads multisig does not submit transactions directly: it proposes them and executes once the approval threshold is met. Quote the two steps with quotePropose(tx) and quoteExecuteProposal(proposalId) instead.'
-    )
+    throw new UnsupportedOperationError('quoteSendTransaction(tx)')
   }
 
   /**

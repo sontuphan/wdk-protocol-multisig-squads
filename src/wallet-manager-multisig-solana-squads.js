@@ -14,11 +14,9 @@
 
 'use strict'
 
-import WalletManager from '@tetherto/wdk-wallet'
+import WalletManager, { UnsupportedOperationError } from '@tetherto/wdk-wallet'
 
 import WalletAccountMultisigSolanaSquads from './wallet-account-multisig-solana-squads.js'
-
-import { NotSupportedError } from './errors.js'
 
 /** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
 
@@ -68,14 +66,13 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
    * const account = await wallet.getAccount(1);
    * @param {number | string} [indexOrSignerName] - The index of the account to get (default: 0). A registered signer name is not supported.
    * @returns {Promise<WalletAccountMultisigSolanaSquads>} The account.
-   * @throws {NotSupportedError} If a signer name is given.
+   * @throws {UnsupportedOperationError} If a signer name is given. This wallet derives every
+   *   account from its own seed and keeps no signer registry, so there is no account to return
+   *   for a signer name. Use getAccount(index) or getAccountByPath(path).
    */
   async getAccount (indexOrSignerName = 0) {
     if (typeof indexOrSignerName === 'string') {
-      throw new NotSupportedError(
-        'getAccount(signerName)',
-        'this wallet derives every account from its own seed and keeps no signer registry, so there is no account to return for a signer name. Use getAccount(index) or getAccountByPath(path).'
-      )
+      throw new UnsupportedOperationError('getAccount(signerName)')
     }
 
     return await this.getAccountByPath(`${indexOrSignerName}'/0'`)

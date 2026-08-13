@@ -61,8 +61,13 @@ account.dispose()
 - **Propose / Approve / Reject / Execute**: Full multisig transaction lifecycle
 - **Transfers**: Propose native SOL and SPL token transfers through the multisig vault
 - **Member Management**: Add, remove, or swap members and change the approval threshold
-- **Message Proposals**: Propose and approve off-chain message signatures
 - **Read-Only Support**: Inspect multisig state without a signing key
+
+> [!NOTE]
+> Multisig message signing is not part of this module. It is an optional addon of the shared
+> multisig interface (`IMultisigMessageSigning`), and Solana has no message-signing primitive a
+> program-derived address could use, so the module leaves the addon out rather than stubbing it.
+> `sign(message)` still signs with the member's own key.
 
 ## Squads Protocol Version
 

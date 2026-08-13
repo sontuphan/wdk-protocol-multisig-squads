@@ -9,7 +9,6 @@
  *
  * @typedef {MultisigInfo & { masks: number[], isCreated: boolean }} SolanaMultisigInfo
  */
-/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessageProposal} MultisigMessageProposal */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
  * `MultisigProposal` widened with the proposal's Squads status and its vote lists.
@@ -161,43 +160,6 @@ export namespace SECRET_SIZE {
  * @implements {IWalletAccountReadOnlyMultisig}
  */
 export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAccountReadOnly implements IWalletAccountReadOnlyMultisig {
-    constructor(signerAddress: string | undefined, config: SolanaMultisigSquadsReadOnlyConfig);
-    /**
-     * The multisig Squads configuration. It carries the signing fields too when a signing
-     * account owns it, or when one derived this account through `_withConfig`.
-     *
-     * @protected
-     * @type {SolanaMultisigSquadsConfig}
-     */
-    protected _config: SolanaMultisigSquadsConfig;
-    /**
-     * The signer's address.
-     *
-     * @protected
-     * @type {string | undefined}
-     */
-    protected _signerAddress: string | undefined;
-    /**
-     * The address of the Squads program to operate against.
-     *
-     * @protected
-     * @type {Address}
-     */
-    protected _programId: Address;
-    /**
-     * The commitment level for transactions.
-     *
-     * @protected
-     * @type {Commitment}
-     */
-    protected _commitment: Commitment;
-    /**
-     * A Solana RPC client for HTTP requests.
-     *
-     * @protected
-     * @type {SolanaRpc | undefined}
-     */
-    protected _rpc: SolanaRpc | undefined;
     /**
      * Normalizes a create key secret to bytes, rejecting what cannot be one. Both the address
      * derivation and the signer build read a secret through this, so they refuse the same inputs.
@@ -239,6 +201,43 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @param {string | undefined} signerAddress - The signer's address, or undefined for a pure read-only account.
      * @param {SolanaMultisigSquadsReadOnlyConfig} config - The configuration object.
      */
+    constructor(signerAddress: string | undefined, config: SolanaMultisigSquadsReadOnlyConfig);
+    /**
+     * The multisig Squads configuration. It carries the signing fields too when a signing
+     * account owns it, or when one derived this account through `_withConfig`.
+     *
+     * @protected
+     * @type {SolanaMultisigSquadsConfig}
+     */
+    protected _config: SolanaMultisigSquadsConfig;
+    /**
+     * The signer's address.
+     *
+     * @protected
+     * @type {string | undefined}
+     */
+    protected _signerAddress: string | undefined;
+    /**
+     * The address of the Squads program to operate against.
+     *
+     * @protected
+     * @type {Address}
+     */
+    protected _programId: Address;
+    /**
+     * The commitment level for transactions.
+     *
+     * @protected
+     * @type {Commitment}
+     */
+    protected _commitment: Commitment;
+    /**
+     * A Solana RPC client for HTTP requests.
+     *
+     * @protected
+     * @type {SolanaRpc | undefined}
+     */
+    protected _rpc: SolanaRpc | undefined;
     /**
      * Returns whether the multisig account exists on-chain.
      *
@@ -313,7 +312,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @param {string} message - The signed message.
      * @param {string} signature - The signature to verify.
      * @returns {Promise<boolean>} Whether the signature is valid.
-     * @throws {NotSupportedError} Always, since a multisig address has no private key.
+     * @throws {UnsupportedOperationError} A Squads multisig address is a program-derived address
+     *   with no private key, so no signature can be attributed to it, and Solana has no equivalent
+     *   of EIP-1271. Verify an individual member's signature against that member's own address
+     *   instead.
      */
     verify(message: string, signature: string): Promise<boolean>;
     /**
@@ -339,31 +341,17 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @returns {Promise<boolean>} Whether the proposal can be executed.
-     * @throws {Error} If the id is invalid, no address is configured, or the RPC fails.
+     * @throws {Error} If the id is invalid, no address is configured, the address holds something other than a Squads multisig, or the RPC fails.
      */
     isReadyToExecute(proposalId: number | bigint | string): Promise<boolean>;
-    /**
-     * Returns the signed-message proposals for the given message hashes. Not supported by Squads.
-     *
-     * @param {string[]} messageIds - The message hashes.
-     * @returns {Promise<Record<string, MultisigMessageProposal | null>>} For each hash, the message proposal, or null if it has not been found.
-     * @throws {NotSupportedError} Always, since Squads has no message-signing primitive.
-     */
-    getMessageProposals(messageIds: string[]): Promise<Record<string, MultisigMessageProposal | null>>;
-    /**
-     * Returns the signed-message proposal for the given message hash. Not supported by Squads.
-     *
-     * @param {string} messageId - The message's hash.
-     * @returns {Promise<MultisigMessageProposal | null>} The message proposal, or null if it has not been found.
-     * @throws {NotSupportedError} Always, since Squads has no message-signing primitive.
-     */
-    getMessageProposal(messageId: string): Promise<MultisigMessageProposal | null>;
     /**
      * Quotes the costs of a send transaction operation. Not supported by Squads.
      *
      * @param {SolanaTransaction} tx - The transaction to quote.
      * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transaction's quote.
-     * @throws {NotSupportedError} Always, since a multisig does not submit transactions itself.
+     * @throws {UnsupportedOperationError} A Squads multisig does not submit transactions
+     *   directly: it proposes them and executes once the approval threshold is met. Quote the two
+     *   steps with quotePropose(tx) and quoteExecuteProposal(proposalId) instead.
      */
     quoteSendTransaction(tx: SolanaTransaction): Promise<Omit<TransactionResult, "hash">>;
     /**
@@ -597,14 +585,13 @@ export type Address = import("@solana/addresses").Address;
 export type IWalletAccountReadOnlyMultisig = import("@tetherto/wdk-wallet/multisig").IWalletAccountReadOnlyMultisig;
 export type MultisigInfo = import("@tetherto/wdk-wallet/multisig").MultisigInfo;
 /**
- * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`,
- * and whether the multisig account exists on-chain.
+ * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`, and
+ * whether the multisig account exists on-chain.
  */
 export type SolanaMultisigInfo = MultisigInfo & {
     masks: number[];
     isCreated: boolean;
 };
-export type MultisigMessageProposal = import("@tetherto/wdk-wallet/multisig").MultisigMessageProposal;
 export type MultisigProposal = import("@tetherto/wdk-wallet/multisig").MultisigProposal;
 /**
  * `MultisigProposal` widened with the proposal's Squads status and its vote lists.
@@ -628,44 +615,38 @@ export type SolanaTransactionReceipt = import("@tetherto/wdk-wallet-solana").Sol
  */
 export type SolanaMultisigSquadsReadOnlyConfig = {
     /**
-     * - A Solana RPC URL, or a list of URLs for
-     * failover. Omit it to derive addresses without reaching the cluster; every method that
-     * needs the cluster then throws.
+     * - A Solana RPC URL, or a list of URLs for failover. Omit it to derive addresses without reaching the cluster; every method that needs the cluster then throws.
      */
     provider?: string | string[];
     /**
-     * - The commitment level for transactions.
+     * - The commitment level for transactions (default: 'confirmed').
      */
     commitment?: Commitment;
     /**
-     * - The number of retries for the failover provider.
+     * - The number of retries for the failover provider (default: 3).
      */
     retries?: number;
     /**
-     * - The Squads program to operate against, for a fork or a
-     * local deployment (default: `SQUADS_PROGRAM_ADDRESS`).
+     * - The Squads program to operate against, for a fork or a local deployment (default: `SQUADS_PROGRAM_ADDRESS`).
      */
     programId?: string;
     /**
-     * - The address of an existing Squads multisig, or the
-     * create key its address derives from.
+     * - The address of an existing Squads multisig, or the create key its address derives from.
      */
     multisigPdaOrCreateKey?: string;
 };
 /**
  * The extra configuration a signing account takes: the secret it derives a new multisig's
- * address from, and the fee ceilings above which it refuses to submit.
+ * address from, the account that funds the rent Squads charges, and the fee ceilings above
+ * which it refuses to submit.
  */
 export type SolanaMultisigSquadsSigningConfig = {
     /**
-     * - The create key's secret, required to
-     * deploy a multisig. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
+     * - The create key's secret, required to deploy a multisig. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
      */
     createKeySecret?: string | Uint8Array;
     /**
-     * - The account charged for the rent the multisig,
-     * transaction and proposal accounts lock up (default: the signer). It must sign the
-     * transaction by other means, which in practice makes it the fee payer of a sponsoring wallet.
+     * - The account charged for the rent the multisig, transaction and proposal accounts lock up (default: the signer). It must sign the transaction by other means, which in practice makes it the fee payer of a sponsoring wallet.
      */
     rentPayer?: string;
     /**
@@ -705,8 +686,7 @@ export type SquadsMultisigAccount = {
      */
     isCreated: boolean;
     /**
-     * - The authority that alone may change the members
-     * and threshold, or null when the multisig votes on its own configuration.
+     * - The authority that alone may change the members and threshold, or null when the multisig votes on its own configuration.
      */
     configAuthority: string | null;
     /**
@@ -722,13 +702,11 @@ export type SquadsMultisigAccount = {
      */
     transactionIndex: bigint;
     /**
-     * - Proposals at or below this index were invalidated
-     * by a later configuration change and can no longer be voted on or executed.
+     * - Proposals at or below this index were invalidated by a later configuration change and can no longer be voted on or executed.
      */
     staleTransactionIndex: bigint;
     /**
-     * - The address that reclaims rent when a proposal's
-     * accounts are closed, or null when the multisig collects none.
+     * - The address that reclaims rent when a proposal's accounts are closed, or null when the multisig collects none.
      */
     rentCollector: string | null;
     /**
@@ -762,8 +740,7 @@ export type SquadsProposalAccount = {
      */
     statusPhrase: string | null;
     /**
-     * - The Unix timestamp the status was set at, or null
-     * while the proposal is executing, the one status Squads stores without a timestamp.
+     * - The Unix timestamp the status was set at, or null while the proposal is executing, the one status Squads stores without a timestamp.
      */
     statusTimestamp: bigint | null;
     /**
@@ -821,8 +798,8 @@ export type SquadsTransactionMessage = {
      */
     addressTableLookups: SquadsAddressTableLookup[];
 };
-export type SquadsTransactionKind = 'vault' | 'config' | 'batch';
-export type SquadsConfigActionKind = 'AddMember' | 'RemoveMember' | 'ChangeThreshold' | 'SetTimeLock' | 'AddSpendingLimit' | 'RemoveSpendingLimit' | 'SetRentCollector';
+export type SquadsTransactionKind = "vault" | "config" | "batch";
+export type SquadsConfigActionKind = "AddMember" | "RemoveMember" | "ChangeThreshold" | "SetTimeLock" | "AddSpendingLimit" | "RemoveSpendingLimit" | "SetRentCollector";
 /**
  * A configuration change a config transaction applies. `createKey` and `spendingLimit` name the
  * spending limit account the executor has to pass through, and are null for every other kind.
@@ -855,8 +832,7 @@ export type SquadsTransactionAccount = {
      */
     exists: boolean;
     /**
-     * - The transaction kind, null when the
-     * account is absent or holds a kind this package cannot decode.
+     * - The transaction kind, null when the account is absent or holds a kind this package cannot decode.
      */
     kind: SquadsTransactionKind | null;
     /**

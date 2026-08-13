@@ -14,7 +14,7 @@
 
 'use strict'
 
-import { NoSuchElementError, NotImplementedError, ValueError } from '@tetherto/wdk-wallet'
+import { NoSuchElementError, NotImplementedError, UnsupportedOperationError, ValueError } from '@tetherto/wdk-wallet'
 
 import { WalletAccountSolana } from '@tetherto/wdk-wallet-solana'
 
@@ -22,8 +22,6 @@ import WalletAccountReadOnlyMultisigSolanaSquads, {
   SECRET_SIZE,
   TRANSACTION_KIND
 } from './wallet-account-read-only-multisig-solana-squads.js'
-
-import { NotSupportedError } from './errors.js'
 
 import { address, getAddressEncoder } from '@solana/addresses'
 
@@ -68,8 +66,6 @@ import {
  *
  * @typedef {Partial<MultisigOptions> & { mask?: number }} SolanaMultisigAddOwnerOptions
  */
-/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigMessageProposal} MultisigMessageProposal */
-/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigSignature} MultisigSignature */
 /** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
 /** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
 /** @typedef {import('@tetherto/wdk-wallet').KeyPair} KeyPair */
@@ -195,13 +191,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {SolanaTransaction} tx - The transaction to sign.
    * @returns {Promise<SolanaTransaction>} The signed transaction.
-   * @throws {NotSupportedError} Always, since a multisig cannot sign a transaction itself.
+   * @throws {UnsupportedOperationError} A Squads multisig is a program-derived address with no
+   *   private key, so it cannot sign. Propose the transaction with propose(tx) and let the
+   *   members approve it instead.
    */
   async signTransaction (tx) {
-    throw new NotSupportedError(
-      'signTransaction(tx)',
-      'a Squads multisig is a program-derived address with no private key, so it cannot sign. Propose the transaction with propose(tx) and let the members approve it instead.'
-    )
+    throw new UnsupportedOperationError('signTransaction(tx)')
   }
 
   /**
@@ -209,41 +204,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {SolanaTransaction} tx - The transaction to send.
    * @returns {Promise<TransactionResult>} The transaction's result.
-   * @throws {NotSupportedError} Always, since a multisig does not submit transactions itself.
+   * @throws {UnsupportedOperationError} A Squads multisig does not submit transactions
+   *   directly: it proposes them and executes once the approval threshold is met. Use
+   *   propose(tx) and then executeProposal(proposalId) instead.
    */
   async sendTransaction (tx) {
-    throw new NotSupportedError(
-      'sendTransaction(tx)',
-      'a Squads multisig does not submit transactions directly: it proposes them and executes once the approval threshold is met. Use propose(tx) and then executeProposal(proposalId) instead.'
-    )
-  }
-
-  /**
-   * Proposes a message to be signed by the multisig members. Not supported by Squads.
-   *
-   * @param {string} message - The message to propose.
-   * @returns {Promise<MultisigMessageProposal & MultisigSignature>} The message proposal.
-   * @throws {NotSupportedError} Always, since Squads has no message-signing primitive.
-   */
-  async proposeMessage (message) {
-    throw new NotSupportedError(
-      'proposeMessage(message)',
-      'Squads has no message-signing primitive, and a multisig cannot produce a signature because its accounts are program-derived addresses with no private key. Use sign(message) to sign with this account\'s own signer key instead.'
-    )
-  }
-
-  /**
-   * Approves a pending message proposal. Not supported by Squads.
-   *
-   * @param {string} messageId - The hash of the proposed message.
-   * @returns {Promise<MultisigMessageProposal & MultisigSignature>} The updated message proposal.
-   * @throws {NotSupportedError} Always, since Squads has no message-signing primitive.
-   */
-  async approveMessageProposal (messageId) {
-    throw new NotSupportedError(
-      'approveMessageProposal(messageId)',
-      'Squads has no message-signing primitive, and a message hash cannot be resolved to a Squads account, which are keyed by sequential transaction index'
-    )
+    throw new UnsupportedOperationError('sendTransaction(tx)')
   }
 
   /**
@@ -387,7 +353,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
    * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} If the transfer options are invalid, the signer cannot propose, or the quote exceeds `transferMaxFee`.
-   * @throws {NotSupportedError} If the mint belongs to the Token-2022 program. @todo Support Token-2022 (Token Extensions Program).
+   * @throws {UnsupportedOperationError} If the mint belongs to the Token-2022 program, whose
+   *   associated token accounts this package does not derive. @todo Support Token-2022 (Token
+   *   Extensions Program).
    */
   async transfer (transferOptions, transactionOptions = {}) {
     if (!this._rpc) {
@@ -419,10 +387,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
 
     if (mintAccount.owner === PROGRAM_ADDRESS.token2022) {
-      throw new NotSupportedError(
-        'transfer(transferOptions, options)',
-        `the mint ${mint} belongs to the Token-2022 program, whose associated token accounts this package does not derive`
-      )
+      throw new UnsupportedOperationError('transfer(transferOptions, options)')
     }
 
     const instructions = []

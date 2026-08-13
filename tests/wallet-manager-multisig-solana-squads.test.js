@@ -16,6 +16,8 @@
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals'
 
+import { ValueError } from '@tetherto/wdk-wallet'
+
 import WalletManagerMultisigSolanaSquads, {
   WalletAccountMultisigSolanaSquads
 } from '@tetherto/wdk-protocol-multisig-squads'
@@ -65,7 +67,7 @@ describe('WalletManagerMultisigSolanaSquads', () => {
     it('should reject an invalid seed phrase', () => {
       expect(() => new WalletManagerMultisigSolanaSquads('not a seed phrase', {
         provider: TEST_RPC_URL
-      })).toThrow('The seed phrase is invalid.')
+      })).toThrow(new ValueError('Invalid seed phrase.'))
     })
 
     it('should send requests to the first of several providers', async () => {

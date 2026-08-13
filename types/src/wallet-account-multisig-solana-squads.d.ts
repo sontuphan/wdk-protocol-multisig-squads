@@ -1,3 +1,29 @@
+/** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigAutoExecuteResult} MultisigAutoExecuteResult */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
+/**
+ * `MultisigProposal` widened with the signature and fee of the transaction that carried the
+ * call, plus `transaction` from `MultisigAutoExecuteResult`, which is set only when that same
+ * call also executed the proposal.
+ *
+ * @typedef {MultisigProposal & MultisigAutoExecuteResult & { hash: string, fee: bigint }} SolanaMultisigProposalResult
+ */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigOptions} MultisigOptions */
+/**
+ * `MultisigOptions` widened with the Squads permission mask to grant the member being added: a
+ * bitwise OR of `PERMISSION.initiate`, `PERMISSION.vote` and `PERMISSION.execute`. Both fields
+ * are optional; the threshold and the mask each keep their default when omitted.
+ *
+ * @typedef {Partial<MultisigOptions> & { mask?: number }} SolanaMultisigAddOwnerOptions
+ */
+/** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
+/** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
+/** @typedef {import('@tetherto/wdk-wallet').KeyPair} KeyPair */
+/** @typedef {import('@solana/signers').KeyPairSigner} KeyPairSigner */
+/** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
+/** @typedef {import('./wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsConfig} SolanaMultisigSquadsConfig */
 /**
  * The Squads member permissions, as the bits of a member's mask.
  *
@@ -16,6 +42,13 @@ export const PERMISSION: {
  */
 export default class WalletAccountMultisigSolanaSquads extends WalletAccountReadOnlyMultisigSolanaSquads implements IWalletAccountMultisig, IMultisigOwnerManagement {
     /**
+     * Builds the signer a multisig is created with, from the secret its create key derives from.
+     *
+     * @param {string | Uint8Array} createKeySecret - The create key's secret. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
+     * @returns {Promise<KeyPairSigner>} The create key signer.
+     */
+    static getCreateKeySigner(createKeySecret: string | Uint8Array): Promise<KeyPairSigner>;
+    /**
      * Creates a new Solana Squads multisig wallet account.
      *
      * @param {string | Uint8Array} seed - The wallet's [BIP-39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki) seed phrase.
@@ -30,13 +63,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @type {WalletAccountSolana}
      */
     protected _signerAccount: WalletAccountSolana;
-    /**
-     * Builds the signer a multisig is created with, from the secret its create key derives from.
-     *
-     * @param {string | Uint8Array} createKeySecret - The create key's secret. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
-     * @returns {Promise<KeyPairSigner>} The create key signer.
-     */
-    static getCreateKeySigner(createKeySecret: string | Uint8Array): Promise<KeyPairSigner>;
     /**
      * The derivation path's index of this account.
      *
@@ -73,7 +99,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *
      * @param {SolanaTransaction} tx - The transaction to sign.
      * @returns {Promise<SolanaTransaction>} The signed transaction.
-     * @throws {NotSupportedError} Always, since a multisig cannot sign a transaction itself.
+     * @throws {UnsupportedOperationError} A Squads multisig is a program-derived address with no
+     *   private key, so it cannot sign. Propose the transaction with propose(tx) and let the
+     *   members approve it instead.
      */
     signTransaction(tx: SolanaTransaction): Promise<SolanaTransaction>;
     /**
@@ -81,25 +109,11 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *
      * @param {SolanaTransaction} tx - The transaction to send.
      * @returns {Promise<TransactionResult>} The transaction's result.
-     * @throws {NotSupportedError} Always, since a multisig does not submit transactions itself.
+     * @throws {UnsupportedOperationError} A Squads multisig does not submit transactions
+     *   directly: it proposes them and executes once the approval threshold is met. Use
+     *   propose(tx) and then executeProposal(proposalId) instead.
      */
     sendTransaction(tx: SolanaTransaction): Promise<TransactionResult>;
-    /**
-     * Proposes a message to be signed by the multisig members. Not supported by Squads.
-     *
-     * @param {string} message - The message to propose.
-     * @returns {Promise<MultisigMessageProposal & MultisigSignature>} The message proposal.
-     * @throws {NotSupportedError} Always, since Squads has no message-signing primitive.
-     */
-    proposeMessage(message: string): Promise<MultisigMessageProposal & MultisigSignature>;
-    /**
-     * Approves a pending message proposal. Not supported by Squads.
-     *
-     * @param {string} messageId - The hash of the proposed message.
-     * @returns {Promise<MultisigMessageProposal & MultisigSignature>} The updated message proposal.
-     * @throws {NotSupportedError} Always, since Squads has no message-signing primitive.
-     */
-    approveMessageProposal(messageId: string): Promise<MultisigMessageProposal & MultisigSignature>;
     /**
      * Validates that the signer is a member of the multisig.
      *
@@ -135,7 +149,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
      * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
      * @throws {Error} If the transfer options are invalid, the signer cannot propose, or the quote exceeds `transferMaxFee`.
-     * @throws {NotSupportedError} If the mint belongs to the Token-2022 program. @todo Support Token-2022 (Token Extensions Program).
+     * @throws {UnsupportedOperationError} If the mint belongs to the Token-2022 program, whose
+     *   associated token accounts this package does not derive. @todo Support Token-2022 (Token
+     *   Extensions Program).
      */
     transfer(transferOptions: TransferOptions, transactionOptions?: MultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
     /**
@@ -223,6 +239,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /** @private */
     private _proposeVaultTransaction;
     /** @private */
+    private _getRentPayerAccount;
+    /** @private */
     private _proposeConfigTransaction;
     /** @private */
     private _requireDeployed;
@@ -231,9 +249,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /** @private */
     private _buildAutoExecuteInstructions;
     /** @private */
-    /** @private */
-    /** @private */
-    /** @private */
     private _requirePermission;
     /** @private */
     private _requireVotableProposal;
@@ -241,7 +256,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     private _buildProposalVoteInstruction;
     /** @private */
     private _buildConfigExecuteInstruction;
-    /** @private */
     /** @private */
     private _buildVaultExecuteInstruction;
     /** @private */
@@ -280,8 +294,6 @@ export type MultisigOptions = import("@tetherto/wdk-wallet/multisig").MultisigOp
 export type SolanaMultisigAddOwnerOptions = Partial<MultisigOptions> & {
     mask?: number;
 };
-export type MultisigMessageProposal = import("@tetherto/wdk-wallet/multisig").MultisigMessageProposal;
-export type MultisigSignature = import("@tetherto/wdk-wallet/multisig").MultisigSignature;
 export type TransactionResult = import("@tetherto/wdk-wallet").TransactionResult;
 export type TransferOptions = import("@tetherto/wdk-wallet").TransferOptions;
 export type KeyPair = import("@tetherto/wdk-wallet").KeyPair;

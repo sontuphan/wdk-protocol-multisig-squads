@@ -25,10 +25,10 @@ import { address } from '@solana/addresses'
 import { createSolanaRpc } from '@solana/rpc'
 import { generateKeyPairSigner } from '@solana/signers'
 
+import { UnsupportedOperationError } from '@tetherto/wdk-wallet'
 import { WalletAccountReadOnlySolana } from '@tetherto/wdk-wallet-solana'
 
 import WalletManagerMultisigSolanaSquads, {
-  NotSupportedError,
   SQUADS_PROGRAM_ADDRESS,
   WalletAccountMultisigSolanaSquads,
   WalletAccountReadOnlyMultisigSolanaSquads
@@ -330,7 +330,9 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         threshold: 2,
         status: 'pending',
         hash: proposal.hash,
-        fee: 5000n
+        // The signature fee plus the rent the transaction and proposal accounts lock up, which
+        // is what a proposal actually costs. Exact for this message size and member count.
+        fee: 5000n + 5143440n
       })
       expect(await accounts[0].getNonce()).toBe(1n)
 
@@ -565,7 +567,9 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         threshold: 2,
         status: 'pending',
         hash: proposal.hash,
-        fee: 5000n
+        // The signature fee plus the rent the transaction and proposal accounts lock up. Larger
+        // than the SOL case because an SPL transfer stores a longer message.
+        fee: 5000n + 6354480n
       })
 
       await approveWithAll(accounts, proposal.proposalId, rpc)
@@ -1037,14 +1041,14 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       expect(signers[0]).not.toBe(multisigPda)
     })
 
-    it('refuses the message-proposal surface Squads has no primitive for', async () => {
+    it('leaves out the message-proposal surface Squads has no primitive for', async () => {
       const { accounts } = await deployMultisig({ members: 1, threshold: 1 })
       const [account] = accounts
 
-      await expect(account.proposeMessage('hello')).rejects.toThrow(NotSupportedError)
-      await expect(account.approveMessageProposal('0x00')).rejects.toThrow(NotSupportedError)
-      await expect(account.getMessageProposals(['0x00'])).rejects.toThrow(NotSupportedError)
-      await expect(account.verify('hello', '0x00')).rejects.toThrow(NotSupportedError)
+      expect(account.proposeMessage).toBeUndefined()
+      expect(account.approveMessageProposal).toBeUndefined()
+      expect(account.getMessageProposals).toBeUndefined()
+      await expect(account.verify('hello', '0x00')).rejects.toThrow(UnsupportedOperationError)
     })
 
     it('returns the receipt of a confirmed transaction', async () => {

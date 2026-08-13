@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals'
 
 import { getBase58Decoder, getBase58Encoder, getBase64Decoder } from '@solana/codecs'
 
-import { NoSuchElementError, ValueError } from '@tetherto/wdk-wallet'
+import { NoSuchElementError, UnsupportedOperationError, ValueError } from '@tetherto/wdk-wallet'
 
 import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 
@@ -26,8 +26,7 @@ import WalletManagerMultisigSolanaSquads, {
   WalletAccountMultisigSolanaSquads,
   WalletAccountReadOnlyMultisigSolanaSquads,
   PERMISSION,
-  SQUADS_PROGRAM_ADDRESS,
-  NotSupportedError
+  SQUADS_PROGRAM_ADDRESS
 } from '@tetherto/wdk-protocol-multisig-squads'
 
 const TEST_SEED_PHRASE =
@@ -470,39 +469,29 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       .rejects.toThrow('A proposed transaction must be either `{ to, value }` or a message carrying `instructions`.')
   })
 
-  // Not pending work: Squads cannot produce a multisig signature at all.
-  it('refuses to propose a message, naming the method and the reason', async () => {
-    const error = await account.proposeMessage('hello').catch((thrown) => thrown)
-
-    expect(error).toBeInstanceOf(NotSupportedError)
-    expect(error.methodName).toBe('proposeMessage(message)')
-    expect(error.reason).toMatch(/no message-signing primitive/)
-  })
-
-  it('refuses to approve a message proposal, naming the method and the reason', async () => {
-    const error = await account.approveMessageProposal('abc').catch((thrown) => thrown)
-
-    expect(error).toBeInstanceOf(NotSupportedError)
-    expect(error.methodName).toBe('approveMessageProposal(messageId)')
-    expect(error.reason).toMatch(/cannot be resolved to a Squads account/)
+  // The message-signing addon is optional in the shared interface, and Squads has no
+  // primitive to back it, so the module leaves it out rather than stubbing it.
+  it('does not expose the message-signing surface at all', () => {
+    expect(account.proposeMessage).toBeUndefined()
+    expect(account.approveMessageProposal).toBeUndefined()
+    expect(account.getMessageProposal).toBeUndefined()
+    expect(account.getMessageProposals).toBeUndefined()
   })
 
   // A multisig address is a PDA with no private key, so neither signing nor sending is a
   // matter of unfinished work.
-  it('refuses to sign a transaction, naming the method and the reason', async () => {
+  it('refuses to sign a transaction, naming the method', async () => {
     const error = await account.signTransaction({ instructions: [] }).catch((thrown) => thrown)
 
-    expect(error).toBeInstanceOf(NotSupportedError)
-    expect(error.methodName).toBe('signTransaction(tx)')
-    expect(error.reason).toMatch(/program-derived address with no private key/)
+    expect(error).toBeInstanceOf(UnsupportedOperationError)
+    expect(error.message).toBe("Method 'signTransaction(tx)' is not supported.")
   })
 
-  it('refuses to send a transaction, naming the method and the reason', async () => {
+  it('refuses to send a transaction, naming the method', async () => {
     const error = await account.sendTransaction({ instructions: [] }).catch((thrown) => thrown)
 
-    expect(error).toBeInstanceOf(NotSupportedError)
-    expect(error.methodName).toBe('sendTransaction(tx)')
-    expect(error.reason).toMatch(/does not submit transactions directly/)
+    expect(error).toBeInstanceOf(UnsupportedOperationError)
+    expect(error.message).toBe("Method 'sendTransaction(tx)' is not supported.")
   })
 
   it("exposes the signer's key pair, not the multisig's", async () => {
@@ -531,7 +520,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     const error = await account.propose({ instructions: [] }).catch((thrown) => thrown)
 
     expect(error).toBeInstanceOf(ValueError)
-    expect(error).not.toBeInstanceOf(NotSupportedError)
+    expect(error).not.toBeInstanceOf(UnsupportedOperationError)
   })
 
   describe('getCreateKey', () => {
@@ -2644,7 +2633,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         mintOwner: TOKEN_2022_PROGRAM
       })
 
-      await expect(account.transfer(OPTIONS)).rejects.toThrow(NotSupportedError)
+      await expect(account.transfer(OPTIONS)).rejects.toThrow(UnsupportedOperationError)
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 

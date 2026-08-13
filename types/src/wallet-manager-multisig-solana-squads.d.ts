@@ -24,7 +24,9 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
      * const account = await wallet.getAccount(1);
      * @param {number | string} [indexOrSignerName] - The index of the account to get (default: 0). A registered signer name is not supported.
      * @returns {Promise<WalletAccountMultisigSolanaSquads>} The account.
-     * @throws {NotSupportedError} If a signer name is given.
+     * @throws {UnsupportedOperationError} If a signer name is given. This wallet derives every
+     *   account from its own seed and keeps no signer registry, so there is no account to return
+     *   for a signer name. Use getAccount(index) or getAccountByPath(path).
      */
     getAccount(indexOrSignerName?: number | string): Promise<WalletAccountMultisigSolanaSquads>;
     /**
