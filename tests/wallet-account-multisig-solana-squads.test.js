@@ -675,6 +675,15 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 
+    it('refuses more owners than the program can hold', async () => {
+      const { account, sendTransaction } = await deployingAccount()
+      const owners = Array.from({ length: 65536 }, (_unused, index) => `owner-${index}`)
+
+      await expect(account.deploy(owners, 1))
+        .rejects.toThrow('Invalid member count 65536. It must be an integer between 1 and 65535.')
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
     it('rejects invalid owners and thresholds without sending', async () => {
       const { account, sendTransaction } = await deployingAccount()
 

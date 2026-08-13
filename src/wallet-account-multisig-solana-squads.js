@@ -86,8 +86,6 @@ import {
 export const PERMISSION = { initiate: 1, vote: 2, execute: 4 }
 
 const ALMIGHTY_PERMISSIONS = PERMISSION.initiate | PERMISSION.vote | PERMISSION.execute
-const MAX_THRESHOLD = 65535
-
 const PROGRAM_ADDRESS = {
   system: '11111111111111111111111111111111',
   token2022: 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
@@ -112,6 +110,27 @@ const NO_MEMO = null
  * @implements {IMultisigOwnerManagement}
  */
 export default class WalletAccountMultisigSolanaSquads extends WalletAccountReadOnlyMultisigSolanaSquads {
+  /**
+   * Creates a new Solana Squads multisig wallet account.
+   *
+   * @param {string | Uint8Array} seed - The wallet's [BIP-39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki) seed phrase.
+   * @param {string} path - The SLIP-0010 derivation path (e.g. "0'/0'").
+   * @param {SolanaMultisigSquadsConfig} config - The configuration object.
+   */
+  constructor (seed, path, config) {
+    const signerAccount = new WalletAccountSolana(seed, path, config)
+
+    super(signerAccount._address, config)
+
+    /**
+     * The underlying Solana signer account.
+     *
+     * @protected
+     * @type {WalletAccountSolana}
+     */
+    this._signerAccount = signerAccount
+  }
+
   /**
    * Builds the signer a multisig is created with, from the secret its create key derives from.
    *
@@ -141,27 +160,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     throw new Error(
       `Invalid createKeySecret of ${bytes.length} bytes. Expected ${SIZE.privateKey} or ${SIZE.keyPair}.`
     )
-  }
-
-  /**
-   * Creates a new Solana Squads multisig wallet account.
-   *
-   * @param {string | Uint8Array} seed - The wallet's [BIP-39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki) seed phrase.
-   * @param {string} path - The SLIP-0010 derivation path (e.g. "0'/0'").
-   * @param {SolanaMultisigSquadsConfig} config - The configuration object.
-   */
-  constructor (seed, path, config) {
-    const signerAccount = new WalletAccountSolana(seed, path, config)
-
-    super(signerAccount._address, config)
-
-    /**
-     * The underlying Solana signer account.
-     *
-     * @protected
-     * @type {WalletAccountSolana}
-     */
-    this._signerAccount = signerAccount
   }
 
   /**
@@ -336,6 +334,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     if (!Array.isArray(members) || !members.length) {
       throw new Error('At least one owner is required to create a multisig.')
     }
+
+    this._validateMemberCount(members.length)
 
     if (new Set(members).size !== members.length) {
       throw new Error('The owners of a multisig must be unique.')
@@ -1187,10 +1187,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       throw new Error(
         `Invalid threshold ${threshold}. It must be an integer between 1 and the number of owners able to vote (${voterCount}).`
       )
-    }
-
-    if (threshold > MAX_THRESHOLD) {
-      throw new Error(`Invalid threshold ${threshold}. It must not exceed ${MAX_THRESHOLD}.`)
     }
   }
 

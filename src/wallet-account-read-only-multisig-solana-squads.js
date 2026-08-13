@@ -333,31 +333,38 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     this._commitment = config.commitment ?? 'confirmed'
 
-    const { provider, retries = 3 } = config
-
     /**
      * A Solana RPC client for HTTP requests.
      *
      * @protected
      * @type {SolanaRpc | undefined}
      */
-    this._rpc = undefined
+    this._rpc = WalletAccountReadOnlyMultisigSolanaSquads.createRpc(config)
+  }
 
+  /**
+   * Builds the RPC client a configuration asks for: one client per URL behind a failover proxy
+   * when it names a list, a single client when it names one URL, and none when it names neither.
+   *
+   * @param {SolanaMultisigSquadsReadOnlyConfig} [config] - The configuration to read `provider` and `retries` from.
+   * @returns {SolanaRpc | undefined} The client, or undefined when no provider is configured.
+   */
+  static createRpc ({ provider, retries = 3 } = {}) {
     if (Array.isArray(provider)) {
-      if (provider.length > 0) {
-        const failoverProvider = new FailoverProvider({ retries })
-
-        for (const entry of provider) {
-          const option = createSolanaRpc(entry)
-
-          failoverProvider.addProvider(option)
-        }
-
-        this._rpc = failoverProvider.initialize()
+      if (provider.length === 0) {
+        return undefined
       }
-    } else if (provider) {
-      this._rpc = createSolanaRpc(provider)
+
+      const failoverProvider = new FailoverProvider({ retries })
+
+      for (const entry of provider) {
+        failoverProvider.addProvider(createSolanaRpc(entry))
+      }
+
+      return failoverProvider.initialize()
     }
+
+    return provider ? createSolanaRpc(provider) : undefined
   }
 
   /**
@@ -722,76 +729,29 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @returns {Promise<boolean>} Whether the proposal can be executed.
-   * @throws {Error} If the id is invalid, no address is configured, or the RPC fails.
+   * @throws {Error} If the id is invalid, no address is configured, the address holds something other than a Squads multisig, or the RPC fails.
    */
   async isReadyToExecute (proposalId) {
-    if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to check whether a proposal can be executed.')
-    }
-
     const index = this._toProposalIndex(proposalId)
-    const multisigPda = await this.getAddress()
+    const { multisig, proposal, transaction, now } =
+      await this._getMultisigProposalAndTransaction(index)
 
-    const proposalPda = this._getProposalPda(multisigPda, index)
-    const transactionPda = this._getTransactionPda(multisigPda, index)
-
-    const { value } = await this._rpc
-      .getMultipleAccounts(
-        [address(multisigPda), proposalPda, transactionPda, address(PROGRAM_ADDRESS.clockSysvar)],
-        { commitment: this._commitment, encoding: 'base64' }
-      )
-      .send()
-
-    const [multisig, proposal, transaction, clock] = value
-
-    if (!multisig || !proposal || !transaction || !clock) {
+    if (!multisig.isCreated || !proposal.exists) {
       return false
     }
 
-    if (
-      multisig.owner !== this._programId ||
-      proposal.owner !== this._programId ||
-      transaction.owner !== this._programId
-    ) {
+    if (proposal.status !== PROPOSAL_STATUS.approved) {
       return false
     }
 
-    const proposalData = getBase64Encoder().encode(proposal.data[0])
-    const multisigData = getBase64Encoder().encode(multisig.data[0])
+    const executable = transaction.kind === TRANSACTION_KIND.vault ||
+      (transaction.kind === TRANSACTION_KIND.config && index > multisig.staleTransactionIndex)
 
-    if (
-      !this._hasDiscriminator(proposalData, ACCOUNT_DISCRIMINATOR.proposal) ||
-      !this._hasDiscriminator(multisigData, ACCOUNT_DISCRIMINATOR.multisig)
-    ) {
+    if (!executable) {
       return false
     }
 
-    const { status, timestamp: approvedAt } = ACCOUNT.proposal.decode(proposalData).status
-
-    if (status !== PROPOSAL_STATUS.approved) {
-      return false
-    }
-
-    const { timeLock, staleTransactionIndex } = ACCOUNT.multisig.decode(multisigData)
-    const transactionData = getBase64Encoder().encode(transaction.data[0])
-
-    // The transaction account is read for its discriminator alone: only a config transaction goes
-    // stale, and `config_transaction_execute` is the one instruction that checks the index. A batch
-    // is neither, and `executeProposal` refuses it, so an approved one is not ready either.
-    if (this._hasDiscriminator(transactionData, ACCOUNT_DISCRIMINATOR.batch)) {
-      return false
-    }
-
-    if (
-      this._hasDiscriminator(transactionData, ACCOUNT_DISCRIMINATOR.configTransaction) &&
-      index <= staleTransactionIndex
-    ) {
-      return false
-    }
-
-    const { unixTimestamp: now } = ACCOUNT.clock.decode(getBase64Encoder().encode(clock.data[0]))
-
-    return now - approvedAt >= BigInt(timeLock)
+    return now - proposal.statusTimestamp >= BigInt(multisig.timeLock)
   }
 
   /**
@@ -844,11 +804,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @throws {Error} If `memberCount` is out of range, or if the RPC request fails.
    */
   async quoteDeploy (memberCount = DEFAULT.memberCount) {
-    if (!Number.isInteger(memberCount) || memberCount < 1 || memberCount > MAX.memberCount) {
-      throw new Error(
-        `Invalid member count ${memberCount}. It must be an integer between 1 and ${MAX.memberCount}.`
-      )
-    }
+    this._validateMemberCount(memberCount)
 
     if (!this._rpc) {
       throw new Error('The wallet must be connected to a provider to quote deploy operations.')
@@ -862,30 +818,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     ])
 
     return { fee: this._quoteDeployFrom(programConfig.creationFee, rent) }
-  }
-
-  /**
-   * Returns the size of the `Multisig` account a multisig of the given membership is stored in.
-   *
-   * @protected
-   * @param {number} memberCount - How many members the multisig holds.
-   * @returns {number} The account's size, in bytes.
-   */
-  _multisigAccountSize (memberCount) {
-    return SIZE.multisigBase + SIZE.member * memberCount
-  }
-
-  /**
-   * Adds up what creating a multisig costs: the account's rent, the protocol's creation fee, and
-   * the two signatures `multisigCreateV2` needs.
-   *
-   * @protected
-   * @param {bigint} creationFee - The protocol's multisig creation fee.
-   * @param {bigint} rent - The multisig account's rent-exempt minimum.
-   * @returns {bigint} The whole cost, in lamports.
-   */
-  _quoteDeployFrom (creationFee, rent) {
-    return rent + creationFee + SIGNATURE_BASE_FEE * COUNT.multisigCreateSignatures
   }
 
   /**
@@ -1259,6 +1191,46 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       accountKeys: keys,
       ...header
     }
+  }
+
+  /**
+   * Validates a multisig's membership size against what the program can hold.
+   *
+   * @protected
+   * @param {number} memberCount - How many members the multisig would hold.
+   * @returns {void} Nothing; throws when the count is out of range.
+   * @throws {Error} If the count is not an integer between 1 and 65,535.
+   */
+  _validateMemberCount (memberCount) {
+    if (!Number.isInteger(memberCount) || memberCount < 1 || memberCount > MAX.memberCount) {
+      throw new Error(
+        `Invalid member count ${memberCount}. It must be an integer between 1 and ${MAX.memberCount}.`
+      )
+    }
+  }
+
+  /**
+   * Returns the size of the `Multisig` account a multisig of the given membership is stored in.
+   *
+   * @protected
+   * @param {number} memberCount - How many members the multisig holds.
+   * @returns {number} The account's size, in bytes.
+   */
+  _multisigAccountSize (memberCount) {
+    return SIZE.multisigBase + SIZE.member * memberCount
+  }
+
+  /**
+   * Adds up what creating a multisig costs: the account's rent, the protocol's creation fee, and
+   * the two signatures `multisigCreateV2` needs.
+   *
+   * @protected
+   * @param {bigint} creationFee - The protocol's multisig creation fee.
+   * @param {bigint} rent - The multisig account's rent-exempt minimum.
+   * @returns {bigint} The whole cost, in lamports.
+   */
+  _quoteDeployFrom (creationFee, rent) {
+    return rent + creationFee + SIGNATURE_BASE_FEE * COUNT.multisigCreateSignatures
   }
 
   /**

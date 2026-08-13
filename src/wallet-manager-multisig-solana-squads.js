@@ -16,10 +16,6 @@
 
 import WalletManager from '@tetherto/wdk-wallet'
 
-import FailoverProvider from '@tetherto/wdk-failover-provider'
-
-import { createSolanaRpc } from '@solana/rpc'
-
 import WalletAccountMultisigSolanaSquads from './wallet-account-multisig-solana-squads.js'
 
 import { NotSupportedError } from './errors.js'
@@ -55,31 +51,13 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
      */
     this._config = config
 
-    const { provider, retries = 3 } = config
-
     /**
      * A Solana RPC client for HTTP requests.
      *
      * @protected
      * @type {SolanaRpc | undefined}
      */
-    this._rpc = undefined
-
-    if (Array.isArray(provider)) {
-      if (provider.length > 0) {
-        const failoverProvider = new FailoverProvider({ retries })
-
-        for (const entry of provider) {
-          const option = createSolanaRpc(entry)
-
-          failoverProvider.addProvider(option)
-        }
-
-        this._rpc = failoverProvider.initialize()
-      }
-    } else if (provider) {
-      this._rpc = createSolanaRpc(provider)
-    }
+    this._rpc = WalletAccountMultisigSolanaSquads.createRpc(config)
   }
 
   /**

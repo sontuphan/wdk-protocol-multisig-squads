@@ -155,12 +155,6 @@ export const TRANSACTION_KIND: { [K in SquadsTransactionKind]: K; };
  * @implements {IWalletAccountReadOnlyMultisig}
  */
 export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAccountReadOnly implements IWalletAccountReadOnlyMultisig {
-    /**
-     * Creates a new read-only Solana Squads multisig wallet account.
-     *
-     * @param {string | undefined} signerAddress - The signer's address, or undefined for a pure read-only account.
-     * @param {SolanaMultisigSquadsReadOnlyConfig} config - The configuration object.
-     */
     constructor(signerAddress: string | undefined, config: SolanaMultisigSquadsReadOnlyConfig);
     /**
      * The multisig Squads configuration. It carries the signing fields too when a signing
@@ -205,6 +199,20 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @type {SolanaRpc | undefined}
      */
     protected _rpc: SolanaRpc | undefined;
+    /**
+     * Builds the RPC client a configuration asks for: one client per URL behind a failover proxy
+     * when it names a list, a single client when it names one URL, and none when it names neither.
+     *
+     * @param {SolanaMultisigSquadsReadOnlyConfig} [config] - The configuration to read `provider` and `retries` from.
+     * @returns {SolanaRpc | undefined} The client, or undefined when no provider is configured.
+     */
+    static createRpc({ provider, retries }?: SolanaMultisigSquadsReadOnlyConfig): SolanaRpc | undefined;
+    /**
+     * Creates a new read-only Solana Squads multisig wallet account.
+     *
+     * @param {string | undefined} signerAddress - The signer's address, or undefined for a pure read-only account.
+     * @param {SolanaMultisigSquadsReadOnlyConfig} config - The configuration object.
+     */
     /**
      * Returns the address of the Squads multisig account.
      *

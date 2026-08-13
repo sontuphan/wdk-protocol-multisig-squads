@@ -333,23 +333,43 @@ const BATCH_DISCRIMINATOR = [156, 194, 70, 44, 22, 88, 137, 44]
 const CLOCK_SYSVAR_ADDRESS = 'SysvarC1ock11111111111111111111111111111111'
 
 /**
- * Builds an RPC `value` for a transaction account, of which only the discriminator
- * is read.
+ * Builds an RPC `value` for a transaction account. A vault transaction is serialized in full,
+ * since the read paths decode it; the other kinds are read for their discriminator alone.
  *
  * @param {number[]} discriminator - The account discriminator.
  * @returns {Object} The `value` field of a `getMultipleAccounts` entry.
  */
 function transactionAccountValue (discriminator) {
-  const data = new Uint8Array(8)
+  const isVault = discriminator === VAULT_TRANSACTION_DISCRIMINATOR
+  const isConfig = discriminator === CONFIG_TRANSACTION_DISCRIMINATOR
+  const accountKeys = [MEMBER_A, MEMBER_B, SYSTEM_PROGRAM_ADDRESS]
+  // A vault transaction: 87 fixed fields, no ephemeral bumps, then the message, 3 header bytes,
+  // the key vec, and empty instruction and lookup vecs. A config transaction: 81 fixed fields
+  // then an empty action vec. Any other kind is read for its discriminator alone.
+  const size = isVault
+    ? 87 + 3 + 4 + accountKeys.length * 32 + 4 + 4
+    : (isConfig ? 85 : 8)
+  const data = new Uint8Array(size)
 
   data.set(discriminator, 0)
+
+  if (isVault) {
+    const view = new DataView(data.buffer)
+
+    data.set([1, 1, 1], 87)
+    view.setUint32(90, accountKeys.length, true)
+
+    accountKeys.forEach((key, index) => {
+      data.set(getBase58Encoder().encode(key), 94 + index * 32)
+    })
+  }
 
   return {
     owner: SQUADS_PROGRAM_ADDRESS,
     data: [getBase64Decoder().decode(data), 'base64'],
     executable: false,
     lamports: 2039280,
-    space: 8
+    space: data.length
   }
 }
 
@@ -493,6 +513,32 @@ function mockFailingAccount (error) {
 }
 
 describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
+  describe('createRpc', () => {
+    it('builds no client without a provider', () => {
+      expect(WalletAccountReadOnlyMultisigSolanaSquads.createRpc({})).toBeUndefined()
+      expect(WalletAccountReadOnlyMultisigSolanaSquads.createRpc()).toBeUndefined()
+      expect(WalletAccountReadOnlyMultisigSolanaSquads.createRpc({ provider: [] })).toBeUndefined()
+    })
+
+    it('sends to the URL it was given', async () => {
+      const rpc = WalletAccountReadOnlyMultisigSolanaSquads.createRpc({ provider: TEST_RPC_URL })
+      const fetchMock = stubSolanaRpc({ getSlot: () => 7 })
+
+      expect(await rpc.getSlot().send()).toBe(7n)
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([TEST_RPC_URL])
+    })
+
+    it('sends to the first of a list', async () => {
+      const rpc = WalletAccountReadOnlyMultisigSolanaSquads.createRpc({
+        provider: [TEST_RPC_URL, 'https://dummy-fallback.com']
+      })
+      const fetchMock = stubSolanaRpc({ getSlot: () => 7 })
+
+      expect(await rpc.getSlot().send()).toBe(7n)
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([TEST_RPC_URL])
+    })
+  })
+
   afterEach(() => {
     jest.restoreAllMocks()
   })
@@ -1520,13 +1566,14 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       expect(await account.isReadyToExecute(1)).toBe(false)
     })
 
-    it('returns false when another program owns the accounts', async () => {
-      // A discriminator is eight bytes any program can write. The addresses are PDAs of the Squads
-      // program, so this is not reachable in practice, but the decode paths beside this one all
-      // check the owner and this one now agrees with them.
+    it('throws when another program owns the accounts', async () => {
+      // A discriminator is eight bytes any program can write, so the owner decides. The addresses
+      // are PDAs of the Squads program, so this is not reachable in practice; it is the same
+      // sentence every other read path throws rather than a predicate-only `false`.
       const { account } = mockExecutable({ owner: SYSTEM_PROGRAM_ADDRESS })
 
-      expect(await account.isReadyToExecute(1)).toBe(false)
+      await expect(account.isReadyToExecute(1))
+        .rejects.toThrow(`The account ${TEST_MULTISIG_PDA} is not a Squads multisig.`)
     })
 
     it('returns true for a config transaction that is not stale', async () => {

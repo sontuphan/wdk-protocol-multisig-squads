@@ -79,7 +79,7 @@ describe('WalletManagerMultisigSolanaSquads', () => {
       expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([TEST_RPC_URL])
     })
 
-    // Pins REVIEW.logic.md L23: the failover proxy wraps the request builder, not the `.send()`
+    // Pins REVIEW.logic.md L19: the failover proxy wraps the request builder, not the `.send()`
     // that performs the call, so the second provider is never tried. Delete the `.failing` when
     // that is fixed — this test then reports the fix by failing.
     it.failing('should fall back when the first provider is unreachable', async () => {
