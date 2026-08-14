@@ -121,7 +121,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * Validates that the signer is a member of the multisig.
      *
      * @returns {Promise<void>} Resolves if the signer is a member, otherwise throws.
-     * @throws {Error} If the signer is not a member of the multisig.
+     * @throws {Error} The signer must be a member of the multisig.
      */
     validateSignerIsOwner(): Promise<void>;
     /**
@@ -131,7 +131,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {string[]} [owners] - The member addresses. Defaults to this account's signer.
      * @param {number} [threshold] - The approvals a proposal needs (default: 1).
      * @returns {Promise<Pick<TransactionResult, 'hash'>>} The creation transaction's signature.
-     * @throws {Error} If `createKeySecret` is missing, the arguments are invalid, the multisig already exists, or the quote exceeds `createMaxFee`.
+     * @throws {Error} `createKeySecret` must be configured, the arguments must be valid, the multisig must not exist yet, and the quote must stay within `createMaxFee`.
      */
     deploy(owners?: string[], threshold?: number): Promise<Pick<TransactionResult, "hash">>;
     /**
@@ -149,7 +149,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {TransferOptions} transferOptions - The transfer options.
      * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
      * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
-     * @throws {Error} If the transfer options are invalid, the signer cannot propose, or the quote exceeds `transferMaxFee`.
+     * @throws {Error} The transfer options must be valid, the signer must be allowed to propose, and the quote must stay within `transferMaxFee`.
      * @todo Support Token-2022 (Token Extensions Program), whose associated token accounts this method does not derive.
      */
     transfer(transferOptions: TransferOptions, { vaultIndex, ...transactionOptions }?: SolanaMultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
@@ -159,7 +159,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @param {string} [memo] - An optional note recorded on chain with the vote. It costs rent, and an empty string is stored as a present-but-empty memo rather than none.
      * @returns {Promise<SolanaMultisigProposalResult>} The approval result.
-     * @throws {Error} If the proposal is not open to this signer's approval, or the RPC request fails.
+     * @throws {Error} The proposal must be open to this signer's approval, and the RPC request must succeed.
      */
     approveProposal(proposalId: number | bigint | string, memo?: string): Promise<SolanaMultisigProposalResult>;
     /**
@@ -168,7 +168,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @param {string} [memo] - An optional note recorded on chain with the vote. It costs rent, and an empty string is stored as a present-but-empty memo rather than none.
      * @returns {Promise<SolanaMultisigProposalResult>} The rejection result.
-     * @throws {Error} If the proposal is not open to this signer's rejection, or the RPC request fails.
+     * @throws {Error} The proposal must be open to this signer's rejection, and the RPC request must succeed.
      */
     rejectProposal(proposalId: number | bigint | string, memo?: string): Promise<SolanaMultisigProposalResult>;
     /**
@@ -176,9 +176,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @returns {Promise<TransactionResult>} The execution transaction's result.
-     * @throws {NoSuchElementError} If no proposal exists at that id.
-     * @throws {ValueError} If the proposal has not reached the approval threshold, or its transaction account has been closed.
-     * @throws {Error} If the proposal cannot be executed by this signer yet, or the RPC request fails.
+     * @throws {NoSuchElementError} A proposal must exist at that id.
+     * @throws {ValueError} The proposal must have reached the approval threshold, and its transaction account must still be open.
+     * @throws {Error} The proposal must be executable by this signer, and the RPC request must succeed.
      */
     executeProposal(proposalId: number | bigint | string): Promise<TransactionResult>;
     /**
@@ -187,7 +187,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {string} ownerAddress - The address of the member to add.
      * @param {SolanaMultisigAddOwnerOptions} [options] - The operation options. `mask` is the member's Squads permissions (default: all three).
      * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
-     * @throws {Error} If the addition or the resulting configuration is invalid, the signer cannot propose, or the RPC request fails.
+     * @throws {Error} The addition and the resulting configuration must be valid, the signer must be allowed to propose, and the RPC request must succeed.
      */
     addOwner(ownerAddress: string, { mask, threshold }?: SolanaMultisigAddOwnerOptions): Promise<SolanaMultisigProposalResult>;
     /**
@@ -196,7 +196,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {string} ownerAddress - The address of the member to remove.
      * @param {Partial<MultisigOptions>} [options] - The operation options.
      * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
-     * @throws {Error} If the removal or the resulting configuration is invalid, the signer cannot propose, or the RPC request fails.
+     * @throws {Error} The removal and the resulting configuration must be valid, the signer must be allowed to propose, and the RPC request must succeed.
      */
     removeOwner(ownerAddress: string, { threshold }?: Partial<MultisigOptions>): Promise<SolanaMultisigProposalResult>;
     /**
@@ -207,7 +207,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {string} newOwnerAddress - The address of the new member.
      * @param {Partial<MultisigOptions>} [options] - The operation options.
      * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
-     * @throws {Error} If the swap or the resulting configuration is invalid, the signer cannot propose, or the RPC request fails.
+     * @throws {Error} The swap and the resulting configuration must be valid, the signer must be allowed to propose, and the RPC request must succeed.
      */
     swapOwner(oldOwnerAddress: string, newOwnerAddress: string, { threshold }?: Partial<MultisigOptions>): Promise<SolanaMultisigProposalResult>;
     /**
@@ -215,7 +215,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *
      * @param {number} newThreshold - The new threshold.
      * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
-     * @throws {Error} If the threshold is invalid or already in force, the signer cannot propose, or the RPC request fails.
+     * @throws {Error} The threshold must be valid and not already in force, the signer must be allowed to propose, and the RPC request must succeed.
      */
     changeThreshold(newThreshold: number): Promise<SolanaMultisigProposalResult>;
     /**

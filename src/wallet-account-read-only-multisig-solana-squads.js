@@ -19,17 +19,17 @@ import { NoSuchElementError, UnsupportedOperationError, ValueError, WalletAccoun
 import FailoverProvider from '@tetherto/wdk-failover-provider'
 
 import { createSolanaRpc } from '@solana/rpc'
-
 import { address, getAddressEncoder, isOffCurveAddress } from '@solana/addresses'
-
 import { getBase58Decoder, getBase58Encoder, getBase64Encoder, getU64Encoder } from '@solana/codecs'
-
+import { isSignature } from '@solana/keys'
 import {
   findAssociatedTokenPda,
   getCreateAssociatedTokenIdempotentInstruction,
   getTransferInstruction,
   TOKEN_PROGRAM_ADDRESS
 } from '@solana-program/token'
+
+import { ed25519 } from '@noble/curves/ed25519'
 
 import {
   ACCOUNT,
@@ -41,8 +41,6 @@ import {
 } from './helpers/layouts.js'
 
 import { getProgramDerivedAddressSync } from './helpers/program-derived-address.js'
-
-import { ed25519 } from '@noble/curves/ed25519'
 
 /** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
 /** @typedef {import('@solana/rpc-types').Commitment} Commitment */
@@ -63,6 +61,8 @@ import { ed25519 } from '@noble/curves/ed25519'
  * @typedef {MultisigProposal & { statusName: string, approved: string[], rejected: string[], cancelled: string[] }} SolanaMultisigProposal
  */
 /** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
+/** @typedef {import('@tetherto/wdk-wallet').TransactionReceipt} TransactionReceipt */
+/** @typedef {import('@tetherto/wdk-wallet').Finality} Finality */
 /** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
 
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
@@ -246,7 +246,6 @@ const PROPOSAL_STATUS_PHRASES = [
 const SIZE = {
   member: 33,
   vecPrefix: 4,
-  signature: 64,
   multisigBase: 132,
   vaultTransactionBase: 83,
   configTransactionBase: 81,
@@ -280,12 +279,27 @@ const MAX = {
 
 const SIGNATURE_BASE_FEE = 5000n
 
+const SLOT_TIME = 400
+
+/** @type {{ [K in Commitment]: Finality }} */
+const FINALITY = { processed: 'pending', confirmed: 'confirmed', finalized: 'final' }
+
 /**
  * Read-only Solana Squads multisig wallet account implementation.
  *
  * @implements {IWalletAccountReadOnlyMultisig}
  */
 export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAccountReadOnly {
+  /**
+   * The default poll cadence for `waitForTransaction`, one slot rather than the block time the
+   * base class assumes.
+   *
+   * @type {number}
+   */
+  get defaultWaitInterval () {
+    return SLOT_TIME
+  }
+
   /**
    * Creates a new read-only Solana Squads multisig wallet account.
    *
@@ -347,7 +361,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {string | Uint8Array} createKeySecret - The secret, base58 or raw bytes.
    * @returns {Uint8Array} The secret's bytes, either 32 or 64 of them.
-   * @throws {Error} If the secret is missing, or is neither 32 nor 64 bytes.
+   * @throws {Error} The secret must be given, and must be 32 or 64 bytes.
    */
   static toCreateKeySecretBytes (createKeySecret) {
     if (!createKeySecret) {
@@ -443,7 +457,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * Returns whether the multisig account exists on-chain.
    *
    * @returns {Promise<boolean>} Whether the multisig account exists.
-   * @throws {Error} If no address is configured, or if the RPC request fails.
+   * @throws {Error} An address must be configured, and the RPC request must succeed.
    */
   async isDeployed () {
     if (!this._rpc) {
@@ -478,7 +492,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * Returns the addresses of the multisig's members, in on-chain order.
    *
    * @returns {Promise<string[]>} The member addresses.
-   * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
+   * @throws {Error} The multisig account must exist, and the RPC request must succeed.
    */
   async getOwners () {
     const { address: multisigPda, owners, isCreated } = await this.getMultisigInfo()
@@ -496,7 +510,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * Returns the number of approvals a proposal needs before it can be executed.
    *
    * @returns {Promise<number>} The threshold.
-   * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
+   * @throws {Error} The multisig account must exist, and the RPC request must succeed.
    */
   async getThreshold () {
     const { address: multisigPda, threshold, isCreated } = await this.getMultisigInfo()
@@ -531,7 +545,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * Returns the transaction index of the most recently created transaction.
    *
    * @returns {Promise<bigint>} The transaction index.
-   * @throws {Error} If the multisig account does not exist, or if the RPC request fails.
+   * @throws {Error} The multisig account must exist, and the RPC request must succeed.
    */
   async getNonce () {
     if (!this._rpc) {
@@ -571,7 +585,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to use as given (default: 0).
    * @returns {Promise<string>} The vault address.
-   * @throws {Error} If the index is out of range, or the address is not valid base58.
+   * @throws {Error} The index must be in range, and the address must be valid base58.
    */
   async getVaultAddress (vaultIndexOrAddress = DEFAULT.vaultIndex) {
     if (typeof vaultIndexOrAddress === 'string') {
@@ -608,7 +622,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to read as given (default: 0).
    * @returns {Promise<bigint>} The balance in lamports.
-   * @throws {Error} If the vault cannot be resolved, or if the RPC request fails.
+   * @throws {Error} The vault must resolve, and the RPC request must succeed.
    */
   async getBalance (vaultIndexOrAddress = DEFAULT.vaultIndex) {
     if (!this._rpc) {
@@ -630,7 +644,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {string} tokenAddress - The SPL token mint address.
    * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to read as given (default: 0).
    * @returns {Promise<bigint>} The token balance (in base unit).
-   * @throws {Error} If the mint address is malformed, or if the RPC request fails.
+   * @throws {Error} The mint address must be well-formed, and the RPC request must succeed.
    * @todo Support Token-2022 (Token Extensions Program).
    */
   async getTokenBalance (tokenAddress, vaultIndexOrAddress = DEFAULT.vaultIndex) {
@@ -663,23 +677,16 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {string} hash - The transaction signature.
    * @returns {Promise<SolanaTransactionReceipt | null>} The receipt, or null if the transaction was not found.
-   * @throws {Error} If the signature is malformed, or if the RPC request fails.
+   * @throws {ValueError} The signature must be 64 base58-encoded bytes.
+   * @throws {Error} The wallet must be connected to a provider, and the RPC request must succeed.
    */
   async getTransactionReceipt (hash) {
     if (!this._rpc) {
       throw new Error('The wallet must be connected to a provider to retrieve transaction receipts.')
     }
 
-    let signatureSize = 0
-
-    try {
-      signatureSize = typeof hash === 'string' ? getBase58Encoder().encode(hash).length : 0
-    } catch {
-      signatureSize = 0
-    }
-
-    if (signatureSize !== SIZE.signature) {
-      throw new Error(`Invalid transaction signature: ${hash}`)
+    if (!isSignature(hash)) {
+      throw new ValueError(`Invalid transaction signature: ${hash}`)
     }
 
     return this._rpc
@@ -689,6 +696,49 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
         encoding: 'json'
       })
       .send()
+  }
+
+  /**
+   * Retrieves a transaction's normalized receipt, which `waitForTransaction` polls.
+   *
+   * A signature the cluster has evicted and one it has never seen are indistinguishable without
+   * the transaction's blockhash, which a signature alone does not carry, so a dropped transaction
+   * raises `NoSuchElementError` rather than reporting a `dropped` finality. A caller waiting on
+   * one therefore times out instead of being told it was dropped.
+   *
+   * @param {string} hash - The transaction signature.
+   * @returns {Promise<TransactionReceipt>} The normalized receipt. `fee` is omitted while the transaction is below the account's commitment.
+   * @throws {ValueError} The signature must be 64 base58-encoded bytes.
+   * @throws {NoSuchElementError} The cluster must hold a status for the signature.
+   * @throws {Error} The wallet must be connected to a provider, and the RPC request must succeed.
+   */
+  async getTransaction (hash) {
+    if (!this._rpc) {
+      throw new Error('The wallet must be connected to a provider to retrieve transactions.')
+    }
+
+    if (!isSignature(hash)) {
+      throw new ValueError(`Invalid transaction signature: ${hash}`)
+    }
+
+    const { value: [status] } = await this._rpc
+      .getSignatureStatuses([hash], { searchTransactionHistory: true })
+      .send()
+
+    if (!status) {
+      throw new NoSuchElementError(`No transaction found at signature ${hash}.`)
+    }
+
+    const finality = FINALITY[status.confirmationStatus ?? 'processed']
+
+    if (finality === 'pending') {
+      return { hash, finality }
+    }
+
+    const receipt = await this.getTransactionReceipt(hash)
+    const normalized = { hash, finality, success: !status.err, block: Number(status.slot) }
+
+    return receipt ? { ...normalized, fee: receipt.meta.fee } : normalized
   }
 
   /**
@@ -708,7 +758,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {(number | bigint | string)[]} proposalIds - The proposal (transaction index) ids.
    * @returns {Promise<Record<string, SolanaMultisigProposal | null>>} For each id, the proposal, or null if no proposal exists at that id.
-   * @throws {Error} If an id is not a non-negative integer, or if the RPC request fails.
+   * @throws {Error} Every id must be a non-negative integer, and the RPC request must succeed.
    */
   async getProposals (proposalIds) {
     if (!proposalIds.length) {
@@ -821,7 +871,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {number} [memberCount] - The number of members the multisig will hold (default: 1).
    * @returns {Promise<Omit<TransactionResult, 'hash'>>} The deploy quote, in lamports.
-   * @throws {Error} If `memberCount` is out of range, or if the RPC request fails.
+   * @throws {Error} `memberCount` must be in range, and the RPC request must succeed.
    */
   async quoteDeploy (memberCount = DEFAULT.memberCount) {
     this._validateMemberCount(memberCount)
@@ -846,7 +896,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {SolanaTransaction} tx - The transaction to quote, either arm of `SolanaTransaction`.
    * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged over this account's configuration.
    * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transaction quote, in lamports. Sized from the message the proposal would store, so it is exact for any transaction `propose` accepts.
-   * @throws {Error} If the multisig does not exist or the RPC request fails.
+   * @throws {Error} The multisig must exist, and the RPC request must succeed.
    */
   async quotePropose (tx, config) {
     const account = await this._withConfig(config)
@@ -882,7 +932,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {TransferOptions} transferOptions - The transfer options.
    * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged over this account's configuration.
    * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transfer quote, in lamports.
-   * @throws {Error} If the transfer options are invalid, the multisig does not exist, or the RPC request fails.
+   * @throws {Error} The transfer options must be valid, the multisig must exist, and the RPC request must succeed.
    * @todo Support Token-2022 (Token Extensions Program).
    */
   async quoteTransfer (transferOptions, config) {
@@ -925,7 +975,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @returns {Promise<Omit<TransactionResult, 'hash'>>} The execution quote, in lamports.
-   * @throws {NoSuchElementError} If no proposal exists at that id.
+   * @throws {NoSuchElementError} A proposal must exist at that id.
    */
   async quoteExecuteProposal (proposalId) {
     const index = this._toProposalIndex(proposalId)
@@ -945,7 +995,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @protected
    * @returns {Promise<SquadsMultisigAccount>} The decoded account.
-   * @throws {Error} If the address holds a non-Squads account, or if the RPC request fails.
+   * @throws {Error} The address must hold a Squads account, and the RPC request must succeed.
    */
   async _getMultisigAccount () {
     if (!this._rpc) {
@@ -970,7 +1020,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @protected
    * @param {bigint} index - The proposal (transaction index) id.
    * @returns {Promise<Pick<SquadsProposalContext, 'multisig' | 'proposal'>>} The decoded multisig and proposal accounts.
-   * @throws {Error} If the multisig address holds a non-Squads account, or if the RPC request fails.
+   * @throws {Error} The multisig address must hold a Squads account, and the RPC request must succeed.
    */
   async _getMultisigAndProposal (index) {
     if (!this._rpc) {
@@ -999,7 +1049,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @protected
    * @param {bigint} index - The proposal (transaction index) id.
    * @returns {Promise<SquadsProposalContext>} The decoded accounts and the cluster's current Unix timestamp.
-   * @throws {Error} If the multisig address holds a non-Squads account, or the RPC request fails.
+   * @throws {Error} The multisig address must hold a Squads account, and the RPC request must succeed.
    */
   async _getMultisigProposalAndTransaction (index) {
     if (!this._rpc) {
@@ -1036,7 +1086,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @protected
    * @returns {Promise<SquadsProgramConfig>} The program config address, its multisig creation fee, and its treasury address.
-   * @throws {Error} If the account is missing or is not a program config.
+   * @throws {Error} The account must exist and must be a program config.
    */
   async _getProgramConfig () {
     if (!this._rpc) {
@@ -1077,7 +1127,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {Address} vaultPda - The vault the instructions execute from.
    * @param {SolanaTransaction} tx - The transaction to propose.
    * @returns {Object[]} The instructions, in kit's shape.
-   * @throws {ValueError} If the transaction is neither arm of `SolanaTransaction`, carries no instruction, names a different fee payer, or requires a signature the vault cannot give.
+   * @throws {ValueError} The transaction must be one arm of `SolanaTransaction`, must carry at least one instruction, must name the vault as its fee payer, and must require no signature the vault cannot give.
    */
   _toProposedInstructions (vaultPda, tx) {
     if (tx && tx.to !== undefined && tx.value !== undefined) {
@@ -1146,7 +1196,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {Address} vaultPda - The vault the transfer executes from, and the payer of the account it may create.
    * @param {TransferOptions} transferOptions - The transfer options.
    * @returns {Promise<Object[]>} The instructions, in kit's shape.
-   * @throws {Error} If the token or the recipient is not a valid address, if the mint does not exist, or if the RPC request fails.
+   * @throws {Error} The token and the recipient must be valid addresses, the mint must exist, and the RPC request must succeed.
    */
   async _toTransferInstructions (vaultPda, transferOptions) {
     const mint = address(transferOptions.token)
@@ -1276,7 +1326,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @protected
    * @param {number} memberCount - How many members the multisig would hold.
    * @returns {void} Nothing; throws when the count is out of range.
-   * @throws {Error} If the count is not an integer between 1 and 65,535.
+   * @throws {Error} The count must be an integer between 1 and 65,535.
    */
   _validateMemberCount (memberCount) {
     if (!Number.isInteger(memberCount) || memberCount < 1 || memberCount > MAX.memberCount) {
@@ -1354,7 +1404,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {number} transactionSize - The size of the transaction account, in bytes.
    * @param {number} memberCount - How many members the multisig holds.
    * @returns {Promise<bigint>} The rent both accounts lock up, in lamports.
-   * @throws {Error} If the wallet is not connected to a provider, or if the RPC request fails.
+   * @throws {Error} The wallet must be connected to a provider, and the RPC request must succeed.
    */
   async _quoteProposalRent (transactionSize, memberCount) {
     if (!this._rpc) {
@@ -1377,7 +1427,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @protected
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @returns {bigint} The transaction index.
-   * @throws {Error} If the id is not an integer between 0 and `MAX.proposalIndex`.
+   * @throws {Error} The id must be an integer between 0 and `MAX.proposalIndex`.
    */
   _toProposalIndex (proposalId) {
     const invalid = new Error(

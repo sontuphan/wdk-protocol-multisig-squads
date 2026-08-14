@@ -1809,21 +1809,23 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     it('throws on a malformed signature without hitting the RPC', async () => {
       const { account, rpc } = mockReceipt(DUMMY_RECEIPT)
 
-      await expect(account.getTransactionReceipt('nope')).rejects.toThrow(/Invalid transaction signature/)
+      await expect(account.getTransactionReceipt('nope'))
+        .rejects.toThrow('Invalid transaction signature: nope')
       expect(rpcRequests(rpc, 'getTransaction')).toHaveLength(0)
     })
 
     it('throws on an empty signature', async () => {
       const { account } = mockReceipt(DUMMY_RECEIPT)
 
-      await expect(account.getTransactionReceipt('')).rejects.toThrow(/Invalid transaction signature/)
+      await expect(account.getTransactionReceipt('')).rejects.toThrow('Invalid transaction signature: ')
     })
 
     it('rejects a 32-byte address passed as a signature', async () => {
-      // Valid base58, wrong length — the mistake a caller is most likely to make.
+      // Valid base58, wrong length: the mistake a caller is most likely to make.
       const { account, rpc } = mockReceipt(DUMMY_RECEIPT)
 
-      await expect(account.getTransactionReceipt(TEST_MULTISIG_PDA)).rejects.toThrow(/Invalid transaction signature/)
+      await expect(account.getTransactionReceipt(TEST_MULTISIG_PDA))
+        .rejects.toThrow(`Invalid transaction signature: ${TEST_MULTISIG_PDA}`)
       expect(rpcRequests(rpc, 'getTransaction')).toHaveLength(0)
     })
 
@@ -1835,6 +1837,177 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       stubSolanaRpc({ getTransaction: () => { throw new Error('503 Service Unavailable') } })
 
       await expect(account.getTransactionReceipt(DUMMY_SIGNATURE)).rejects.toThrow('503 Service Unavailable')
+    })
+  })
+
+  describe('getTransaction', () => {
+    const DUMMY_SIGNATURE = getBase58Decoder().decode(new Uint8Array(64).fill(7))
+    const DUMMY_RECEIPT = {
+      blockTime: 1785346451n,
+      slot: 435990582n,
+      meta: { err: null, fee: 6890n },
+      transaction: { signatures: [DUMMY_SIGNATURE] }
+    }
+
+    /**
+     * Builds an account whose RPC reports a fixed signature status and a fixed transaction.
+     *
+     * @param {Object|null} status - The signature status, or null for a signature the cluster does not know.
+     * @param {Object|null} [receipt] - The transaction `getTransaction` returns.
+     * @returns {{ account: WalletAccountReadOnlyMultisigSolanaSquads, rpc: Object }}
+     */
+    function mockStatus (status, receipt = DUMMY_RECEIPT) {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        provider: TEST_RPC_URL,
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA
+      })
+
+      const rpc = stubSolanaRpc({
+        getSignatureStatuses: () => ({ context: { apiVersion: '2.1.0', slot: 435990600n }, value: [status] }),
+        getTransaction: () => receipt
+      })
+
+      return { account, rpc }
+    }
+
+    it('normalizes a confirmed transaction', async () => {
+      const { account } = mockStatus({
+        confirmationStatus: 'confirmed',
+        confirmations: 12n,
+        err: null,
+        slot: 435990582n
+      })
+
+      expect(await account.getTransaction(DUMMY_SIGNATURE)).toEqual({
+        hash: DUMMY_SIGNATURE,
+        finality: 'confirmed',
+        success: true,
+        block: 435990582,
+        fee: 6890n
+      })
+    })
+
+    it('reports a finalized transaction as final', async () => {
+      const { account } = mockStatus({
+        confirmationStatus: 'finalized',
+        confirmations: null,
+        err: null,
+        slot: 435990582n
+      })
+
+      expect((await account.getTransaction(DUMMY_SIGNATURE)).finality).toBe('final')
+    })
+
+    it('reports a processed transaction as pending, without reading it', async () => {
+      // Nothing but the finality is known yet: the fee and the execution's result are only
+      // decided once the transaction lands, so the second round trip is not made.
+      const { account, rpc } = mockStatus({
+        confirmationStatus: 'processed',
+        confirmations: 0n,
+        err: null,
+        slot: 435990582n
+      })
+
+      expect(await account.getTransaction(DUMMY_SIGNATURE)).toEqual({
+        hash: DUMMY_SIGNATURE,
+        finality: 'pending'
+      })
+      expect(rpcRequests(rpc, 'getTransaction')).toHaveLength(0)
+    })
+
+    it('reports a reverted transaction as an unsuccessful confirmation', async () => {
+      // A transaction that failed on-chain still reached its finality: `success` is what
+      // separates the two, not the finality.
+      const { account } = mockStatus({
+        confirmationStatus: 'confirmed',
+        confirmations: 3n,
+        err: { InstructionError: [0, 'Custom'] },
+        slot: 435990582n
+      })
+
+      expect(await account.getTransaction(DUMMY_SIGNATURE)).toMatchObject({
+        finality: 'confirmed',
+        success: false
+      })
+    })
+
+    it('omits the fee when the transaction is not readable yet', async () => {
+      // `getSignatureStatuses` sees a transaction a slot or two before `getTransaction` serves
+      // it, so the receipt must survive the gap rather than fail on it.
+      const { account } = mockStatus(
+        { confirmationStatus: 'confirmed', confirmations: 1n, err: null, slot: 435990582n },
+        null
+      )
+
+      const receipt = await account.getTransaction(DUMMY_SIGNATURE)
+
+      expect(receipt).toEqual({
+        hash: DUMMY_SIGNATURE,
+        finality: 'confirmed',
+        success: true,
+        block: 435990582
+      })
+      expect(receipt.fee).toBeUndefined()
+    })
+
+    it('searches the transaction history', async () => {
+      // Without it the cluster only answers for the last few minutes of slots, so an older
+      // transaction would read as never seen.
+      const { account, rpc } = mockStatus({
+        confirmationStatus: 'finalized',
+        confirmations: null,
+        err: null,
+        slot: 435990582n
+      })
+
+      await account.getTransaction(DUMMY_SIGNATURE)
+
+      expect(rpcRequests(rpc, 'getSignatureStatuses')[0]).toEqual([
+        [DUMMY_SIGNATURE],
+        { searchTransactionHistory: true }
+      ])
+    })
+
+    it('throws when the cluster reports no status', async () => {
+      // The type matters: `waitForTransaction` treats it as a transient not-found and keeps
+      // polling, rather than giving up on a transaction that has not propagated yet.
+      const { account } = mockStatus(null)
+
+      await expect(account.getTransaction(DUMMY_SIGNATURE)).rejects.toThrow(NoSuchElementError)
+    })
+
+    it('throws on a malformed signature without hitting the RPC', async () => {
+      const { account, rpc } = mockStatus(null)
+
+      await expect(account.getTransaction('nope'))
+        .rejects.toThrow('Invalid transaction signature: nope')
+      expect(rpcRequests(rpc, 'getSignatureStatuses')).toHaveLength(0)
+    })
+
+    it('rejects a 32-byte address passed as a signature', async () => {
+      // Valid base58, wrong length: the mistake a caller is most likely to make, and the one
+      // a not-found result would otherwise hide.
+      const { account } = mockStatus(null)
+
+      await expect(account.getTransaction(TEST_MULTISIG_PDA))
+        .rejects.toThrow(`Invalid transaction signature: ${TEST_MULTISIG_PDA}`)
+    })
+
+    it('throws without a provider', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA
+      })
+
+      await expect(account.getTransaction(DUMMY_SIGNATURE))
+        .rejects.toThrow('The wallet must be connected to a provider to retrieve transactions.')
+    })
+
+    it('polls at one slot', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads(null, {
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA
+      })
+
+      expect(account.defaultWaitInterval).toBe(400)
     })
   })
 

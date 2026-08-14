@@ -25,7 +25,7 @@ import { address } from '@solana/addresses'
 import { createSolanaRpc } from '@solana/rpc'
 import { generateKeyPairSigner } from '@solana/signers'
 
-import { UnsupportedOperationError } from '@tetherto/wdk-wallet'
+import { NoSuchElementError, UnsupportedOperationError } from '@tetherto/wdk-wallet'
 import { WalletAccountReadOnlySolana } from '@tetherto/wdk-wallet-solana'
 
 import WalletManagerMultisigSolanaSquads, {
@@ -1073,6 +1073,32 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       await expect(accounts[0].getTransactionReceipt('not-a-signature'))
         .rejects.toThrow('Invalid transaction signature: not-a-signature')
+    })
+
+    it('normalizes a confirmed transaction', async () => {
+      const { accounts, deployHash } = await deployMultisig({ members: 1, threshold: 1 })
+
+      const receipt = await accounts[0].getTransaction(deployHash)
+
+      expect(receipt.hash).toBe(deployHash)
+      expect(receipt.success).toBe(true)
+      expect(receipt.fee).toBe(10000n)
+      expect(['confirmed', 'final']).toContain(receipt.finality)
+    })
+
+    it('throws for a signature the cluster has never seen', async () => {
+      const { accounts } = await deployMultisig({ members: 1, threshold: 1 })
+
+      await expect(accounts[0].getTransaction('5'.repeat(87))).rejects.toThrow(NoSuchElementError)
+    })
+
+    it('waits for a transaction it has just sent', async () => {
+      const { accounts, deployHash } = await deployMultisig({ members: 1, threshold: 1 })
+
+      const receipt = await accounts[0].waitForTransaction(deployHash)
+
+      expect(receipt.hash).toBe(deployHash)
+      expect(receipt.success).toBe(true)
     })
 
     it('exposes a read-only view that reads the same state without signing', async () => {

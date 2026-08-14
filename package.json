@@ -33,6 +33,7 @@
     "@solana-program/token": "0.7.0",
     "@solana/addresses": "3.0.3",
     "@solana/codecs": "3.0.3",
+    "@solana/keys": "3.0.3",
     "@solana/rpc": "3.0.3",
     "@solana/signers": "3.0.3",
     "@tetherto/wdk-failover-provider": "1.0.0-beta.2",

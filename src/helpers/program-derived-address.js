@@ -40,7 +40,7 @@ const MAX = { seeds: 16, seedLength: 32, bump: 255 }
  * @param {string} input.programAddress - The program to derive for.
  * @param {(string | Uint8Array)[]} input.seeds - The seeds, strings taken as UTF-8.
  * @returns {Address} The derived address.
- * @throws {Error} If there are more than 16 seeds, a seed is longer than 32 bytes, or the address the seeds hash to lies on the ed25519 curve.
+ * @throws {Error} There must be at most 16 seeds, each of at most 32 bytes, and the address they hash to must lie off the ed25519 curve.
  */
 export function createProgramDerivedAddressSync ({ programAddress, seeds }) {
   if (seeds.length > MAX.seeds) {
@@ -80,7 +80,7 @@ export function createProgramDerivedAddressSync ({ programAddress, seeds }) {
  * @param {string} input.programAddress - The program to derive for.
  * @param {(string | Uint8Array)[]} input.seeds - The seeds, strings taken as UTF-8.
  * @returns {ProgramDerivedAddress} The address and the bump it was found at.
- * @throws {Error} If there are more than 16 seeds, a seed is longer than 32 bytes, or no bump yields an address off the curve.
+ * @throws {Error} There must be at most 16 seeds, each of at most 32 bytes, and some bump must yield an address off the curve.
  */
 export function getProgramDerivedAddressSync ({ programAddress, seeds }) {
   for (let bump = MAX.bump; bump > 0; bump--) {

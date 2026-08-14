@@ -24,7 +24,7 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
      * const account = await wallet.getAccount(1);
      * @param {number | string} [indexOrSignerName] - The index of the account to get (default: 0). A registered signer name is not supported.
      * @returns {Promise<WalletAccountMultisigSolanaSquads>} The account.
-     * @throws {UnsupportedOperationError} If a signer name is given: this wallet keeps no signer registry.
+     * @throws {UnsupportedOperationError} The signer name must be omitted: this wallet keeps no signer registry.
      */
     getAccount(indexOrSignerName?: number | string): Promise<WalletAccountMultisigSolanaSquads>;
     /**
@@ -41,7 +41,7 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
      * Returns the current fee rates.
      *
      * @returns {Promise<FeeRates>} The fee rates (in lamports).
-     * @throws {Error} If no provider is configured or the RPC request fails.
+     * @throws {Error} A provider must be configured, and the RPC request must succeed.
      */
     getFeeRates(): Promise<FeeRates>;
 }
