@@ -99,9 +99,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *
      * @param {SolanaTransaction} tx - The transaction to sign.
      * @returns {Promise<SolanaTransaction>} The signed transaction.
-     * @throws {UnsupportedOperationError} A Squads multisig is a program-derived address with no
-     *   private key, so it cannot sign. Propose the transaction with propose(tx) and let the
-     *   members approve it instead.
+     * @throws {UnsupportedOperationError} A multisig is a program-derived address and cannot sign.
      */
     signTransaction(tx: SolanaTransaction): Promise<SolanaTransaction>;
     /**
@@ -109,9 +107,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *
      * @param {SolanaTransaction} tx - The transaction to send.
      * @returns {Promise<TransactionResult>} The transaction's result.
-     * @throws {UnsupportedOperationError} A Squads multisig does not submit transactions
-     *   directly: it proposes them and executes once the approval threshold is met. Use
-     *   propose(tx) and then executeProposal(proposalId) instead.
+     * @throws {UnsupportedOperationError} A multisig proposes transactions rather than submitting them.
      */
     sendTransaction(tx: SolanaTransaction): Promise<TransactionResult>;
     /**
@@ -138,8 +134,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {SolanaTransaction} tx - The transaction to propose.
      * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
      * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
-     * @throws {ValueError} If `tx` is neither `{ to, value }` nor a message the vault can execute.
-     * @throws {Error} If the multisig does not exist, the signer cannot propose, or the RPC request fails.
      */
     propose(tx: SolanaTransaction, transactionOptions?: MultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
     /**
@@ -149,9 +143,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
      * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
      * @throws {Error} If the transfer options are invalid, the signer cannot propose, or the quote exceeds `transferMaxFee`.
-     * @throws {UnsupportedOperationError} If the mint belongs to the Token-2022 program, whose
-     *   associated token accounts this package does not derive. @todo Support Token-2022 (Token
-     *   Extensions Program).
+     * @throws {UnsupportedOperationError} If the mint belongs to the Token-2022 program.
+     * @todo Support Token-2022 (Token Extensions Program).
      */
     transfer(transferOptions: TransferOptions, transactionOptions?: MultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
     /**
@@ -160,7 +153,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @param {string} [memo] - An optional note recorded on chain with the vote. It costs rent, and an empty string is stored as a present-but-empty memo rather than none.
      * @returns {Promise<SolanaMultisigProposalResult>} The approval result.
-     * @throws {NoSuchElementError} If no proposal exists at that id.
      * @throws {Error} If the proposal is not open to this signer's approval, or the RPC request fails.
      */
     approveProposal(proposalId: number | bigint | string, memo?: string): Promise<SolanaMultisigProposalResult>;
@@ -170,7 +162,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @param {string} [memo] - An optional note recorded on chain with the vote. It costs rent, and an empty string is stored as a present-but-empty memo rather than none.
      * @returns {Promise<SolanaMultisigProposalResult>} The rejection result.
-     * @throws {NoSuchElementError} If no proposal exists at that id.
      * @throws {Error} If the proposal is not open to this signer's rejection, or the RPC request fails.
      */
     rejectProposal(proposalId: number | bigint | string, memo?: string): Promise<SolanaMultisigProposalResult>;
@@ -182,7 +173,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @throws {NoSuchElementError} If no proposal exists at that id.
      * @throws {ValueError} If the proposal has not reached the approval threshold, or its transaction account has been closed.
      * @throws {Error} If the proposal cannot be executed by this signer yet, or the RPC request fails.
-     * @throws {NotImplementedError} If the proposal backs a batch.
      */
     executeProposal(proposalId: number | bigint | string): Promise<TransactionResult>;
     /**
@@ -227,7 +217,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * copy carries no `createKeySecret` to resolve it from.
      *
      * @returns {Promise<WalletAccountReadOnlyMultisigSolanaSquads>} The read-only account.
-     * @throws {Error} If the multisig address cannot be resolved.
      */
     toReadOnlyAccount(): Promise<WalletAccountReadOnlyMultisigSolanaSquads>;
     /**
