@@ -22,10 +22,9 @@ import WalletAccountReadOnlyMultisigSolanaSquads, {
   SECRET_SIZE,
   TRANSACTION_KIND
 } from './wallet-account-read-only-multisig-solana-squads.js'
-
 import { address, getAddressEncoder } from '@solana/addresses'
-
 import { getBase64Encoder } from '@solana/codecs'
+import { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes } from '@solana/signers'
 
 import {
   ACCOUNT,
@@ -36,8 +35,6 @@ import {
 } from './helpers/layouts.js'
 
 import { getProgramDerivedAddressSync } from './helpers/program-derived-address.js'
-
-import { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes } from '@solana/signers'
 
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */

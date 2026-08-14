@@ -45,6 +45,27 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
 /** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
 /** @typedef {import('@solana/rpc-types').Commitment} Commitment */
 /** @typedef {import('@solana/addresses').Address} Address */
+/** @typedef {import('@solana/instructions').AccountMeta} AccountMeta */
+/** @typedef {import('@solana/instructions').Instruction} Instruction */
+/** @typedef {import('@solana/codecs-core').ReadonlyUint8Array} ReadonlyUint8Array */
+/**
+ * A kit instruction with the two halves kit leaves optional. Every instruction this package builds
+ * carries both, and `_compileTransactionMessage` reads both.
+ *
+ * @typedef {Instruction & { accounts: readonly AccountMeta[], data: ReadonlyUint8Array }} CompilableInstruction
+ */
+/**
+ * A transaction message compiled into the two forms the create instruction needs: the bytes it
+ * carries, and the size the transaction account is allocated at.
+ *
+ * @typedef {Object} CompiledTransactionMessage
+ * @property {ReadonlyUint8Array} bytes - The message as the create instruction carries it.
+ * @property {number} storedSize - The size the transaction account is allocated at.
+ * @property {Address[]} accountKeys - The account keys, in message order.
+ * @property {number} numSigners - How many leading keys are signers.
+ * @property {number} numWritableSigners - How many of those signers are writable.
+ * @property {number} numWritableNonSigners - How many non-signers after them are writable.
+ */
 
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountReadOnlyMultisig} IWalletAccountReadOnlyMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInfo} MultisigInfo */
@@ -1126,7 +1147,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @protected
    * @param {Address} vaultPda - The vault the instructions execute from.
    * @param {SolanaTransaction} tx - The transaction to propose.
-   * @returns {Object[]} The instructions, in kit's shape.
+   * @returns {CompilableInstruction[]} The instructions, in kit's shape.
    * @throws {ValueError} The transaction must be one arm of `SolanaTransaction`, must carry at least one instruction, must name the vault as its fee payer, and must require no signature the vault cannot give.
    */
   _toProposedInstructions (vaultPda, tx) {
@@ -1195,7 +1216,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @protected
    * @param {Address} vaultPda - The vault the transfer executes from, and the payer of the account it may create.
    * @param {TransferOptions} transferOptions - The transfer options.
-   * @returns {Promise<Object[]>} The instructions, in kit's shape.
+   * @returns {Promise<CompilableInstruction[]>} The instructions, in kit's shape.
    * @throws {Error} The token and the recipient must be valid addresses, the mint must exist, and the RPC request must succeed.
    */
   async _toTransferInstructions (vaultPda, transferOptions) {
@@ -1253,8 +1274,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @protected
    * @param {Address} payer - The vault the message is executed from, which is its first key.
-   * @param {Object[]} instructions - The instructions, in kit's shape.
-   * @returns {{ bytes: Uint8Array, storedSize: number, accountKeys: Address[], numSigners: number, numWritableSigners: number, numWritableNonSigners: number }} The compiled message.
+   * @param {CompilableInstruction[]} instructions - The instructions, in kit's shape.
+   * @returns {CompiledTransactionMessage} The compiled message.
    */
   _compileTransactionMessage (payer, instructions) {
     const roles = new Map()
