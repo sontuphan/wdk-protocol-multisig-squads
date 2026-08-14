@@ -526,7 +526,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     const signerAddress = await this.getSignerAddress()
 
-    this._requirePermission(multisig, signerAddress, PERMISSION.execute, 'execute proposals')
+    this._requirePermission(multisig, signerAddress, PERMISSION.execute)
 
     if (!proposal.exists) {
       throw new NoSuchElementError(
@@ -582,7 +582,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     this._requireDeployed(multisig, 'proposing configuration changes')
     this._requireAutonomous(multisig)
-    await this._requireCanPropose(multisig)
+    this._requirePermission(multisig, await this.getSignerAddress(), PERMISSION.initiate)
 
     if (multisig.members.some((member) => member.address === newOwner)) {
       throw new Error(
@@ -617,7 +617,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     this._requireDeployed(multisig, 'proposing configuration changes')
     this._requireAutonomous(multisig)
-    await this._requireCanPropose(multisig)
+    this._requirePermission(multisig, await this.getSignerAddress(), PERMISSION.initiate)
 
     if (!multisig.members.some((member) => member.address === owner)) {
       throw new Error(
@@ -660,7 +660,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     this._requireDeployed(multisig, 'proposing configuration changes')
     this._requireAutonomous(multisig)
-    await this._requireCanPropose(multisig)
+    this._requirePermission(multisig, await this.getSignerAddress(), PERMISSION.initiate)
 
     const replaced = multisig.members.find((member) => member.address === oldOwner)
 
@@ -707,7 +707,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     this._requireDeployed(multisig, 'proposing configuration changes')
     this._requireAutonomous(multisig)
-    await this._requireCanPropose(multisig)
+    this._requirePermission(multisig, await this.getSignerAddress(), PERMISSION.initiate)
 
     if (newThreshold === multisig.threshold) {
       throw new Error(
@@ -803,12 +803,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     const signerAddress = await this.getSignerAddress()
 
-    this._requirePermission(
-      { address: multisigPda, members },
-      signerAddress,
-      PERMISSION.initiate,
-      'propose transactions'
-    )
+    this._requirePermission({ address: multisigPda, members }, signerAddress, PERMISSION.initiate)
 
     const index = transactionIndex + 1n
     const transactionPda = this._getTransactionPda(multisigPda, index)
@@ -907,7 +902,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /** @private */
-  _requirePermission (multisig, signerAddress, mask, permission) {
+  _requirePermission (multisig, signerAddress, mask) {
     const member = multisig.members.find((candidate) => candidate.address === signerAddress)
 
     if (!member) {
@@ -917,9 +912,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
 
     if (!(member.mask & mask)) {
-      throw new Error(
-        `The signer ${signerAddress} does not hold the permission to ${permission}.`
-      )
+      throw new Error(`The signer ${signerAddress} does not hold the permission.`)
     }
 
     return member
@@ -935,7 +928,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     const signerAddress = await this.getSignerAddress()
 
-    this._requirePermission(multisig, signerAddress, PERMISSION.vote, 'vote on proposals')
+    this._requirePermission(multisig, signerAddress, PERMISSION.vote)
 
     if (!proposal.exists) {
       throw new NoSuchElementError(
@@ -1122,16 +1115,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         `Invalid threshold ${threshold}. It must be an integer between 1 and the number of owners able to vote (${voterCount}).`
       )
     }
-  }
-
-  /** @private */
-  async _requireCanPropose (multisig) {
-    this._requirePermission(
-      multisig,
-      await this.getSignerAddress(),
-      PERMISSION.initiate,
-      'propose transactions'
-    )
   }
 
   /** @private */

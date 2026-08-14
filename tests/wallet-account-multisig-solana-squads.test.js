@@ -1005,7 +1005,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       // Mask 2 is vote-only: a member, but without the permission to initiate.
       const { account, sendTransaction } = await proposingAccount({ mask: 2 })
 
-      await expect(account.propose(TX)).rejects.toThrow(/permission to propose/)
+      await expect(account.propose(TX)).rejects.toThrow(/does not hold the permission/)
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 
@@ -1196,7 +1196,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       // Mask 5 is propose plus execute: a member, but unable to vote.
       const { account, sendTransaction } = await votingAccount({ mask: 5 })
 
-      await expect(account.approveProposal(3)).rejects.toThrow(/permission to vote/)
+      await expect(account.approveProposal(3)).rejects.toThrow(/does not hold the permission/)
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 
@@ -1368,7 +1368,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     it('throws when the signer cannot vote', async () => {
       const { account, sendTransaction } = await votingAccount({ mask: 5 })
 
-      await expect(account.rejectProposal(3)).rejects.toThrow(/permission to vote/)
+      await expect(account.rejectProposal(3)).rejects.toThrow(/does not hold the permission/)
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 
@@ -1627,7 +1627,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         members: [{ address: TEST_SIGNER, mask: 2 }]
       })
 
-      await expect(account.addOwner(OTHER_MEMBER)).rejects.toThrow(/permission to propose/)
+      await expect(account.addOwner(OTHER_MEMBER)).rejects.toThrow(/does not hold the permission/)
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 
@@ -1794,7 +1794,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         members: [{ address: TEST_SIGNER, mask: 6 }, { address: OTHER_MEMBER, mask: 7 }]
       })
 
-      await expect(account.removeOwner(OTHER_MEMBER)).rejects.toThrow(/permission to propose/)
+      await expect(account.removeOwner(OTHER_MEMBER)).rejects.toThrow(/does not hold the permission/)
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 
@@ -2013,7 +2013,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         members: [{ address: TEST_SIGNER, mask: 6 }, { address: OTHER_MEMBER, mask: 7 }]
       })
 
-      await expect(account.swapOwner(OTHER_MEMBER, NEW_OWNER)).rejects.toThrow(/permission to propose/)
+      await expect(account.swapOwner(OTHER_MEMBER, NEW_OWNER)).rejects.toThrow(/does not hold the permission/)
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 
@@ -2135,7 +2135,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
 
       // Threshold 1 is also the current value, so the ordering decides which error surfaces.
-      await expect(account.changeThreshold(1)).rejects.toThrow(/permission to propose/)
+      await expect(account.changeThreshold(1)).rejects.toThrow(/does not hold the permission/)
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 
@@ -2290,7 +2290,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       // Mask 3 is propose plus vote: a member, but unable to execute.
       const { account, sendTransaction } = await executingAccount({ mask: 3 })
 
-      await expect(account.executeProposal(3)).rejects.toThrow(/permission to execute/)
+      await expect(account.executeProposal(3)).rejects.toThrow(/does not hold the permission/)
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 

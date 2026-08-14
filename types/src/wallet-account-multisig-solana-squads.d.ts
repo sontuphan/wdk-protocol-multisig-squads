@@ -263,8 +263,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /** @private */
     private _validateThreshold;
     /** @private */
-    private _requireCanPropose;
-    /** @private */
     private _requireViableMembers;
 }
 export type IWalletAccountMultisig = import("@tetherto/wdk-wallet/multisig").IWalletAccountMultisig;
