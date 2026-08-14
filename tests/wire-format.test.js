@@ -62,6 +62,8 @@ const TEST_MULTISIG = '11111111111111111111111111111111'
 // so the 11 message tests can use the constant and still fail if the derivation breaks.
 const TEST_OWN_MULTISIG = '7jmBsJmAV5aAwEQkw3AybYgTMHVUzbWgWMGvyMjhSEDQ'
 const TEST_OWN_VAULT = '46t5cnapyYC1RNVCgezqxNssv65qnF3FgddyG86egHL1'
+// The same multisig's vault 3, from the SDK's `getVaultPda`, for the vault-index tests.
+const TEST_OWN_VAULT_3 = '4FhYxVueD2w9aFH3dW2n5ksUwusxi3m3zSGufzNLvdQz'
 const TEST_OWN_CREATE_KEY = 'J2xccRtuG43drESLYznHhLhQkLTdfepcKYbiQ9BsJVaf'
 
 const ADDRESS_LOOKUP_TABLE_PROGRAM = 'AddressLookupTab1e1111111111111111111111111'
@@ -1001,6 +1003,47 @@ describe('wire format', () => {
 
     it('is 120 bytes for a native transfer', async () => {
       expect(await proposedMessage(1n)).toHaveLength(120)
+    })
+
+    /**
+     * Proposes a transfer from the given vault and returns the whole instruction data, so the
+     * stored vault index and the stored message can be read from the same bytes.
+     *
+     * @param {number} [vaultIndex] - The vault to spend from.
+     * @returns {Promise<Uint8Array>} The `vaultTransactionCreate` data.
+     */
+    async function proposedData (vaultIndex) {
+      stubSolanaRpc({
+        getAccountInfo: () => ({ context: { slot: 1 }, value: multisigAccount() }),
+        getMinimumBalanceForRentExemption: () => 1000000
+      })
+
+      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_SIGNATURE, fee: 5000n }))
+
+      account._signerAccount.sendTransaction = sendTransaction
+
+      await account.propose({ to: RECIPIENT, value: 1n }, { vaultIndex })
+
+      return sendTransaction.mock.calls[0][0].instructions[0].data
+    }
+
+    // The one pairing that cannot be checked from either half alone: the program derives the
+    // signing vault from the stored index, so a message compiled for a different vault would
+    // create a proposal that only fails at execution.
+    it('stores the index of the vault the message was compiled for', async () => {
+      const data = await proposedData(3)
+      const length = new DataView(data.buffer, data.byteOffset).getUint32(10, true)
+
+      expect(data[8]).toBe(3)
+      expect(Array.from(data.slice(14, 14 + length))).toEqual(reference(TEST_OWN_VAULT_3, 1n))
+    })
+
+    it('stores vault 0 when the options name none', async () => {
+      const data = await proposedData()
+      const length = new DataView(data.buffer, data.byteOffset).getUint32(10, true)
+
+      expect(data[8]).toBe(0)
+      expect(Array.from(data.slice(14, 14 + length))).toEqual(reference(TEST_OWN_VAULT, 1n))
     })
 
   })

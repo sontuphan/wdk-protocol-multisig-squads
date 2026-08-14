@@ -2628,6 +2628,24 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(messageLength(b)).toBe(289)
     })
 
+    it('spends from the vault the options name', async () => {
+      const { account, sendTransaction } = await transferringAccount()
+
+      await account.transfer(OPTIONS, { vaultIndex: 3 })
+
+      // Byte 8 of vaultTransactionCreate, after the discriminator: the index the program
+      // derives the signing vault from when the proposal executes.
+      expect(sendTransaction.mock.calls[0][0].instructions[0].data[8]).toBe(3)
+    })
+
+    it('refuses a vault index above the u8 the seed encodes', async () => {
+      const { account, sendTransaction } = await transferringAccount()
+
+      await expect(account.transfer(OPTIONS, { vaultIndex: 256 }))
+        .rejects.toThrow('Invalid vault index 256. It must be an integer between 0 and 255.')
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
     it('refuses a Token-2022 mint rather than building an unusable transfer', async () => {
       const { account, sendTransaction } = await transferringAccount({
         mintOwner: TOKEN_2022_PROGRAM

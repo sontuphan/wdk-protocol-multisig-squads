@@ -58,6 +58,13 @@ import {
  * @typedef {MultisigProposal & MultisigAutoExecuteResult & { hash: string, fee: bigint }} SolanaMultisigProposalResult
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
+/**
+ * `MultisigTransactionOptions` widened with the vault the proposal spends from: an index between 0
+ * and 255, which the stored transaction carries so the program signs with the same vault the
+ * message was compiled against. It defaults to the main vault, 0.
+ *
+ * @typedef {MultisigTransactionOptions & { vaultIndex?: number }} SolanaMultisigTransactionOptions
+ */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigOptions} MultisigOptions */
 /**
  * `MultisigOptions` widened with the Squads permission mask to grant the member being added: a
@@ -327,37 +334,37 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * SOL transfer or a message carrying `instructions`, which the vault executes as they stand.
    *
    * @param {SolanaTransaction} tx - The transaction to propose.
-   * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
+   * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
    * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    */
-  async propose (tx, transactionOptions = {}) {
-    const vaultPda = address(await this.getVaultAddress(DEFAULT.vaultIndex))
+  async propose (tx, { vaultIndex = DEFAULT.vaultIndex, ...transactionOptions } = {}) {
+    const vaultPda = address(await this.getVaultAddress(vaultIndex))
     const compiled = this._compileTransactionMessage(
       vaultPda,
       this._toProposedInstructions(vaultPda, tx)
     )
 
-    return this._proposeVaultTransaction(compiled, transactionOptions)
+    return this._proposeVaultTransaction(compiled, { vaultIndex, ...transactionOptions })
   }
 
   /**
    * Proposes an SPL token transfer to the multisig.
    *
    * @param {TransferOptions} transferOptions - The transfer options.
-   * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
+   * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
    * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} If the transfer options are invalid, the signer cannot propose, or the quote exceeds `transferMaxFee`.
    * @throws {UnsupportedOperationError} If the mint belongs to the Token-2022 program.
    * @todo Support Token-2022 (Token Extensions Program).
    */
-  async transfer (transferOptions, transactionOptions = {}) {
+  async transfer (transferOptions, { vaultIndex = DEFAULT.vaultIndex, ...transactionOptions } = {}) {
     if (!this._rpc) {
       throw new Error('The wallet must be connected to a provider to propose transfers.')
     }
 
     const mint = address(transferOptions.token)
     const recipient = address(transferOptions.recipient)
-    const vaultPda = address(await this.getVaultAddress(DEFAULT.vaultIndex))
+    const vaultPda = address(await this.getVaultAddress(vaultIndex))
 
     const [source, destination] = await Promise.all([
       findAssociatedTokenPda({ mint, owner: vaultPda, tokenProgram: TOKEN_PROGRAM_ADDRESS }),
@@ -391,7 +398,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
           ata: destination[0],
           mint,
           owner: recipient,
-          payer: address(vaultPda)
+          payer: vaultPda
         })
       )
     }
@@ -416,7 +423,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       throw new Error('Exceeded maximum fee cost for the transfer operation.')
     }
 
-    return this._proposeVaultTransaction(compiled, { ...transactionOptions, multisig, rent })
+    return this._proposeVaultTransaction(compiled, { vaultIndex, ...transactionOptions, multisig, rent })
   }
 
   /**
@@ -562,9 +569,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} If the addition or the resulting configuration is invalid, the signer cannot propose, or the RPC request fails.
    */
-  async addOwner (ownerAddress, options = {}) {
+  async addOwner (ownerAddress, { mask = ALMIGHTY_PERMISSIONS, threshold } = {}) {
     const newOwner = address(ownerAddress)
-    const mask = options.mask ?? ALMIGHTY_PERMISSIONS
 
     if (!Number.isInteger(mask) || mask < PERMISSION.initiate || mask > ALMIGHTY_PERMISSIONS) {
       throw new Error(
@@ -586,12 +592,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     const resulting = [...multisig.members, { address: newOwner, mask }]
 
-    this._requireViableMembers(resulting, options.threshold ?? multisig.threshold, multisig.address)
+    this._requireViableMembers(resulting, threshold ?? multisig.threshold, multisig.address)
 
     const actions = [CONFIG_ACTION.addMember(newOwner, mask)]
 
-    if (options.threshold !== undefined) {
-      actions.push(CONFIG_ACTION.changeThreshold(options.threshold))
+    if (threshold !== undefined) {
+      actions.push(CONFIG_ACTION.changeThreshold(threshold))
     }
 
     return this._proposeConfigTransaction(multisig, actions)
@@ -605,7 +611,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} If the removal or the resulting configuration is invalid, the signer cannot propose, or the RPC request fails.
    */
-  async removeOwner (ownerAddress, options = {}) {
+  async removeOwner (ownerAddress, { threshold } = {}) {
     const owner = address(ownerAddress)
     const multisig = await this._getMultisigAccount()
 
@@ -621,12 +627,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     const remaining = multisig.members.filter((member) => member.address !== owner)
 
-    this._requireViableMembers(remaining, options.threshold ?? multisig.threshold, multisig.address)
+    this._requireViableMembers(remaining, threshold ?? multisig.threshold, multisig.address)
 
     const actions = [CONFIG_ACTION.removeMember(owner)]
 
-    if (options.threshold !== undefined) {
-      actions.push(CONFIG_ACTION.changeThreshold(options.threshold))
+    if (threshold !== undefined) {
+      actions.push(CONFIG_ACTION.changeThreshold(threshold))
     }
 
     return this._proposeConfigTransaction(multisig, actions)
@@ -642,7 +648,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} If the swap or the resulting configuration is invalid, the signer cannot propose, or the RPC request fails.
    */
-  async swapOwner (oldOwnerAddress, newOwnerAddress, options = {}) {
+  async swapOwner (oldOwnerAddress, newOwnerAddress, { threshold } = {}) {
     const oldOwner = address(oldOwnerAddress)
     const newOwner = address(newOwnerAddress)
 
@@ -675,15 +681,15 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       { address: newOwner, mask: replaced.mask }
     ]
 
-    this._requireViableMembers(resulting, options.threshold ?? multisig.threshold, multisig.address)
+    this._requireViableMembers(resulting, threshold ?? multisig.threshold, multisig.address)
 
     const actions = [
       CONFIG_ACTION.removeMember(oldOwner),
       CONFIG_ACTION.addMember(newOwner, replaced.mask)
     ]
 
-    if (options.threshold !== undefined) {
-      actions.push(CONFIG_ACTION.changeThreshold(options.threshold))
+    if (threshold !== undefined) {
+      actions.push(CONFIG_ACTION.changeThreshold(threshold))
     }
 
     return this._proposeConfigTransaction(multisig, actions)
@@ -742,13 +748,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /** @private */
-  async _proposeVaultTransaction (compiled, options = {}) {
+  async _proposeVaultTransaction (compiled, options) {
     const multisig = options.multisig ?? await this._getMultisigAccount()
 
     return this._proposeTransaction(
       multisig,
       INSTRUCTION.vaultTransactionCreate.encode({
-        vaultIndex: DEFAULT.vaultIndex,
+        vaultIndex: options.vaultIndex,
         ephemeralSigners: NO_EPHEMERAL_SIGNERS,
         transactionMessage: compiled.bytes,
         memo: NO_MEMO
@@ -756,7 +762,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       this._vaultTransactionSize(compiled.storedSize),
       {
         buildExtraInstructions: options.autoExecute
-          ? (context) => this._buildAutoExecuteInstructions(multisig, compiled, context)
+          ? (context) => this._buildAutoExecuteInstructions(multisig, compiled, options.vaultIndex, context)
           : null,
         rent: options.rent
       }
@@ -864,7 +870,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /** @private */
-  async _buildAutoExecuteInstructions (multisig, compiled, context) {
+  async _buildAutoExecuteInstructions (multisig, compiled, vaultIndex, context) {
     const { proposalPda, transactionPda, signerAddress } = context
 
     const signer = multisig.members.find((member) => member.address === signerAddress)
@@ -875,7 +881,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       return []
     }
 
-    const vaultPda = await this.getVaultAddress(DEFAULT.vaultIndex)
+    const vaultPda = await this.getVaultAddress(vaultIndex)
     const transaction = {
       address: transactionPda,
       ephemeralSignerCount: NO_EPHEMERAL_SIGNERS,

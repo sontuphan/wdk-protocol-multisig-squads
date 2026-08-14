@@ -10,6 +10,13 @@
  * @typedef {MultisigProposal & MultisigAutoExecuteResult & { hash: string, fee: bigint }} SolanaMultisigProposalResult
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
+/**
+ * `MultisigTransactionOptions` widened with the vault the proposal spends from: an index between 0
+ * and 255, which the stored transaction carries so the program signs with the same vault the
+ * message was compiled against. It defaults to the main vault, 0.
+ *
+ * @typedef {MultisigTransactionOptions & { vaultIndex?: number }} SolanaMultisigTransactionOptions
+ */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigOptions} MultisigOptions */
 /**
  * `MultisigOptions` widened with the Squads permission mask to grant the member being added: a
@@ -132,21 +139,21 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * SOL transfer or a message carrying `instructions`, which the vault executes as they stand.
      *
      * @param {SolanaTransaction} tx - The transaction to propose.
-     * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
+     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
      * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
      */
-    propose(tx: SolanaTransaction, transactionOptions?: MultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
+    propose(tx: SolanaTransaction, { vaultIndex, ...transactionOptions }?: SolanaMultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
     /**
      * Proposes an SPL token transfer to the multisig.
      *
      * @param {TransferOptions} transferOptions - The transfer options.
-     * @param {MultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
+     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
      * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
      * @throws {Error} If the transfer options are invalid, the signer cannot propose, or the quote exceeds `transferMaxFee`.
      * @throws {UnsupportedOperationError} If the mint belongs to the Token-2022 program.
      * @todo Support Token-2022 (Token Extensions Program).
      */
-    transfer(transferOptions: TransferOptions, transactionOptions?: MultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
+    transfer(transferOptions: TransferOptions, { vaultIndex, ...transactionOptions }?: SolanaMultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
     /**
      * Approves a pending transaction proposal.
      *
@@ -183,7 +190,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
      * @throws {Error} If the addition or the resulting configuration is invalid, the signer cannot propose, or the RPC request fails.
      */
-    addOwner(ownerAddress: string, options?: SolanaMultisigAddOwnerOptions): Promise<SolanaMultisigProposalResult>;
+    addOwner(ownerAddress: string, { mask, threshold }?: SolanaMultisigAddOwnerOptions): Promise<SolanaMultisigProposalResult>;
     /**
      * Proposes removing a member from the multisig.
      *
@@ -192,7 +199,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
      * @throws {Error} If the removal or the resulting configuration is invalid, the signer cannot propose, or the RPC request fails.
      */
-    removeOwner(ownerAddress: string, options?: Partial<MultisigOptions>): Promise<SolanaMultisigProposalResult>;
+    removeOwner(ownerAddress: string, { threshold }?: Partial<MultisigOptions>): Promise<SolanaMultisigProposalResult>;
     /**
      * Proposes swapping one member for another, the new member inheriting the old one's
      * permissions.
@@ -203,7 +210,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
      * @throws {Error} If the swap or the resulting configuration is invalid, the signer cannot propose, or the RPC request fails.
      */
-    swapOwner(oldOwnerAddress: string, newOwnerAddress: string, options?: Partial<MultisigOptions>): Promise<SolanaMultisigProposalResult>;
+    swapOwner(oldOwnerAddress: string, newOwnerAddress: string, { threshold }?: Partial<MultisigOptions>): Promise<SolanaMultisigProposalResult>;
     /**
      * Proposes changing the approval threshold of the multisig.
      *
@@ -274,6 +281,14 @@ export type SolanaMultisigProposalResult = MultisigProposal & MultisigAutoExecut
     fee: bigint;
 };
 export type MultisigTransactionOptions = import("@tetherto/wdk-wallet/multisig").MultisigTransactionOptions;
+/**
+ * `MultisigTransactionOptions` widened with the vault the proposal spends from: an index between 0
+ * and 255, which the stored transaction carries so the program signs with the same vault the
+ * message was compiled against. It defaults to the main vault, 0.
+ */
+export type SolanaMultisigTransactionOptions = MultisigTransactionOptions & {
+    vaultIndex?: number;
+};
 export type MultisigOptions = import("@tetherto/wdk-wallet/multisig").MultisigOptions;
 /**
  * `MultisigOptions` widened with the Squads permission mask to grant the member being added: a

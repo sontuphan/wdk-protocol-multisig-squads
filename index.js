@@ -38,6 +38,7 @@
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigInfo} SolanaMultisigInfo */
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigProposal} SolanaMultisigProposal */
 /** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigProposalResult} SolanaMultisigProposalResult */
+/** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigTransactionOptions} SolanaMultisigTransactionOptions */
 /** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigAddOwnerOptions} SolanaMultisigAddOwnerOptions */
 
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsMember} SquadsMember */
