@@ -2337,16 +2337,24 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         .slice(0, memberCount)
         .map((address) => ({ address }))
 
+      const tokenAccount = {
+        owner: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+        data: ['', 'base64'],
+        space: 165,
+        lamports: 2039280,
+        executable: false
+      }
+
       const rpc = stubSolanaRpc({
-        getAccountInfo: ([queried]) => ({
+        getAccountInfo: () => ({
           context: { slot: 1 },
-          value: queried === TEST_MULTISIG_PDA
-            ? multisigAccountValue({ members, threshold: 1 })
-            // Anything else is the recipient's associated token account. Only its
-            // existence matters here, not its contents.
-            : recipientAtaExists
-              ? { owner: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', data: ['', 'base64'], space: 165, lamports: 2039280, executable: false }
-              : null
+          value: multisigAccountValue({ members, threshold: 1 })
+        }),
+        // The mint, then the recipient's associated token account. Only their existence matters
+        // here, not their contents.
+        getMultipleAccounts: () => ({
+          context: { slot: 1 },
+          value: [tokenAccount, recipientAtaExists ? tokenAccount : null]
         }),
         getMinimumBalanceForRentExemption: ([size]) => (128n + BigInt(size)) * 6960n
       })
@@ -2400,11 +2408,12 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
 
       await account.quoteTransfer(OPTIONS)
 
-      const queried = rpcRequests(rpc, 'getAccountInfo').map(([addr]) => addr)
+      const [[queried]] = rpcRequests(rpc, 'getMultipleAccounts')
 
-      expect(queried).toContain(TEST_MULTISIG_PDA)
-      expect(queried).not.toContain(MEMBER_C)
+      expect(rpcRequests(rpc, 'getAccountInfo').map(([addr]) => addr)).toEqual([TEST_MULTISIG_PDA])
       expect(queried).toHaveLength(2)
+      expect(queried).not.toContain(MEMBER_C)
+      expect(queried[0]).toBe(USDC_MINT)
     })
 
     it('charges one signature, not two', async () => {
@@ -2460,7 +2469,8 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
           context: { slot: 1 },
           value: multisigAccountValue({ members: [{ address: MEMBER_A }], threshold: 1 })
         }),
-        getMinimumBalanceForRentExemption: () => { throw new Error('503 Service Unavailable') }
+        getMultipleAccounts: () => { throw new Error('503 Service Unavailable') },
+        getMinimumBalanceForRentExemption: () => 0
       })
 
       await expect(account.quoteTransfer(OPTIONS)).rejects.toThrow('503 Service Unavailable')

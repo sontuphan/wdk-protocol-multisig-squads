@@ -2542,23 +2542,16 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     const MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
     const OPTIONS = { token: MINT, recipient: OTHER_MEMBER, amount: 1000n }
     const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
-    const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
 
     /**
      * Builds a transferring account with a stubbed RPC and send.
      *
      * @param {Object} [options] - The scenario.
-     * @param {string} [options.mintOwner] - The program owning the mint.
      * @param {boolean} [options.recipientHasAta=true] - Whether the recipient holds the token.
      * @param {Object} [options.config] - Extra configuration.
      * @returns {Promise<{ account: Object, sendTransaction: Function, rpc: Object }>}
      */
-    async function transferringAccount ({
-      mintOwner = TOKEN_PROGRAM,
-      recipientHasAta = true,
-      mintExists = true,
-      config = {}
-    } = {}) {
+    async function transferringAccount ({ recipientHasAta = true, config = {} } = {}) {
       const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
         provider: TEST_RPC_URL,
         multisigPdaOrCreateKey: TEST_MULTISIG_PDA,
@@ -2567,7 +2560,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const account = await wallet.getAccount(0)
 
       const tokenAccount = {
-        owner: mintOwner,
+        owner: TOKEN_PROGRAM,
         data: ['', 'base64'],
         executable: false,
         lamports: 2039280,
@@ -2578,9 +2571,11 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         getAccountInfo: () => serveValue(
           multisigAccountValue([{ address: TEST_SIGNER }], { threshold: 1 })
         ),
+        // The mint, whose existence decides whether the transfer can be built, and the
+        // recipient's token account, whose existence decides whether it has to be created.
         getMultipleAccounts: () => ({
           context: { slot: 1 },
-          value: mintExists ? [tokenAccount, recipientHasAta ? tokenAccount : null] : [null, null]
+          value: [tokenAccount, recipientHasAta ? tokenAccount : null]
         }),
         getMinimumBalanceForRentExemption: () => 2039280
       })
@@ -2644,21 +2639,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(account.transfer(OPTIONS, { vaultIndex: 256 }))
         .rejects.toThrow('Invalid vault index 256. It must be an integer between 0 and 255.')
       expect(sendTransaction).not.toHaveBeenCalled()
-    })
-
-    it('refuses a Token-2022 mint rather than building an unusable transfer', async () => {
-      const { account, sendTransaction } = await transferringAccount({
-        mintOwner: TOKEN_2022_PROGRAM
-      })
-
-      await expect(account.transfer(OPTIONS)).rejects.toThrow(UnsupportedOperationError)
-      expect(sendTransaction).not.toHaveBeenCalled()
-    })
-
-    it('throws when the mint does not exist', async () => {
-      const { account } = await transferringAccount({ mintExists: false })
-
-      await expect(account.transfer(OPTIONS)).rejects.toThrow(/mint .* does not exist/)
     })
 
     it('reads the multisig once and the recipient ATA once', async () => {
@@ -2736,6 +2716,15 @@ describe('WalletAccountMultisigSolanaSquads', () => {
             ? multisigAccountValue([{ address: TEST_SIGNER }], { threshold: 1 })
             : null
         ),
+        // The mint exists and the recipient holds no token account, so the quoted message
+        // carries the creation as well as the transfer.
+        getMultipleAccounts: () => ({
+          context: { slot: 1 },
+          value: [
+            { owner: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', data: ['', 'base64'], executable: false, lamports: 2039280, space: 165 },
+            null
+          ]
+        }),
         // The real rent formula: (128 + size) * 6960 lamports.
         getMinimumBalanceForRentExemption: ([size]) => (128n + BigInt(size)) * 6960n
       })

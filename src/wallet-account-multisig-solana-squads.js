@@ -39,13 +39,6 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
 
 import { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes } from '@solana/signers'
 
-import {
-  findAssociatedTokenPda,
-  getCreateAssociatedTokenIdempotentInstruction,
-  getTransferInstruction,
-  TOKEN_PROGRAM_ADDRESS
-} from '@solana-program/token'
-
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigAutoExecuteResult} MultisigAutoExecuteResult */
@@ -92,7 +85,6 @@ export const PERMISSION = { initiate: 1, vote: 2, execute: 4 }
 const ALMIGHTY_PERMISSIONS = PERMISSION.initiate | PERMISSION.vote | PERMISSION.execute
 const PROGRAM_ADDRESS = {
   system: '11111111111111111111111111111111',
-  token2022: 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
   addressLookupTable: 'AddressLookupTab1e1111111111111111111111111'
 }
 
@@ -354,64 +346,16 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
    * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} If the transfer options are invalid, the signer cannot propose, or the quote exceeds `transferMaxFee`.
-   * @throws {UnsupportedOperationError} If the mint belongs to the Token-2022 program.
-   * @todo Support Token-2022 (Token Extensions Program).
+   * @todo Support Token-2022 (Token Extensions Program), whose associated token accounts this method does not derive.
    */
   async transfer (transferOptions, { vaultIndex = DEFAULT.vaultIndex, ...transactionOptions } = {}) {
     if (!this._rpc) {
       throw new Error('The wallet must be connected to a provider to propose transfers.')
     }
 
-    const mint = address(transferOptions.token)
-    const recipient = address(transferOptions.recipient)
     const vaultPda = address(await this.getVaultAddress(vaultIndex))
-
-    const [source, destination] = await Promise.all([
-      findAssociatedTokenPda({ mint, owner: vaultPda, tokenProgram: TOKEN_PROGRAM_ADDRESS }),
-      findAssociatedTokenPda({ mint, owner: recipient, tokenProgram: TOKEN_PROGRAM_ADDRESS })
-    ])
-
+    const instructions = await this._toTransferInstructions(vaultPda, transferOptions)
     const multisig = await this._getMultisigAccount()
-
-    const { value } = await this._rpc
-      .getMultipleAccounts([mint, destination[0]], {
-        commitment: this._commitment,
-        encoding: 'base64'
-      })
-      .send()
-
-    const [mintAccount, destinationAccount] = value
-
-    if (!mintAccount) {
-      throw new Error(`The token mint ${mint} does not exist.`)
-    }
-
-    if (mintAccount.owner === PROGRAM_ADDRESS.token2022) {
-      throw new UnsupportedOperationError('transfer(transferOptions, options)')
-    }
-
-    const instructions = []
-
-    if (!destinationAccount) {
-      instructions.push(
-        getCreateAssociatedTokenIdempotentInstruction({
-          ata: destination[0],
-          mint,
-          owner: recipient,
-          payer: vaultPda
-        })
-      )
-    }
-
-    instructions.push(
-      getTransferInstruction({
-        source: source[0],
-        destination: destination[0],
-        authority: vaultPda,
-        amount: BigInt(transferOptions.amount)
-      })
-    )
-
     const compiled = this._compileTransactionMessage(vaultPda, instructions)
     const { rent, fee } = await this._quoteProposal(
       this._vaultTransactionSize(compiled.storedSize),

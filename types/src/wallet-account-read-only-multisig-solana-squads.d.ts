@@ -429,6 +429,19 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     protected _toProposedInstructions(vaultPda: Address, tx: SolanaTransaction): any[];
     /**
+     * Builds the instructions an SPL transfer executes from a vault: the idempotent creation of the
+     * recipient's associated token account when it does not hold one yet, then the transfer. The
+     * quote and the proposal both go through this, so neither can price a message the other would
+     * not build.
+     *
+     * @protected
+     * @param {Address} vaultPda - The vault the transfer executes from, and the payer of the account it may create.
+     * @param {TransferOptions} transferOptions - The transfer options.
+     * @returns {Promise<Object[]>} The instructions, in kit's shape.
+     * @throws {Error} If the token or the recipient is not a valid address, if the mint does not exist, or if the RPC request fails.
+     */
+    protected _toTransferInstructions(vaultPda: Address, transferOptions: TransferOptions): Promise<any[]>;
+    /**
      * Compiles instructions into the message a vault transaction stores, in both the form the
      * create instruction carries and the size the account will be allocated at.
      *

@@ -150,8 +150,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
      * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
      * @throws {Error} If the transfer options are invalid, the signer cannot propose, or the quote exceeds `transferMaxFee`.
-     * @throws {UnsupportedOperationError} If the mint belongs to the Token-2022 program.
-     * @todo Support Token-2022 (Token Extensions Program).
+     * @todo Support Token-2022 (Token Extensions Program), whose associated token accounts this method does not derive.
      */
     transfer(transferOptions: TransferOptions, { vaultIndex, ...transactionOptions }?: SolanaMultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
     /**

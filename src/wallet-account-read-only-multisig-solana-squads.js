@@ -24,7 +24,12 @@ import { address, getAddressEncoder, isOffCurveAddress } from '@solana/addresses
 
 import { getBase58Decoder, getBase58Encoder, getBase64Encoder, getU64Encoder } from '@solana/codecs'
 
-import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token'
+import {
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenIdempotentInstruction,
+  getTransferInstruction,
+  TOKEN_PROGRAM_ADDRESS
+} from '@solana-program/token'
 
 import {
   ACCOUNT,
@@ -247,9 +252,7 @@ const SIZE = {
   vaultTransactionBase: 83,
   configTransactionBase: 81,
   proposalBase: 70,
-  proposalMember: 96,
-  splTransferMessage: 164,
-  splTransferWithAtaMessage: 308
+  proposalMember: 96
 }
 
 const COUNT = { multisigCreateSignatures: 2n }
@@ -884,8 +887,9 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @todo Support Token-2022 (Token Extensions Program).
    */
   async quoteTransfer (transferOptions, config) {
-    const mint = address(transferOptions.token)
-    const recipient = address(transferOptions.recipient)
+    // Read before the first request, so a malformed argument is reported without a round trip.
+    address(transferOptions.token)
+    address(transferOptions.recipient)
 
     const account = await this._withConfig(config)
     const { address: multisigPda, owners, isCreated } = await account.getMultisigInfo()
@@ -900,21 +904,17 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       throw new Error('The wallet must be connected to a provider to quote transfer operations.')
     }
 
-    const [recipientAta] = await findAssociatedTokenPda({
-      mint,
-      owner: recipient,
-      tokenProgram: TOKEN_PROGRAM_ADDRESS
-    })
-    const { value: recipientAtaAccount } = await account._rpc
-      .getAccountInfo(recipientAta, {
-        commitment: account._commitment,
-        encoding: 'base64'
-      })
-      .send()
-    const messageSize = recipientAtaAccount ? SIZE.splTransferMessage : SIZE.splTransferWithAtaMessage
+    const vaultPda = address(await account.getVaultAddress(DEFAULT.vaultIndex))
+
+    // Compiled rather than taken from a constant, so the quote cannot drift from the message
+    // `transfer` goes on to store.
+    const compiled = account._compileTransactionMessage(
+      vaultPda,
+      await account._toTransferInstructions(vaultPda, transferOptions)
+    )
 
     const { fee } = await account._quoteProposal(
-      account._vaultTransactionSize(messageSize),
+      account._vaultTransactionSize(compiled.storedSize),
       owners.length
     )
 
@@ -1135,6 +1135,67 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
         data: instruction.data ?? new Uint8Array()
       }
     })
+  }
+
+  /**
+   * Builds the instructions an SPL transfer executes from a vault: the idempotent creation of the
+   * recipient's associated token account when it does not hold one yet, then the transfer. The
+   * quote and the proposal both go through this, so neither can price a message the other would
+   * not build.
+   *
+   * @protected
+   * @param {Address} vaultPda - The vault the transfer executes from, and the payer of the account it may create.
+   * @param {TransferOptions} transferOptions - The transfer options.
+   * @returns {Promise<Object[]>} The instructions, in kit's shape.
+   * @throws {Error} If the token or the recipient is not a valid address, if the mint does not exist, or if the RPC request fails.
+   */
+  async _toTransferInstructions (vaultPda, transferOptions) {
+    const mint = address(transferOptions.token)
+    const recipient = address(transferOptions.recipient)
+
+    const [[source], [destination]] = await Promise.all([
+      findAssociatedTokenPda({ mint, owner: vaultPda, tokenProgram: TOKEN_PROGRAM_ADDRESS }),
+      findAssociatedTokenPda({ mint, owner: recipient, tokenProgram: TOKEN_PROGRAM_ADDRESS })
+    ])
+
+    // One request for the two accounts that decide whether the transfer can be built at all and
+    // what shape it takes.
+    const { value } = await this._rpc
+      .getMultipleAccounts([mint, destination], {
+        commitment: this._commitment,
+        encoding: 'base64'
+      })
+      .send()
+
+    const [mintAccount, destinationAccount] = value
+
+    if (!mintAccount) {
+      throw new Error(`The token mint ${mint} does not exist.`)
+    }
+
+    const instructions = []
+
+    if (!destinationAccount) {
+      instructions.push(
+        getCreateAssociatedTokenIdempotentInstruction({
+          ata: destination,
+          mint,
+          owner: recipient,
+          payer: vaultPda
+        })
+      )
+    }
+
+    instructions.push(
+      getTransferInstruction({
+        source,
+        destination,
+        authority: vaultPda,
+        amount: BigInt(transferOptions.amount)
+      })
+    )
+
+    return instructions
   }
 
   /**
