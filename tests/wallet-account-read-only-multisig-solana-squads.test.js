@@ -512,6 +512,41 @@ function mockFailingAccount (error) {
 }
 
 describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
+  describe('toCreateKeySecretBytes', () => {
+    const PRIVATE_KEY = new Uint8Array(32).fill(9)
+
+    it('returns a 32-byte private key unchanged', () => {
+      expect(WalletAccountReadOnlyMultisigSolanaSquads.toCreateKeySecretBytes(PRIVATE_KEY))
+        .toEqual(PRIVATE_KEY)
+    })
+
+    it('returns a 64-byte keypair whole', () => {
+      const keyPair = new Uint8Array(64).fill(9)
+
+      keyPair.set(getBase58Encoder().encode(TEST_CREATE_KEY), 32)
+
+      expect(WalletAccountReadOnlyMultisigSolanaSquads.toCreateKeySecretBytes(keyPair))
+        .toEqual(keyPair)
+    })
+
+    it('decodes a base58 secret to the same bytes', () => {
+      const base58 = getBase58Decoder().decode(PRIVATE_KEY)
+
+      expect(WalletAccountReadOnlyMultisigSolanaSquads.toCreateKeySecretBytes(base58))
+        .toEqual(PRIVATE_KEY)
+    })
+
+    it('refuses a missing secret', () => {
+      expect(() => WalletAccountReadOnlyMultisigSolanaSquads.toCreateKeySecretBytes(undefined))
+        .toThrow('A `createKeySecret` is required to create a multisig. Provide it in the configuration.')
+    })
+
+    it('refuses a secret of the wrong length', () => {
+      expect(() => WalletAccountReadOnlyMultisigSolanaSquads.toCreateKeySecretBytes(new Uint8Array(31)))
+        .toThrow('Invalid createKeySecret of 31 bytes. Expected 32 or 64.')
+    })
+  })
+
   describe('toMultisigPda', () => {
     it('passes an off-curve address through as the multisig', () => {
       expect(WalletAccountReadOnlyMultisigSolanaSquads.toMultisigPda(SQUADS_PROGRAM_ADDRESS, TEST_MULTISIG_PDA))
@@ -1461,10 +1496,29 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       expect(rpcRequests(rpc, 'getMultipleAccounts')).toHaveLength(0)
     })
 
-    it.each([[0], ['0'], [7], ['7'], [7n], ['18446744073709551615']])('accepts %s', async (good) => {
+    // The key is what the id normalizes to, which is the point of accepting these forms at all.
+    it.each([
+      [0, '0'],
+      ['0', '0'],
+      [7, '7'],
+      ['7', '7'],
+      [7n, '7'],
+      ['18446744073709551615', '18446744073709551615']
+    ])('accepts %s, keyed as %s', async (good, key) => {
       const { account } = mockProposals([proposalAccountValue({})])
 
-      await expect(account.getProposals([good])).resolves.toBeDefined()
+      expect(await account.getProposals([good])).toEqual({
+        [key]: {
+          proposalId: key,
+          confirmations: 0,
+          threshold: 2,
+          status: 'pending',
+          statusName: 'Active',
+          approved: [],
+          rejected: [],
+          cancelled: []
+        }
+      })
     })
 
     it('throws when the multisig does not exist', async () => {
@@ -1765,7 +1819,6 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         ...failed,
         meta: { err: { InstructionError: [0n, 'Custom'] }, fee: 5000n }
       })
-      expect(receipt.meta.err).not.toBeNull()
     })
 
     it('requests support for versioned transactions', async () => {
@@ -2381,7 +2434,6 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       const { account: three } = mockQuote(3)
       const b = (await three.quotePropose(TX)).fee
 
-      expect(b).toBeGreaterThan(a)
       // One more member adds 96 bytes of proposal rent.
       expect(b - a).toBe(96n * 6960n)
     })

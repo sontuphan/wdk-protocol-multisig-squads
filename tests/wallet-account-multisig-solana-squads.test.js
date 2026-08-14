@@ -587,6 +587,14 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(WalletAccountMultisigSolanaSquads.getCreateKeySigner(new Uint8Array(31)))
         .rejects.toThrow('Invalid createKeySecret of 31 bytes. Expected 32 or 64.')
     })
+
+    it('refuses what the address derivation refuses, with the same message', async () => {
+      const short = new Uint8Array(31)
+      const message = 'Invalid createKeySecret of 31 bytes. Expected 32 or 64.'
+
+      expect(() => WalletAccountMultisigSolanaSquads.getCreateKey(short)).toThrow(message)
+      await expect(WalletAccountMultisigSolanaSquads.getCreateKeySigner(short)).rejects.toThrow(message)
+    })
   })
 
   describe('deploy', () => {

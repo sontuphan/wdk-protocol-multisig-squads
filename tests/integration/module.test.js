@@ -21,7 +21,8 @@ import { fileURLToPath } from 'node:url'
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, jest } from '@jest/globals'
 
-import { address } from '@solana/addresses'
+import { ed25519 } from '@noble/curves/ed25519'
+import { address, getAddressEncoder } from '@solana/addresses'
 import { createSolanaRpc } from '@solana/rpc'
 import { generateKeyPairSigner } from '@solana/signers'
 
@@ -53,7 +54,29 @@ const SIGNER_0 = '3uXqWpwgqKVdiHAwF6Vmu4G4vdQzpR66xjPkz1G7zMKE'
 const SIGNER_1 = 'CfGcujEkPVDx7yGyn1PUjxn2e353MXbLk8ixzwuJUktK'
 const MULTISIG_RENT = 2039280n
 
+// What SIGNER_0's key signs 'hello' into: 64 bytes, lowercase hex, fixed by the seed phrase.
+const SIGNED_HELLO =
+  '484d6ed3113c38833d66d9fc6e4f31f9e71f146c781739ce8103a9ea6d671f92' +
+  '63dd43b53be7f9dddfafed4d671fbd6e64b0c1599fdfa68a8f8e8d73b49e780c'
+
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
+
+/**
+ * Verifies a `sign()` result against an address, without going through the account: `verify` is
+ * unsupported on a multisig, so the check has to come from outside the code under test.
+ *
+ * @param {string} signature - The signature, hex-encoded.
+ * @param {string} message - The message that was signed.
+ * @param {string} signerAddress - The address to verify against.
+ * @returns {boolean} Whether the address signed the message.
+ */
+function verifyEd25519 (signature, message, signerAddress) {
+  return ed25519.verify(
+    Buffer.from(signature, 'hex'),
+    new TextEncoder().encode(message),
+    new Uint8Array(getAddressEncoder().encode(address(signerAddress)))
+  )
+}
 
 /** @param {string} target */
 function solanaAccount (target) {
@@ -1033,12 +1056,13 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
     })
 
     it('signs a message with the member key rather than the multisig', async () => {
-      const { accounts, signers, multisigPda } = await deployMultisig({ members: 1, threshold: 1 })
+      const { accounts, multisigPda } = await deployMultisig({ members: 1, threshold: 1 })
 
       const signature = await accounts[0].sign('hello')
 
-      expect(typeof signature).toBe('string')
-      expect(signers[0]).not.toBe(multisigPda)
+      expect(signature).toBe(SIGNED_HELLO)
+      expect(verifyEd25519(signature, 'hello', SIGNER_0)).toBe(true)
+      expect(verifyEd25519(signature, 'hello', multisigPda)).toBe(false)
     })
 
     it('leaves out the message-proposal surface Squads has no primitive for', async () => {
