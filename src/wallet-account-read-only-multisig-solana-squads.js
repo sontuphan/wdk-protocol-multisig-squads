@@ -70,10 +70,10 @@ import { ed25519 } from '@noble/curves/ed25519'
 
 /**
  * The configuration a read-only Squads account takes: how to reach the cluster, and which
- * multisig to operate on. One field names the multisig: either its address, or the create key it
- * derives from. The two never look alike. A multisig address always sits off the ed25519 curve,
- * and a create key always sits on it, because it has to sign the multisig into being. A signing
- * account may give neither and supply `createKeySecret`, which the create key is derived from.
+ * multisig to operate on. Two fields name the multisig: its address, or the create key it derives
+ * from, or the secret that create key derives from. The first two never look alike. A multisig
+ * address always sits off the ed25519 curve, and a create key always sits on it, because it has to
+ * sign the multisig into being.
  *
  * @typedef {Object} SolanaMultisigSquadsReadOnlyConfig
  * @property {string | string[]} [provider] - A Solana RPC URL, or a list of URLs for failover. Omit it to derive addresses without reaching the cluster; every method that needs the cluster then throws.
@@ -81,15 +81,14 @@ import { ed25519 } from '@noble/curves/ed25519'
  * @property {number} [retries] - The number of retries for the failover provider (default: 3).
  * @property {string} [programId] - The Squads program to operate against, for a fork or a local deployment (default: `SQUADS_PROGRAM_ADDRESS`).
  * @property {string} [multisigPdaOrCreateKey] - The address of an existing Squads multisig, or the create key its address derives from.
+ * @property {string | Uint8Array} [createKeySecret] - The create key's secret, which the multisig address derives from when `multisigPdaOrCreateKey` is absent, and which deploying a multisig requires. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
  */
 
 /**
- * The extra configuration a signing account takes: the secret it derives a new multisig's
- * address from, the account that funds the rent Squads charges, and the fee ceilings above
- * which it refuses to submit.
+ * The extra configuration a signing account takes: the account that funds the rent Squads
+ * charges, and the fee ceilings above which it refuses to submit.
  *
  * @typedef {Object} SolanaMultisigSquadsSigningConfig
- * @property {string | Uint8Array} [createKeySecret] - The create key's secret, required to deploy a multisig. Base58 or raw bytes, either a 32-byte private key or a 64-byte keypair.
  * @property {string} [rentPayer] - The account charged for the rent the multisig, transaction and proposal accounts lock up (default: the signer). It must sign the transaction by other means, which in practice makes it the fee payer of a sponsoring wallet.
  * @property {number | bigint} [createMaxFee] - The maximum fee amount for the create/deploy operation.
  * @property {number | bigint} [transferMaxFee] - The maximum fee amount for transfers.
