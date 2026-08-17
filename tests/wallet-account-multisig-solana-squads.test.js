@@ -25,6 +25,7 @@ import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 import WalletManagerMultisigSolanaSquads, {
   WalletAccountMultisigSolanaSquads,
   WalletAccountReadOnlyMultisigSolanaSquads,
+  LocalSignerTransport,
   PERMISSION,
   SQUADS_PROGRAM_ADDRESS
 } from '@tetherto/wdk-protocol-multisig-squads'
@@ -2696,6 +2697,120 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         status: 'executed',
         transaction: { hash: DUMMY_TRANSFER_HASH, fee: DUMMY_FEE }
       })
+    })
+  })
+
+  describe('transport', () => {
+    /**
+     * Builds a transport that records what it was asked to send, and the account that uses it.
+     *
+     * @returns {Promise<{ account: Object, transport: Object, signerAccount: Object }>}
+     */
+    async function accountWithTransport () {
+      const sent = []
+      let signerAccount = null
+
+      const transport = {
+        getSignerAddress: jest.fn(async () => OTHER_MEMBER),
+        sendTransaction: jest.fn(async (tx) => {
+          sent.push(tx)
+
+          return { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
+        }),
+        dispose: jest.fn()
+      }
+
+      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: TEST_RPC_URL,
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA,
+        transport: (account) => {
+          signerAccount = account
+
+          return transport
+        }
+      })
+      const account = await wallet.getAccount(0)
+
+      return { account, transport, sent, get signerAccount () { return signerAccount } }
+    }
+
+    it('builds the transport from the account it derived', async () => {
+      const { signerAccount } = await accountWithTransport()
+
+      // The factory takes the member's own signer account, so each derived account signs with
+      // its own key rather than sharing one transport across the manager's accounts.
+      expect(await signerAccount.getAddress()).toBe(TEST_SIGNER)
+    })
+
+    it('defaults to a transport over the local signer', async () => {
+      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: TEST_RPC_URL,
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA
+      })
+      const account = await wallet.getAccount(0)
+
+      expect(account._transport).toBeInstanceOf(LocalSignerTransport)
+      expect(await account.getSignerAddress()).toBe(TEST_SIGNER)
+    })
+
+    it('reads the signer address from the transport', async () => {
+      const { account, transport } = await accountWithTransport()
+
+      expect(await account.getSignerAddress()).toBe(OTHER_MEMBER)
+      expect(transport.getSignerAddress).toHaveBeenCalledTimes(1)
+    })
+
+    it('proposes through the transport', async () => {
+      const { account, transport, sent } = await accountWithTransport()
+
+      stubSolanaRpc({
+        getAccountInfo: () => serveValue(
+          multisigAccountValue([{ address: OTHER_MEMBER, mask: 7 }], { threshold: 2, transactionIndex: 4n })
+        ),
+        getMinimumBalanceForRentExemption: ([size]) => (128n + BigInt(size)) * 6960n
+      })
+
+      const result = await account.propose({ to: OTHER_MEMBER, value: 1n })
+
+      expect(transport.sendTransaction).toHaveBeenCalledTimes(1)
+      // A proposal is the create instruction plus the proposal instruction, unsigned and
+      // unbroadcast: everything past this point belongs to the transport.
+      expect(sent[0].instructions).toHaveLength(2)
+      expect(result.hash).toBe(DUMMY_VOTE_HASH)
+    })
+
+    it('approves through the transport', async () => {
+      const { account, transport, sent } = await accountWithTransport()
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      // The member the transport signs as, not the one the seed derives: the account builds
+      // every instruction for whoever the transport reports.
+
+      const result = await account.approveProposal(3)
+
+      expect(transport.sendTransaction).toHaveBeenCalledTimes(1)
+      expect(sent[0].instructions).toHaveLength(1)
+      expect(result.hash).toBe(DUMMY_VOTE_HASH)
+    })
+
+    it('disposes the transport and the key it derived', async () => {
+      const { account, transport } = await accountWithTransport()
+
+      account.dispose()
+
+      // Both, because a transport that holds no key would otherwise leave the derived member
+      // key in memory, and one that holds its own must be told to erase it.
+      expect(transport.dispose).toHaveBeenCalledTimes(1)
+      await expect(account.sign('hello')).rejects.toThrow('The wallet account has been disposed.')
     })
   })
 

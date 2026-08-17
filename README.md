@@ -62,12 +62,61 @@ account.dispose()
 - **Transfers**: Propose native SOL and SPL token transfers through the multisig vault
 - **Member Management**: Add, remove, or swap members and change the approval threshold
 - **Read-Only Support**: Inspect multisig state without a signing key
+- **Pluggable Transport**: Swap how transactions are signed and broadcast without touching the operations
 
 > [!NOTE]
 > Multisig message signing is not part of this module. It is an optional addon of the shared
 > multisig interface (`IMultisigMessageSigning`), and Solana has no message-signing primitive a
 > program-derived address could use, so the module leaves the addon out rather than stubbing it.
 > `sign(message)` still signs with the member's own key.
+
+## Transactions and Transports
+
+Every write this package makes goes through one seam. The account builds the Squads instructions,
+and a **transport** signs them and puts them on the cluster. Omit the option and the account signs
+with the member key derived from your seed and broadcasts at once, which is the behaviour the
+package has always had.
+
+```javascript
+import { ISquadsTransactionTransport } from '@tetherto/wdk-protocol-multisig-squads'
+
+class MyTransport extends ISquadsTransactionTransport {
+  constructor (signerAccount) {
+    super()
+    this._signerAccount = signerAccount
+  }
+
+  // The member this transport votes as. The account builds every instruction for it.
+  async getSignerAddress () {
+    return this._signerAccount.getAddress()
+  }
+
+  // Sign `tx.instructions` however you like, then broadcast. Resolve once it has landed.
+  async sendTransaction (tx) {
+    return this._signerAccount.sendTransaction(tx)
+  }
+
+  // Erase whatever key material you created. The signer account above belongs to the caller.
+  dispose () {
+    this._signerAccount = null
+  }
+}
+
+const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
+  provider: 'https://api.devnet.solana.com',
+  multisigPdaOrCreateKey: '<existing multisig address>',
+  transport: (signerAccount) => new MyTransport(signerAccount)
+})
+```
+
+`transport` takes a factory rather than an instance because one configuration is shared by every
+account the manager derives, and each of those signs with a different key.
+
+> [!NOTE]
+> Squads keeps its votes on chain, one transaction per vote, so a transport here is about reaching
+> the cluster and nothing else: it stores no proposals and shares no messages. Proposals and votes
+> are read from the chain through the read-only account. A peer-to-peer transport that collects
+> member signatures before broadcasting fits this interface and is not part of this package yet.
 
 ## Squads Protocol Version
 
