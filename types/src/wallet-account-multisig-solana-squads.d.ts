@@ -1,4 +1,4 @@
-/** @typedef {import('./transports/squads-transaction-transport-interface.js').default} ISquadsTransactionTransport */
+/** @typedef {import('./transports/index.js').ISquadsTransactionTransport} ISquadsTransactionTransport */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigAutoExecuteResult} MultisigAutoExecuteResult */
@@ -271,7 +271,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /** @private */
     private _requireViableMembers;
 }
-export type ISquadsTransactionTransport = import("./transports/squads-transaction-transport-interface.js").default;
+export type ISquadsTransactionTransport = import("./transports/index.js").ISquadsTransactionTransport;
 export type IWalletAccountMultisig = import("@tetherto/wdk-wallet/multisig").IWalletAccountMultisig;
 export type IMultisigOwnerManagement = import("@tetherto/wdk-wallet/multisig").IMultisigOwnerManagement;
 export type MultisigAutoExecuteResult = import("@tetherto/wdk-wallet/multisig").MultisigAutoExecuteResult;

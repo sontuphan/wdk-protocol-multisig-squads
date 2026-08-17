@@ -16,6 +16,6 @@
 
 /** @typedef {import('./squads-transaction-transport-interface.js').SquadsTransactionTransportFactory} SquadsTransactionTransportFactory */
 
-export { default as ISquadsTransactionTransport } from './squads-transaction-transport-interface.js'
+export { ISquadsTransactionTransport } from './squads-transaction-transport-interface.js'
 
 export { default as LocalSignerTransport } from './local-signer.js'

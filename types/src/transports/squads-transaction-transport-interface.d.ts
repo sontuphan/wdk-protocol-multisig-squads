@@ -1,13 +1,9 @@
-/** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
-/** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
-/** @typedef {import('@tetherto/wdk-wallet-solana').WalletAccountSolana} WalletAccountSolana */
 /**
  * Builds the transport an account votes and proposes through, from the member's own signer
  * account. One configuration is shared by every account a manager derives, and each of those
  * signs with a different key, so the configuration carries this rather than a transport instance.
- *
- * @typedef {(signerAccount: WalletAccountSolana) => ISquadsTransactionTransport} SquadsTransactionTransportFactory
  */
+export type SquadsTransactionTransportFactory = (signerAccount: import("@tetherto/wdk-wallet-solana").WalletAccountSolana) => ISquadsTransactionTransport;
 /**
  * Transport for getting a Squads transaction signed and broadcast.
  *
@@ -28,10 +24,8 @@
  *
  * A transport disposes what it created. The signer account it is given is owned by the caller,
  * which zeroes that key itself.
- *
- * @interface
  */
-export default class ISquadsTransactionTransport {
+export interface ISquadsTransactionTransport {
     /**
      * Signs a transaction and broadcasts it, resolving once it has reached the cluster.
      *
@@ -39,7 +33,7 @@ export default class ISquadsTransactionTransport {
      * @returns {Promise<TransactionResult>} The transaction's signature and the fee it paid.
      * @throws {NotImplementedError} An implementation must provide this method.
      */
-    sendTransaction(tx: SolanaTransaction): Promise<TransactionResult>;
+    sendTransaction(tx: import("@tetherto/wdk-wallet-solana").SolanaTransaction): Promise<import("@tetherto/wdk-wallet").TransactionResult>;
     /**
      * Releases the transport's resources, erasing any key material it created.
      *
@@ -47,12 +41,3 @@ export default class ISquadsTransactionTransport {
      */
     dispose(): void;
 }
-export type TransactionResult = import("@tetherto/wdk-wallet").TransactionResult;
-export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
-export type WalletAccountSolana = import("@tetherto/wdk-wallet-solana").WalletAccountSolana;
-/**
- * Builds the transport an account votes and proposes through, from the member's own signer
- * account. One configuration is shared by every account a manager derives, and each of those
- * signs with a different key, so the configuration carries this rather than a transport instance.
- */
-export type SquadsTransactionTransportFactory = (signerAccount: WalletAccountSolana) => ISquadsTransactionTransport;

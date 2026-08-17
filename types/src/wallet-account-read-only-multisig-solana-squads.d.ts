@@ -40,7 +40,7 @@
 /** @typedef {import('@tetherto/wdk-wallet').TransactionReceipt} TransactionReceipt */
 /** @typedef {import('@tetherto/wdk-wallet').Finality} Finality */
 /** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
-/** @typedef {import('./transports/squads-transaction-transport-interface.js').SquadsTransactionTransportFactory} SquadsTransactionTransportFactory */
+/** @typedef {import('./transports/index.js').SquadsTransactionTransportFactory} SquadsTransactionTransportFactory */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
 /**
@@ -690,7 +690,7 @@ export type TransactionResult = import("@tetherto/wdk-wallet").TransactionResult
 export type TransactionReceipt = import("@tetherto/wdk-wallet").TransactionReceipt;
 export type Finality = import("@tetherto/wdk-wallet").Finality;
 export type TransferOptions = import("@tetherto/wdk-wallet").TransferOptions;
-export type SquadsTransactionTransportFactory = import("./transports/squads-transaction-transport-interface.js").SquadsTransactionTransportFactory;
+export type SquadsTransactionTransportFactory = import("./transports/index.js").SquadsTransactionTransportFactory;
 export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
 export type SolanaTransactionReceipt = import("@tetherto/wdk-wallet-solana").SolanaTransactionReceipt;
 /**

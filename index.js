@@ -40,7 +40,7 @@
 /** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigProposalResult} SolanaMultisigProposalResult */
 /** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigTransactionOptions} SolanaMultisigTransactionOptions */
 /** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigAddOwnerOptions} SolanaMultisigAddOwnerOptions */
-/** @typedef {import('./src/transports/squads-transaction-transport-interface.js').SquadsTransactionTransportFactory} SquadsTransactionTransportFactory */
+/** @typedef {import('./src/transports/index.js').SquadsTransactionTransportFactory} SquadsTransactionTransportFactory */
 
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsMember} SquadsMember */
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsMultisigAccount} SquadsMultisigAccount */

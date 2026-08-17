@@ -51,7 +51,7 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
  *
  * @interface
  */
-export default class ISquadsTransactionTransport {
+export class ISquadsTransactionTransport {
   /**
    * Signs a transaction and broadcasts it, resolving once it has reached the cluster.
    *

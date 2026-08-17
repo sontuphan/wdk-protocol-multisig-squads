@@ -86,7 +86,7 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
 /** @typedef {import('@tetherto/wdk-wallet').Finality} Finality */
 /** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
 
-/** @typedef {import('./transports/squads-transaction-transport-interface.js').SquadsTransactionTransportFactory} SquadsTransactionTransportFactory */
+/** @typedef {import('./transports/index.js').SquadsTransactionTransportFactory} SquadsTransactionTransportFactory */
 
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */

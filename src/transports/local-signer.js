@@ -14,7 +14,7 @@
 
 'use strict'
 
-import ISquadsTransactionTransport from './squads-transaction-transport-interface.js'
+/** @typedef {import('./index.js').ISquadsTransactionTransport} ISquadsTransactionTransport */
 
 /** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
@@ -27,15 +27,13 @@ import ISquadsTransactionTransport from './squads-transaction-transport-interfac
  *
  * @implements {ISquadsTransactionTransport}
  */
-export default class LocalSignerTransport extends ISquadsTransactionTransport {
+export default class LocalSignerTransport {
   /**
    * Creates a transport over a local signer account.
    *
    * @param {WalletAccountSolana} signerAccount - The member's signer account. It is not owned by the transport, which never erases its key.
    */
   constructor (signerAccount) {
-    super()
-
     /**
      * The member's signer account.
      *

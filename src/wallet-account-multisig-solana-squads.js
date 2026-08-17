@@ -38,7 +38,7 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
 
 import LocalSignerTransport from './transports/local-signer.js'
 
-/** @typedef {import('./transports/squads-transaction-transport-interface.js').default} ISquadsTransactionTransport */
+/** @typedef {import('./transports/index.js').ISquadsTransactionTransport} ISquadsTransactionTransport */
 
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */
