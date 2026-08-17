@@ -19,9 +19,9 @@ export default class LocalSignerTransport extends ISquadsTransactionTransport im
      * The member's signer account.
      *
      * @protected
-     * @type {WalletAccountSolana | null}
+     * @type {WalletAccountSolana | undefined}
      */
-    protected _signerAccount: WalletAccountSolana | null;
+    protected _signerAccount: WalletAccountSolana | undefined;
     /**
      * Signs a transaction with the member's key and broadcasts it.
      *

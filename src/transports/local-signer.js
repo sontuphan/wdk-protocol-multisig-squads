@@ -40,7 +40,7 @@ export default class LocalSignerTransport extends ISquadsTransactionTransport {
      * The member's signer account.
      *
      * @protected
-     * @type {WalletAccountSolana | null}
+     * @type {WalletAccountSolana | undefined}
      */
     this._signerAccount = signerAccount
   }
@@ -60,7 +60,7 @@ export default class LocalSignerTransport extends ISquadsTransactionTransport {
    * Drops the reference to the signer account. The account that created it erases its key.
    */
   dispose () {
-    this._signerAccount = null
+    this._signerAccount = undefined
   }
 
   /**
