@@ -236,8 +236,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     toReadOnlyAccount(): Promise<WalletAccountReadOnlyMultisigSolanaSquads>;
     /**
      * Disposes the wallet account, erasing the private key from the memory.
-     *
-     * @returns {void} Nothing; the account cannot sign once disposed.
      */
     dispose(): void;
     /** @private */

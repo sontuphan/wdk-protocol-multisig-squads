@@ -2711,7 +2711,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       let signerAccount = null
 
       const transport = {
-        getSignerAddress: jest.fn(async () => OTHER_MEMBER),
         sendTransaction: jest.fn(async (tx) => {
           sent.push(tx)
 
@@ -2753,11 +2752,12 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(await account.getSignerAddress()).toBe(TEST_SIGNER)
     })
 
-    it('reads the signer address from the transport', async () => {
-      const { account, transport } = await accountWithTransport()
+    it('votes as the member it derived, whatever the transport is', async () => {
+      // The transport moves transactions; it is not an identity. `sign()` and `getSignerAddress()`
+      // therefore cannot disagree about which member this account is.
+      const { account } = await accountWithTransport()
 
-      expect(await account.getSignerAddress()).toBe(OTHER_MEMBER)
-      expect(transport.getSignerAddress).toHaveBeenCalledTimes(1)
+      expect(await account.getSignerAddress()).toBe(TEST_SIGNER)
     })
 
     it('proposes through the transport', async () => {
@@ -2765,7 +2765,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       stubSolanaRpc({
         getAccountInfo: () => serveValue(
-          multisigAccountValue([{ address: OTHER_MEMBER, mask: 7 }], { threshold: 2, transactionIndex: 4n })
+          multisigAccountValue([{ address: TEST_SIGNER, mask: 7 }], { threshold: 2, transactionIndex: 4n })
         ),
         getMinimumBalanceForRentExemption: ([size]) => (128n + BigInt(size)) * 6960n
       })
@@ -2791,9 +2791,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
           proposalAccountValue({})
         ])
       })
-
-      // The member the transport signs as, not the one the seed derives: the account builds
-      // every instruction for whoever the transport reports.
 
       const result = await account.approveProposal(3)
 

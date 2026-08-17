@@ -86,11 +86,6 @@ class MyTransport extends ISquadsTransactionTransport {
     this._signerAccount = signerAccount
   }
 
-  // The member this transport votes as. The account builds every instruction for it.
-  async getSignerAddress () {
-    return this._signerAccount.getAddress()
-  }
-
   // Sign `tx.instructions` however you like, then broadcast. Resolve once it has landed.
   async sendTransaction (tx) {
     return this._signerAccount.sendTransaction(tx)
@@ -110,7 +105,8 @@ const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
 ```
 
 `transport` takes a factory rather than an instance because one configuration is shared by every
-account the manager derives, and each of those signs with a different key.
+account the manager derives, and each of those signs with a different key. A transport moves
+transactions and does not own an identity: the account always votes as the member it derived.
 
 > [!NOTE]
 > Squads keeps its votes on chain, one transaction per vote, so a transport here is about reaching

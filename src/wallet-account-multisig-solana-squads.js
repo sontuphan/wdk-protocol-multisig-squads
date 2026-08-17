@@ -184,7 +184,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @returns {Promise<string>} The signer's address.
    */
   async getSignerAddress () {
-    return this._transport.getSignerAddress()
+    return this._signerAccount.getAddress()
   }
 
   /**
@@ -697,8 +697,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
   /**
    * Disposes the wallet account, erasing the private key from the memory.
-   *
-   * @returns {void} Nothing; the account cannot sign once disposed.
    */
   dispose () {
     this._transport.dispose()

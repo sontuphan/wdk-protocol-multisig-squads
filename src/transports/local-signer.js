@@ -46,21 +46,11 @@ export default class LocalSignerTransport extends ISquadsTransactionTransport {
   }
 
   /**
-   * Returns the address of the member this transport signs as.
-   *
-   * @returns {Promise<string>} The member's address.
-   * @throws {Error} The transport must not have been disposed.
-   */
-  async getSignerAddress () {
-    return this._requireSignerAccount().getAddress()
-  }
-
-  /**
    * Signs a transaction with the member's key and broadcasts it.
    *
    * @param {SolanaTransaction} tx - The unsigned transaction.
    * @returns {Promise<TransactionResult>} The transaction's signature and the fee it paid.
-   * @throws {Error} The transport must not have been disposed, the signer account must be connected to a provider, and the cluster must accept the transaction.
+   * @throws {Error} The transport must not have been disposed.
    */
   async sendTransaction (tx) {
     return this._requireSignerAccount().sendTransaction(tx)
@@ -68,8 +58,6 @@ export default class LocalSignerTransport extends ISquadsTransactionTransport {
 
   /**
    * Drops the reference to the signer account. The account that created it erases its key.
-   *
-   * @returns {void} Nothing; the transport cannot sign once disposed.
    */
   dispose () {
     this._signerAccount = null

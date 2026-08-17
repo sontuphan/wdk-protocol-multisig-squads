@@ -42,7 +42,9 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
  * Squads keeps its votes on chain, one transaction per vote, so this contract is about reaching
  * the cluster and nothing else. It deliberately has no proposal storage, no message sharing and no
  * quoting: proposals and votes are read from the chain by the read-only account, and the fee a
- * transaction paid comes back from `sendTransaction`.
+ * transaction paid comes back from `sendTransaction`. Nor does it own an identity: the account
+ * votes as the member it derived, and `getSignerAddress()` answers from that account, so the two
+ * can never disagree.
  *
  * A transport disposes what it created. The signer account it is given is owned by the caller,
  * which zeroes that key itself.
@@ -50,17 +52,6 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
  * @interface
  */
 export default class ISquadsTransactionTransport {
-  /**
-   * Returns the address whose key this transport votes with. It must be a member of the multisig,
-   * and the account builds every instruction for it.
-   *
-   * @returns {Promise<string>} The member's address.
-   * @throws {NotImplementedError} An implementation must provide this method.
-   */
-  async getSignerAddress () {
-    throw new NotImplementedError('getSignerAddress()')
-  }
-
   /**
    * Signs a transaction and broadcasts it, resolving once it has reached the cluster.
    *
@@ -75,7 +66,6 @@ export default class ISquadsTransactionTransport {
   /**
    * Releases the transport's resources, erasing any key material it created.
    *
-   * @returns {void} Nothing; the transport cannot sign once disposed.
    * @throws {NotImplementedError} An implementation must provide this method.
    */
   dispose () {
