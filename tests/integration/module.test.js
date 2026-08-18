@@ -14,11 +14,6 @@
 
 'use strict'
 
-import { spawn } from 'node:child_process'
-import { access } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
 import { afterAll, beforeAll, beforeEach, describe, expect, it, jest } from '@jest/globals'
 
 import { ed25519 } from '@noble/curves/ed25519'
@@ -43,6 +38,7 @@ import {
   sendTestTokensTo
 } from './helpers/chain.js'
 import { approveWithAll, createWallet, deployMultisig, sorted } from './helpers/multisig.js'
+import { SQUADS_PROGRAM_CONFIG_ADDRESS, startSolanaTestValidator } from './helpers/validator.js'
 
 jest.setTimeout(180_000)
 
@@ -58,8 +54,6 @@ const MULTISIG_RENT = 2039280n
 const SIGNED_HELLO =
   '484d6ed3113c38833d66d9fc6e4f31f9e71f146c781739ce8103a9ea6d671f92' +
   '63dd43b53be7f9dddfafed4d671fbd6e64b0c1599fdfa68a8f8e8d73b49e780c'
-
-const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 
 /**
  * Verifies a `sign()` result against an address, without going through the account: `verify` is
@@ -84,83 +78,6 @@ function solanaAccount (target) {
     provider: TEST_RPC_URL,
     commitment: 'confirmed'
   })
-}
-
-// The Squads ProgramConfig PDA, seeds ["multisig", "program_config"].
-const SQUADS_PROGRAM_CONFIG_ADDRESS = 'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr'
-
-const PROGRAM_SO_PATH = join(FIXTURES_DIR, 'squads-program.so')
-const PROGRAM_CONFIG_PATH = join(FIXTURES_DIR, 'squads-program-config.json')
-
-const READY_ATTEMPTS = 60
-const READY_INTERVAL_MS = 500
-
-/** @returns {Promise<void>} */
-async function assertFixtures () {
-  for (const path of [PROGRAM_SO_PATH, PROGRAM_CONFIG_PATH]) {
-    try {
-      await access(path)
-    } catch {
-      throw new Error(
-        `The Squads fixture ${path} is missing. It is committed to the repository — ` +
-        'see tests/integration/fixtures/README.md.'
-      )
-    }
-  }
-}
-
-/**
- * @param {{ getLatestBlockhash: Function }} rpc
- * @returns {Promise<() => Promise<void>>} A function that stops the validator.
- */
-async function startSolanaTestValidator (rpc) {
-  await assertFixtures()
-
-  const validator = spawn('solana-test-validator', [
-    '--reset',
-    '--ticks-per-slot', '4',
-    '--limit-ledger-size', '10000',
-    '--upgradeable-program', SQUADS_PROGRAM_ADDRESS, PROGRAM_SO_PATH, 'none',
-    '--account', SQUADS_PROGRAM_CONFIG_ADDRESS, PROGRAM_CONFIG_PATH
-  ], {
-    stdio: ['ignore', 'ignore', 'ignore']
-  })
-
-  let startupError
-
-  const closed = new Promise((resolve) => {
-    validator.once('close', resolve)
-  })
-
-  validator.once('error', (error) => {
-    startupError = error
-  })
-
-  const stopSolanaTestValidator = async () => {
-    if (!validator.killed && validator.exitCode === null) {
-      validator.kill('SIGKILL')
-    }
-
-    await closed
-  }
-
-  for (let attempt = 0; attempt < READY_ATTEMPTS; attempt++) {
-    if (startupError) {
-      await stopSolanaTestValidator()
-      throw startupError
-    }
-
-    try {
-      await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send()
-      return stopSolanaTestValidator
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, READY_INTERVAL_MS))
-    }
-  }
-
-  await stopSolanaTestValidator()
-
-  throw new Error(`The validator was not answering at ${TEST_RPC_URL}`)
 }
 
 describe('@tetherto/wdk-protocol-multisig-squads', () => {
