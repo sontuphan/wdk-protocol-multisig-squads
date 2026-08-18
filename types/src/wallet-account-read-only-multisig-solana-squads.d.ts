@@ -503,6 +503,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      *
      * @protected
      * @param {number} memberCount - How many members the multisig would hold.
+     * @returns {void}
      * @throws {Error} The count must be an integer between 1 and 65,535.
      */
     protected _validateMemberCount(memberCount: number): void;

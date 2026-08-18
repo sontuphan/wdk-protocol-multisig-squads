@@ -27,6 +27,8 @@ export default class LocalSignerTransport implements ISquadsTransactionTransport
     sendTransaction(tx: import("@tetherto/wdk-wallet-solana").SolanaTransaction): Promise<import("@tetherto/wdk-wallet").TransactionResult>;
     /**
      * Drops the reference to the signer account. The account that created it erases its key.
+     *
+     * @returns {void}
      */
     dispose(): void;
     /**

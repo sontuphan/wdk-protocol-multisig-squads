@@ -56,6 +56,8 @@ export default class LocalSignerTransport {
 
   /**
    * Drops the reference to the signer account. The account that created it erases its key.
+   *
+   * @returns {void}
    */
   dispose () {
     this._signerAccount = undefined

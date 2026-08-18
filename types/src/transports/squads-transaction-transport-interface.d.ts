@@ -37,6 +37,7 @@ export interface ISquadsTransactionTransport {
     /**
      * Releases the transport's resources, erasing any key material it created.
      *
+     * @returns {void}
      * @throws {NotImplementedError} An implementation must provide this method.
      */
     dispose(): void;

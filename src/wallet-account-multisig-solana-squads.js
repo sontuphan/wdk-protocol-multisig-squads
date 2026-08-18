@@ -697,6 +697,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
   /**
    * Disposes the wallet account, erasing the private key from the memory.
+   *
+   * @returns {void}
    */
   dispose () {
     this._transport.dispose()
