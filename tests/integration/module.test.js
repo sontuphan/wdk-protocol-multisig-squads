@@ -771,7 +771,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       const { accounts } = multisig
       const proposal = await propose(multisig)
 
-      const approval = await accounts[0].approveProposal(proposal.proposalId, 'looks good')
+      const approval = await accounts[0].approveProposal(proposal.proposalId, { memo: 'looks good' })
 
       await confirmTransaction(rpc, approval.hash)
 

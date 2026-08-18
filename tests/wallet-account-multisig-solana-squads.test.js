@@ -180,11 +180,13 @@ function proposalAccountValue ({ status = 1, approved = [], rejected = [], times
 function vaultTransactionAccountValue ({
   accountKeys = [TEST_SIGNER, OTHER_MEMBER, SYSTEM_PROGRAM],
   vaultIndex = 0,
-  ephemeralSignerCount = 0
+  ephemeralSignerCount = 0,
+  lookupTable = null
 } = {}) {
   // 87 fixed fields, the ephemeral bumps, then the message: 3 header bytes, the key vec,
-  // and empty instruction and lookup vecs.
-  const size = 87 + ephemeralSignerCount + 3 + 4 + accountKeys.length * 32 + 4 + 4
+  // empty instruction vec, and the lookup vec, one entry of which is a key and two index vecs.
+  const lookupSize = lookupTable ? 32 + 4 + 1 + 4 : 0
+  const size = 87 + ephemeralSignerCount + 3 + 4 + accountKeys.length * 32 + 4 + 4 + lookupSize
   const data = new Uint8Array(size)
   const view = new DataView(data.buffer)
 
@@ -210,7 +212,18 @@ function vaultTransactionAccountValue ({
     offset += 32
   }
 
-  // Zero instructions, zero lookups.
+  // Zero instructions, then the lookups.
+  offset += 4
+
+  if (lookupTable) {
+    view.setUint32(offset, 1, true)
+    data.set(getBase58Encoder().encode(lookupTable), offset + 4)
+    // One writable index, no read-only ones.
+    view.setUint32(offset + 36, 1, true)
+    data[offset + 40] = 0
+    view.setUint32(offset + 41, 0, true)
+  }
+
   return accountValue(data)
 }
 
@@ -976,6 +989,33 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(instructions[1].data[16]).toBe(0)
     })
 
+    it('records a memo on the transaction it creates', async () => {
+      const { account, sendTransaction } = await proposingAccount()
+
+      await account.propose(TX, { memo: 'ok' })
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+
+      expect(Array.from(instructions[0].data.slice(-7))).toEqual([1, 2, 0, 0, 0, 111, 107])
+    })
+
+    it('writes an absent memo when none is given', async () => {
+      const { account, sendTransaction } = await proposingAccount()
+
+      await account.propose(TX)
+
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+
+      expect(Array.from(instructions[0].data.slice(-1))).toEqual([0])
+    })
+
+    it('throws on a non-string memo', async () => {
+      const { account, sendTransaction } = await proposingAccount()
+
+      await expect(account.propose(TX, { memo: 42 })).rejects.toThrow(/must be a string/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
     it('reports the fee its own quote reports', async () => {
       const { account } = await proposingAccount({ threshold: 1 })
 
@@ -1145,7 +1185,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     it('carries a memo when one is given', async () => {
       const { account, sendTransaction } = await votingAccount()
 
-      await account.approveProposal(3, 'ok')
+      await account.approveProposal(3, { memo: 'ok' })
 
       const [{ instructions }] = sendTransaction.mock.calls[0]
 
@@ -1257,8 +1297,191 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     it('throws on a non-string memo', async () => {
       const { account, sendTransaction } = await votingAccount()
 
-      await expect(account.approveProposal(3, 42)).rejects.toThrow(/must be a string/)
+      await expect(account.approveProposal(3, { memo: 42 })).rejects.toThrow(/must be a string/)
       expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    describe('autoExecute', () => {
+      const TEST_TRANSACTION_PDA_3 = '5PzeP4ZwkPPmZiYC98mZFzWnfcNxSCEudToHCzB9kXDG'
+      const CLOCK_SYSVAR = 'SysvarC1ock11111111111111111111111111111111'
+      const VAULT_EXECUTE_DISCRIMINATOR = [194, 8, 161, 87, 153, 164, 25, 171]
+      const CONFIG_EXECUTE_DISCRIMINATOR = [114, 146, 244, 189, 252, 140, 36, 40]
+
+      /**
+       * Builds a voting account whose one read also serves the transaction and the clock.
+       *
+       * @param {Object} [options] - The scenario.
+       * @param {number} [options.mask=7] - The signer's permission mask.
+       * @param {number} [options.threshold=2] - The multisig's threshold.
+       * @param {string[]} [options.approved] - The members that have already approved.
+       * @param {number} [options.timeLock=0] - The multisig's time lock, in seconds.
+       * @param {Object} [options.transaction] - The backing transaction account.
+       * @returns {Promise<{ account: Object, sendTransaction: Function, rpc: Object }>}
+       */
+      async function autoExecutingAccount ({
+        mask = 7,
+        threshold = 2,
+        approved = [OTHER_MEMBER],
+        timeLock = 0,
+        transaction = vaultTransactionAccountValue()
+      } = {}) {
+        const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+          provider: TEST_RPC_URL,
+          multisigPdaOrCreateKey: TEST_MULTISIG_PDA
+        })
+        const account = await wallet.getAccount(0)
+        const members = [{ address: TEST_SIGNER, mask }, { address: OTHER_MEMBER, mask: 7 }]
+
+        const rpc = stubSolanaRpc({
+          getMultipleAccounts: () => ({
+            context: { slot: 1 },
+            value: [
+              multisigAccountValue(members, { threshold, transactionIndex: 7n, timeLock }),
+              proposalAccountValue({ approved }),
+              transaction,
+              clockAccountValue(0n)
+            ]
+          })
+        })
+        const sendTransaction = jest.fn(async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }))
+
+        account._signerAccount.sendTransaction = sendTransaction
+
+        return { account, sendTransaction, rpc }
+      }
+
+      it('approves and executes in one transaction when the vote reaches the threshold', async () => {
+        const { account, sendTransaction } = await autoExecutingAccount()
+
+        const result = await account.approveProposal(3, { autoExecute: true })
+        const [{ instructions }] = sendTransaction.mock.calls[0]
+
+        expect(sendTransaction).toHaveBeenCalledTimes(1)
+        expect(instructions).toHaveLength(2)
+        expect(Array.from(instructions[1].data)).toEqual(VAULT_EXECUTE_DISCRIMINATOR)
+        expect(result).toEqual({
+          proposalId: '3',
+          hash: DUMMY_VOTE_HASH,
+          fee: DUMMY_FEE,
+          confirmations: 2,
+          threshold: 2,
+          status: 'executed',
+          transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
+        })
+      })
+
+      it('executes a config transaction the same way', async () => {
+        const { account, sendTransaction } = await autoExecutingAccount({
+          transaction: configTransactionAccountValue(['ChangeThreshold'])
+        })
+
+        const result = await account.approveProposal(3, { autoExecute: true })
+        const [{ instructions }] = sendTransaction.mock.calls[0]
+
+        expect(Array.from(instructions[1].data)).toEqual(CONFIG_EXECUTE_DISCRIMINATOR)
+        expect(result.status).toBe('executed')
+      })
+
+      it('reads the transaction and the clock alongside the proposal', async () => {
+        const { account, rpc } = await autoExecutingAccount()
+
+        await account.approveProposal(3, { autoExecute: true })
+
+        expect(rpcRequests(rpc, 'getMultipleAccounts')).toEqual([[
+          [TEST_MULTISIG_PDA, TEST_PROPOSAL_PDA_3, TEST_TRANSACTION_PDA_3, CLOCK_SYSVAR],
+          { commitment: 'confirmed', encoding: 'base64' }
+        ]])
+      })
+
+      it('goes inert when the vote does not reach the threshold', async () => {
+        const { account, sendTransaction } = await autoExecutingAccount({
+          threshold: 3,
+          approved: []
+        })
+
+        const result = await account.approveProposal(3, { autoExecute: true })
+        const [{ instructions }] = sendTransaction.mock.calls[0]
+
+        expect(instructions).toHaveLength(1)
+        expect(result.status).toBe('pending')
+        expect(result.confirmations).toBe(1)
+      })
+
+      it('goes inert under a time lock', async () => {
+        const { account, sendTransaction } = await autoExecutingAccount({ timeLock: 60 })
+
+        const result = await account.approveProposal(3, { autoExecute: true })
+        const [{ instructions }] = sendTransaction.mock.calls[0]
+
+        expect(instructions).toHaveLength(1)
+        expect(result.status).toBe('pending')
+      })
+
+      it('goes inert when the transaction account has been closed', async () => {
+        const { account, sendTransaction } = await autoExecutingAccount({ transaction: null })
+
+        const result = await account.approveProposal(3, { autoExecute: true })
+        const [{ instructions }] = sendTransaction.mock.calls[0]
+
+        expect(instructions).toHaveLength(1)
+        expect(result.status).toBe('pending')
+      })
+
+      it('goes inert when the signer holds no execute permission', async () => {
+        const { account, sendTransaction } = await autoExecutingAccount({ mask: 3 })
+
+        const result = await account.approveProposal(3, { autoExecute: true })
+        const [{ instructions }] = sendTransaction.mock.calls[0]
+
+        expect(instructions).toHaveLength(1)
+        expect(result.status).toBe('pending')
+      })
+
+      it('surfaces a dead address lookup table rather than going inert', async () => {
+        const TABLE = '7Np41oeYqPefeNQEHSv1UDhYrehxin3NStELsSKCT4K2'
+        const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+          provider: TEST_RPC_URL,
+          multisigPdaOrCreateKey: TEST_MULTISIG_PDA
+        })
+        const account = await wallet.getAccount(0)
+
+        stubSolanaRpc({
+          // The proposal's read serves four accounts; the lookup table's serves one.
+          getMultipleAccounts: ([keys]) => ({
+            context: { slot: 1 },
+            value: keys.length === 1
+              ? [null]
+              : [
+                  multisigAccountValue([
+                    { address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }
+                  ], { threshold: 2, transactionIndex: 7n }),
+                  proposalAccountValue({ approved: [OTHER_MEMBER] }),
+                  vaultTransactionAccountValue({ lookupTable: TABLE }),
+                  clockAccountValue(0n)
+                ]
+          })
+        })
+
+        account._signerAccount.sendTransaction = jest.fn(
+          async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE })
+        )
+
+        await expect(account.approveProposal(3, { autoExecute: true }))
+          .rejects.toThrow(/no longer be executed/)
+        // The same approval without the flag never reads the table, so it goes through.
+        await expect(account.approveProposal(3)).resolves.toMatchObject({ status: 'pending' })
+      })
+
+      it('carries the memo of the vote it executes', async () => {
+        const { account, sendTransaction } = await autoExecutingAccount()
+
+        await account.approveProposal(3, { autoExecute: true, memo: 'ok' })
+
+        const [{ instructions }] = sendTransaction.mock.calls[0]
+
+        expect(Array.from(instructions[0].data.slice(8))).toEqual([1, 2, 0, 0, 0, 111, 107])
+        expect(instructions).toHaveLength(2)
+      })
     })
   })
 
@@ -1289,7 +1512,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     it('carries a memo when one is given', async () => {
       const { account, sendTransaction } = await votingAccount()
 
-      await account.rejectProposal(3, 'ok')
+      await account.rejectProposal(3, { memo: 'ok' })
 
       const [{ instructions }] = sendTransaction.mock.calls[0]
 
@@ -1427,8 +1650,21 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     it('throws on a non-string memo', async () => {
       const { account, sendTransaction } = await votingAccount()
 
-      await expect(account.rejectProposal(3, 42)).rejects.toThrow(/must be a string/)
+      await expect(account.rejectProposal(3, { memo: 42 })).rejects.toThrow(/must be a string/)
       expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('ignores autoExecute, since a rejection executes nothing', async () => {
+      const { account, sendTransaction, rpc } = await votingAccount()
+
+      const result = await account.rejectProposal(3, { autoExecute: true })
+      const [{ instructions }] = sendTransaction.mock.calls[0]
+
+      expect(instructions).toHaveLength(1)
+      expect(result.status).toBe('pending')
+      // No transaction account and no clock: the reject path reads what it always reads.
+      expect(rpcRequests(rpc, 'getMultipleAccounts')[0][0])
+        .toEqual([TEST_MULTISIG_PDA, TEST_PROPOSAL_PDA_3])
     })
   })
 

@@ -11,11 +11,13 @@
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
 /**
- * `MultisigTransactionOptions` widened with the vault the proposal spends from: an index between 0
- * and 255, which the stored transaction carries so the program signs with the same vault the
- * message was compiled against. It defaults to the main vault, 0.
+ * `MultisigTransactionOptions` widened with the vault the proposal spends from and the note the
+ * call records. `vaultIndex` is an index between 0 and 255, which the stored transaction carries
+ * so the program signs with the same vault the message was compiled against, defaulting to the
+ * main vault, 0. `memo` is an optional note recorded on chain with the instruction, where an empty
+ * string is a present-but-empty memo rather than none.
  *
- * @typedef {MultisigTransactionOptions & { vaultIndex?: number }} SolanaMultisigTransactionOptions
+ * @typedef {MultisigTransactionOptions & { vaultIndex?: number, memo?: string }} SolanaMultisigTransactionOptions
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigOptions} MultisigOptions */
 /**
@@ -139,7 +141,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * SOL transfer or a message carrying `instructions`, which the vault executes as they stand.
      *
      * @param {SolanaTransaction} tx - The transaction to propose.
-     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
+     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing. `memo` is recorded on chain with the creation.
      * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
      */
     propose(tx: SolanaTransaction, { vaultIndex, ...transactionOptions }?: SolanaMultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
@@ -147,7 +149,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * Proposes an SPL token transfer to the multisig.
      *
      * @param {TransferOptions} transferOptions - The transfer options.
-     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing.
+     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing. `memo` is recorded on chain with the creation.
      * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
      * @throws {Error} The transfer options must be valid, the signer must be allowed to propose, and the quote must stay within `transferMaxFee`.
      * @todo Support Token-2022 (Token Extensions Program), whose associated token accounts this method does not derive.
@@ -157,20 +159,20 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * Approves a pending transaction proposal.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
-     * @param {string} [memo] - An optional note recorded on chain with the vote. It costs rent, and an empty string is stored as a present-but-empty memo rather than none.
-     * @returns {Promise<SolanaMultisigProposalResult>} The approval result.
+     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing; the one error it can surface is a stored message whose address lookup tables can no longer be read, which no longer executes by any route. `vaultIndex` does not bear on a vote.
+     * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'`, with the send's own `transaction`, when `autoExecute` ran the execution.
      * @throws {Error} The proposal must be open to this signer's approval, and the RPC request must succeed.
      */
-    approveProposal(proposalId: number | bigint | string, memo?: string): Promise<SolanaMultisigProposalResult>;
+    approveProposal(proposalId: number | bigint | string, { memo, autoExecute }?: SolanaMultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
     /**
      * Rejects a pending transaction proposal.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
-     * @param {string} [memo] - An optional note recorded on chain with the vote. It costs rent, and an empty string is stored as a present-but-empty memo rather than none.
+     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. Only `memo` bears on a rejection, as the note recorded on chain with it: a rejected proposal executes nothing, so `autoExecute` is inert here whatever the votes say.
      * @returns {Promise<SolanaMultisigProposalResult>} The rejection result.
      * @throws {Error} The proposal must be open to this signer's rejection, and the RPC request must succeed.
      */
-    rejectProposal(proposalId: number | bigint | string, memo?: string): Promise<SolanaMultisigProposalResult>;
+    rejectProposal(proposalId: number | bigint | string, { memo }?: SolanaMultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
     /**
      * Submits an approved proposal for on-chain execution.
      *
@@ -250,6 +252,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /** @private */
     private _buildProposalVoteInstruction;
     /** @private */
+    private _toMemo;
+    /** @private */
+    private _canAutoExecute;
+    /** @private */
+    private _buildVoteExecuteInstruction;
+    /** @private */
     private _buildConfigExecuteInstruction;
     /** @private */
     private _buildVaultExecuteInstruction;
@@ -279,12 +287,15 @@ export type SolanaMultisigProposalResult = MultisigProposal & MultisigAutoExecut
 };
 export type MultisigTransactionOptions = import("@tetherto/wdk-wallet/multisig").MultisigTransactionOptions;
 /**
- * `MultisigTransactionOptions` widened with the vault the proposal spends from: an index between 0
- * and 255, which the stored transaction carries so the program signs with the same vault the
- * message was compiled against. It defaults to the main vault, 0.
+ * `MultisigTransactionOptions` widened with the vault the proposal spends from and the note the
+ * call records. `vaultIndex` is an index between 0 and 255, which the stored transaction carries
+ * so the program signs with the same vault the message was compiled against, defaulting to the
+ * main vault, 0. `memo` is an optional note recorded on chain with the instruction, where an empty
+ * string is a present-but-empty memo rather than none.
  */
 export type SolanaMultisigTransactionOptions = MultisigTransactionOptions & {
     vaultIndex?: number;
+    memo?: string;
 };
 export type MultisigOptions = import("@tetherto/wdk-wallet/multisig").MultisigOptions;
 /**
