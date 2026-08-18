@@ -70,6 +70,47 @@ account.dispose()
 > program-derived address could use, so the module leaves the addon out rather than stubbing it.
 > `sign(message)` still signs with the member's own key.
 
+## Transaction Options
+
+One options object runs through the whole lifecycle, so a note or a vault choice is passed the
+same way wherever it applies:
+
+```javascript
+// vaultIndex: the vault to spend from, 0 to 255 (default: 0)
+// memo: a note recorded on chain with the call
+// autoExecute: execute in the same transaction, when this call completes the approvals
+await account.propose(tx, { vaultIndex: 0, memo: 'payroll', autoExecute: true })
+await account.transfer(transferOptions, { memo: 'payroll' })
+
+await account.approveProposal(proposalId, { memo: 'looks good', autoExecute: true })
+await account.rejectProposal(proposalId, { memo: 'wrong recipient' })
+
+await account.executeProposal(proposalId)
+```
+
+`vaultIndex` bears on `propose` and `transfer` only, and `autoExecute` on everything but
+`rejectProposal`, which executes nothing whatever the votes say. `memo` applies to all four.
+`executeProposal` takes no options. A memo rides in the instruction's data rather than in an
+account, so it adds no rent, and an empty string is a present-but-empty memo rather than none.
+
+`autoExecute` saves the separate `executeProposal` round trip when the same call already
+carries the last approval the proposal needs:
+
+- On `propose` and `transfer`, that means a **threshold of 1**, so it is a 1-of-1 and
+  test-setup convenience.
+- On `approveProposal`, it means **this approval reaching the threshold**, so the last approver
+  of a 3-of-5 applies the transaction in the same transaction as their vote.
+
+It also needs no time lock on the multisig and a signer holding `Execute` on top of the vote.
+The two instructions ride in one transaction, so an execution that fails on chain takes the
+approval down with it: the vote is not recorded and the proposal stays open, rather than being
+approved and left stuck.
+
+> [!NOTE]
+> Where `autoExecute` cannot apply it is dropped silently rather than throwing, so branch on
+> the result's `status`, which is `'executed'` when it ran and `'pending'` when it did not.
+> `status: 'executed'` comes with a `transaction` holding the send's own hash and fee.
+
 ## Transactions and Transports
 
 Every write this package makes goes through one seam. The account builds the Squads instructions,
@@ -113,6 +154,32 @@ transactions and does not own an identity: the account always votes as the membe
 > the cluster and nothing else: it stores no proposals and shares no messages. Proposals and votes
 > are read from the chain through the read-only account. A peer-to-peer transport that collects
 > member signatures before broadcasting fits this interface and is not part of this package yet.
+
+## Fees, rent, and who pays
+
+Three payers, and one call can involve all three:
+
+- **The fee payer** signs the transaction and pays the Solana network fee. It is whatever the
+  transport provides: the member itself by default, or a paymaster when the transport is built
+  over a sponsoring wallet such as `@tetherto/wdk-wallet-solana-gasless`.
+- **The rent payer** funds the accounts Squads creates. Set it with the `rentPayer` config
+  option; it defaults to the signer. It has to sign the transaction by other means, which in
+  practice makes it the fee payer of a sponsoring wallet.
+- **The vault** funds whatever the proposed transaction itself does, a recipient's associated
+  token account included. No member ever pays for the payload.
+
+| Call | Who must sign | Rent it creates | Charged to |
+|---|---|---|---|
+| `deploy` | the signer, plus the create key, which `createKeySecret` signs for you | the multisig account, sized by member count, plus the Squads treasury creation fee | `rentPayer`, else the signer |
+| `propose`, `transfer`, `addOwner`, `removeOwner`, `swapOwner`, `changeThreshold` | a member holding `Initiate` | the transaction account, sized by the message, plus the proposal account | `rentPayer`, else the member |
+| `approveProposal`, `rejectProposal` | a member holding `Vote` | none | network fee only |
+| `executeProposal` for a transfer or other vault transaction | a member holding `Execute` | none | network fee only; the vault funds the transaction itself |
+| `executeProposal` for an owner or threshold change | a member holding `Execute` | growth of the multisig account when the change adds a member | the executing member, even when `rentPayer` is set |
+
+The `fee` a propose-family call reports is the network fee plus that rent, the same basis
+`quotePropose` and `quoteTransfer` use, so a quote and the call it quotes agree. `deploy` sets
+no rent collector, so rent stays locked for the life of the accounts rather than being
+reclaimable on close.
 
 ## Squads Protocol Version
 

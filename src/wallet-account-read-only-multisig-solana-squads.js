@@ -246,23 +246,14 @@ const PROGRAM_ADDRESS = {
 
 const ACCOUNT_ROLE = { readonly: 0, writable: 1, readonlySigner: 2, writableSigner: 3 }
 
-const PROPOSAL_STATUS_NAMES = [
-  'Draft',
-  'Active',
-  'Rejected',
-  'Approved',
-  'Executing',
-  'Executed',
-  'Cancelled'
-]
-const PROPOSAL_STATUS_PHRASES = [
-  'a draft',
-  'open for voting',
-  'rejected',
-  'approved',
-  'executing',
-  'executed',
-  'cancelled'
+const PROPOSAL_STATUS_LABELS = [
+  { name: 'Draft', phrase: 'a draft' },
+  { name: 'Active', phrase: 'open for voting' },
+  { name: 'Rejected', phrase: 'rejected' },
+  { name: 'Approved', phrase: 'approved' },
+  { name: 'Executing', phrase: 'executing' },
+  { name: 'Executed', phrase: 'executed' },
+  { name: 'Cancelled', phrase: 'cancelled' }
 ]
 
 // What is left of the byte arithmetic: the account sizes the rent quotes are computed from, which
@@ -510,42 +501,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       getBase64Encoder().encode(value.data[0]),
       ACCOUNT_DISCRIMINATOR.multisig
     )
-  }
-
-  /**
-   * Returns the addresses of the multisig's members, in on-chain order.
-   *
-   * @returns {Promise<string[]>} The member addresses.
-   * @throws {Error} The multisig account must exist, and the RPC request must succeed.
-   */
-  async getOwners () {
-    const { address: multisigPda, owners, isCreated } = await this.getMultisigInfo()
-
-    if (!isCreated) {
-      throw new Error(
-        `The multisig account ${multisigPda} does not exist. Deploy it before reading its members.`
-      )
-    }
-
-    return owners
-  }
-
-  /**
-   * Returns the number of approvals a proposal needs before it can be executed.
-   *
-   * @returns {Promise<number>} The threshold.
-   * @throws {Error} The multisig account must exist, and the RPC request must succeed.
-   */
-  async getThreshold () {
-    const { address: multisigPda, threshold, isCreated } = await this.getMultisigInfo()
-
-    if (!isCreated) {
-      throw new Error(
-        `The multisig account ${multisigPda} does not exist. Deploy it before reading its threshold.`
-      )
-    }
-
-    return threshold
   }
 
   /**
@@ -1693,8 +1648,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       address: proposalPda,
       exists: true,
       status,
-      statusName: PROPOSAL_STATUS_NAMES[status] ?? `Unknown(${status})`,
-      statusPhrase: PROPOSAL_STATUS_PHRASES[status] ?? `in an unknown status (${status})`,
+      statusName: PROPOSAL_STATUS_LABELS[status]?.name ?? `Unknown(${status})`,
+      statusPhrase: PROPOSAL_STATUS_LABELS[status]?.phrase ?? `in an unknown status (${status})`,
       statusTimestamp: timestamp,
       approved,
       rejected,
