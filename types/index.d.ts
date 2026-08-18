@@ -16,7 +16,7 @@ export type SolanaMultisigProposal = import("./src/wallet-account-read-only-mult
 export type SolanaMultisigProposalResult = import("./src/wallet-account-multisig-solana-squads.js").SolanaMultisigProposalResult;
 export type SolanaMultisigTransactionOptions = import("./src/wallet-account-multisig-solana-squads.js").SolanaMultisigTransactionOptions;
 export type SolanaMultisigAddOwnerOptions = import("./src/wallet-account-multisig-solana-squads.js").SolanaMultisigAddOwnerOptions;
-export type SquadsTransactionTransportFactory = import("./src/transports/index.js").SquadsTransactionTransportFactory;
+export type MultisigCoordinatorFactory = import("./src/coordinators/index.js").MultisigCoordinatorFactory;
 export type SquadsMember = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsMember;
 export type SquadsMultisigAccount = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsMultisigAccount;
 export type SquadsProposalAccount = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsProposalAccount;
@@ -29,4 +29,4 @@ export type SquadsTransactionAccount = import("./src/wallet-account-read-only-mu
 export type SquadsProgramConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsProgramConfig;
 export type SquadsProposalContext = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsProposalContext;
 export { default as WalletAccountReadOnlyMultisigSolanaSquads, SQUADS_PROGRAM_ADDRESS, TRANSACTION_KIND } from "./src/wallet-account-read-only-multisig-solana-squads.js";
-export { ISquadsTransactionTransport, LocalSignerTransport } from "./src/transports/index.js";
+export { IMultisigCoordinator, LocalSignerCoordinator } from "./src/coordinators/index.js";

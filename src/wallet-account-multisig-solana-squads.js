@@ -36,9 +36,9 @@ import {
 
 import { getProgramDerivedAddressSync } from './helpers/program-derived-address.js'
 
-import LocalSignerTransport from './transports/local-signer.js'
+import LocalSignerCoordinator from './coordinators/local-signer.js'
 
-/** @typedef {import('./transports/index.js').ISquadsTransactionTransport} ISquadsTransactionTransport */
+/** @typedef {import('./coordinators/index.js').IMultisigCoordinator} IMultisigCoordinator */
 
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */
@@ -129,15 +129,15 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     this._signerAccount = signerAccount
 
     /**
-     * The transport every operation is signed and broadcast through. The account builds the
+     * The coordinator every operation is signed and broadcast through. The account builds the
      * instructions; nothing below this field knows how they reach the cluster.
      *
      * @protected
-     * @type {ISquadsTransactionTransport}
+     * @type {IMultisigCoordinator}
      */
-    this._transport = config.transport
-      ? config.transport(signerAccount)
-      : new LocalSignerTransport(signerAccount)
+    this._coordinator = config.coordinator
+      ? config.coordinator(signerAccount)
+      : new LocalSignerCoordinator(signerAccount)
   }
 
   /**
@@ -310,7 +310,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       })
     }
 
-    const { hash } = await this._transport.sendTransaction({ instructions: [instruction] })
+    const { hash } = await this._coordinator.sendTransaction({ instructions: [instruction] })
 
     return { hash }
   }
@@ -403,7 +403,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       instructions.push(execution)
     }
 
-    const { hash, fee } = await this._transport.sendTransaction({ instructions })
+    const { hash, fee } = await this._coordinator.sendTransaction({ instructions })
 
     return {
       proposalId: index.toString(),
@@ -442,7 +442,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       memo
     )
 
-    const { hash, fee } = await this._transport.sendTransaction({
+    const { hash, fee } = await this._coordinator.sendTransaction({
       instructions: [instruction]
     })
 
@@ -510,7 +510,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       ? await this._buildConfigExecuteInstruction(multisig, proposal, transaction, signerAddress, index)
       : await this._buildVaultExecuteInstruction(multisig, proposal, transaction, signerAddress)
 
-    return this._transport.sendTransaction({ instructions: [instruction] })
+    return this._coordinator.sendTransaction({ instructions: [instruction] })
   }
 
   /**
@@ -696,7 +696,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @returns {void}
    */
   dispose () {
-    this._transport.dispose()
+    this._coordinator.dispose()
     this._signerAccount.dispose()
   }
 
@@ -800,7 +800,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     instructions.push(...extra)
 
     const rent = options.rent ?? await this._quoteProposalRent(transactionSize, members.length)
-    const { hash, fee } = await this._transport.sendTransaction({ instructions })
+    const { hash, fee } = await this._coordinator.sendTransaction({ instructions })
     const executed = extra.length > 0
 
     const autoExecuteResult = executed

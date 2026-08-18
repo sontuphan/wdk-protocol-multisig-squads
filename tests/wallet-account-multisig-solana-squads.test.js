@@ -25,7 +25,7 @@ import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 import WalletManagerMultisigSolanaSquads, {
   WalletAccountMultisigSolanaSquads,
   WalletAccountReadOnlyMultisigSolanaSquads,
-  LocalSignerTransport,
+  LocalSignerCoordinator,
   PERMISSION,
   SQUADS_PROGRAM_ADDRESS
 } from '@tetherto/wdk-protocol-multisig-squads'
@@ -2903,17 +2903,17 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     })
   })
 
-  describe('transport', () => {
+  describe('coordinator', () => {
     /**
-     * Builds a transport that records what it was asked to send, and the account that uses it.
+     * Builds a coordinator that records what it was asked to send, and the account that uses it.
      *
-     * @returns {Promise<{ account: Object, transport: Object, signerAccount: Object }>}
+     * @returns {Promise<{ account: Object, coordinator: Object, signerAccount: Object }>}
      */
-    async function accountWithTransport () {
+    async function accountWithCoordinator () {
       const sent = []
       let signerAccount = null
 
-      const transport = {
+      const coordinator = {
         sendTransaction: jest.fn(async (tx) => {
           sent.push(tx)
 
@@ -2925,46 +2925,46 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
         provider: TEST_RPC_URL,
         multisigPdaOrCreateKey: TEST_MULTISIG_PDA,
-        transport: (account) => {
+        coordinator: (account) => {
           signerAccount = account
 
-          return transport
+          return coordinator
         }
       })
       const account = await wallet.getAccount(0)
 
-      return { account, transport, sent, get signerAccount () { return signerAccount } }
+      return { account, coordinator, sent, get signerAccount () { return signerAccount } }
     }
 
-    it('builds the transport from the account it derived', async () => {
-      const { signerAccount } = await accountWithTransport()
+    it('builds the coordinator from the account it derived', async () => {
+      const { signerAccount } = await accountWithCoordinator()
 
       // The factory takes the member's own signer account, so each derived account signs with
-      // its own key rather than sharing one transport across the manager's accounts.
+      // its own key rather than sharing one coordinator across the manager's accounts.
       expect(await signerAccount.getAddress()).toBe(TEST_SIGNER)
     })
 
-    it('defaults to a transport over the local signer', async () => {
+    it('defaults to a coordinator over the local signer', async () => {
       const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
         provider: TEST_RPC_URL,
         multisigPdaOrCreateKey: TEST_MULTISIG_PDA
       })
       const account = await wallet.getAccount(0)
 
-      expect(account._transport).toBeInstanceOf(LocalSignerTransport)
+      expect(account._coordinator).toBeInstanceOf(LocalSignerCoordinator)
       expect(await account.getSignerAddress()).toBe(TEST_SIGNER)
     })
 
-    it('votes as the member it derived, whatever the transport is', async () => {
-      // The transport moves transactions; it is not an identity. `sign()` and `getSignerAddress()`
+    it('votes as the member it derived, whatever the coordinator is', async () => {
+      // The coordinator moves transactions; it is not an identity. `sign()` and `getSignerAddress()`
       // therefore cannot disagree about which member this account is.
-      const { account } = await accountWithTransport()
+      const { account } = await accountWithCoordinator()
 
       expect(await account.getSignerAddress()).toBe(TEST_SIGNER)
     })
 
-    it('proposes through the transport', async () => {
-      const { account, transport, sent } = await accountWithTransport()
+    it('proposes through the coordinator', async () => {
+      const { account, coordinator, sent } = await accountWithCoordinator()
 
       stubSolanaRpc({
         getAccountInfo: () => serveValue(
@@ -2975,15 +2975,15 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const result = await account.propose({ to: OTHER_MEMBER, value: 1n })
 
-      expect(transport.sendTransaction).toHaveBeenCalledTimes(1)
+      expect(coordinator.sendTransaction).toHaveBeenCalledTimes(1)
       // A proposal is the create instruction plus the proposal instruction, unsigned and
-      // unbroadcast: everything past this point belongs to the transport.
+      // unbroadcast: everything past this point belongs to the coordinator.
       expect(sent[0].instructions).toHaveLength(2)
       expect(result.hash).toBe(DUMMY_VOTE_HASH)
     })
 
-    it('approves through the transport', async () => {
-      const { account, transport, sent } = await accountWithTransport()
+    it('approves through the coordinator', async () => {
+      const { account, coordinator, sent } = await accountWithCoordinator()
 
       stubSolanaRpc({
         getMultipleAccounts: () => serveValue([
@@ -2997,19 +2997,19 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const result = await account.approveProposal(3)
 
-      expect(transport.sendTransaction).toHaveBeenCalledTimes(1)
+      expect(coordinator.sendTransaction).toHaveBeenCalledTimes(1)
       expect(sent[0].instructions).toHaveLength(1)
       expect(result.hash).toBe(DUMMY_VOTE_HASH)
     })
 
-    it('disposes the transport and the key it derived', async () => {
-      const { account, transport } = await accountWithTransport()
+    it('disposes the coordinator and the key it derived', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
 
       account.dispose()
 
-      // Both, because a transport that holds no key would otherwise leave the derived member
+      // Both, because a coordinator that holds no key would otherwise leave the derived member
       // key in memory, and one that holds its own must be told to erase it.
-      expect(transport.dispose).toHaveBeenCalledTimes(1)
+      expect(coordinator.dispose).toHaveBeenCalledTimes(1)
       await expect(account.sign('hello')).rejects.toThrow('The wallet account has been disposed.')
     })
   })

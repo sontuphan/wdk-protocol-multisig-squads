@@ -37,8 +37,8 @@ import { getBase64EncodedWireTransaction } from '@solana/transactions'
 import WalletManagerSolana, { WalletAccountReadOnlySolana } from '@tetherto/wdk-wallet-solana'
 
 import {
-  ISquadsTransactionTransport,
-  LocalSignerTransport
+  IMultisigCoordinator,
+  LocalSignerCoordinator
 } from '@tetherto/wdk-protocol-multisig-squads'
 
 import { LAMPORTS_PER_SOL, airdrop, confirmTransaction } from './helpers/chain.js'
@@ -60,13 +60,13 @@ const SPONSORED_FEE = 2n * SIGNATURE_FEE
 
 // The rent a deploy and a SOL-transfer proposal lock up on this validator, both for a two-member
 // multisig: the multisig account, and a proposal's transaction and proposal accounts. The proposal
-// figure is the one the module suite measures for the default transport.
+// figure is the one the module suite measures for the default coordinator.
 const MULTISIG_RENT = 2268960n
 const PROPOSAL_RENT = 5143440n
 
 const TRANSFER_AMOUNT = LAMPORTS_PER_SOL / 10n
 
-// A signature the cluster has never seen, returned by the transport that refuses to broadcast.
+// A signature the cluster has never seen, returned by the coordinator that refuses to broadcast.
 const UNBROADCAST_HASH =
   '4YkT2NCT7cabPMuBNe9GiBmYWSqSChfgQpwZ5sDoDLYkP1yPmzHVfvKD6JgFPBhTruWJFVWvKZ1s6PyzD8MW1XSm'
 
@@ -88,7 +88,7 @@ function solanaAccount (target) {
 
 /**
  * Attaches a signer to the accounts an instruction list already names as the member, which is how
- * a transport that compiles the message itself gets the member's vote signed.
+ * a coordinator that compiles the message itself gets the member's vote signed.
  *
  * @param {object[]} instructions - The instructions the account built.
  * @param {object} memberSigner - The member's signer.
@@ -108,11 +108,11 @@ function withMemberSigner (instructions, memberSigner) {
 }
 
 /**
- * A transport that has a sponsor pay for and broadcast what the account built: the member signs
+ * A coordinator that has a sponsor pay for and broadcast what the account built: the member signs
  * its own vote and the sponsor signs as fee payer, so a member holding no SOL can still vote. It
- * is the `rentPayer` co-signer the configuration documents, which needs a transport to sign.
+ * is the `rentPayer` co-signer the configuration documents, which needs a coordinator to sign.
  */
-class SponsoredTransport extends ISquadsTransactionTransport {
+class SponsoredCoordinator extends IMultisigCoordinator {
   constructor (signerAccount, sponsor, rpc) {
     super()
 
@@ -173,10 +173,10 @@ class SponsoredTransport extends ISquadsTransactionTransport {
 }
 
 /**
- * A transport that keeps what it was handed instead of putting it on the cluster, which is what a
- * transport collecting signatures elsewhere does before it has enough of them.
+ * A coordinator that keeps what it was handed instead of putting it on the cluster, which is what a
+ * coordinator collecting signatures elsewhere does before it has enough of them.
  */
-class UnbroadcastTransport extends ISquadsTransactionTransport {
+class UnbroadcastCoordinator extends IMultisigCoordinator {
   constructor () {
     super()
 
@@ -194,7 +194,7 @@ class UnbroadcastTransport extends ISquadsTransactionTransport {
   }
 }
 
-describe('transports', () => {
+describe('coordinators', () => {
   const rpc = createSolanaRpc(TEST_RPC_URL)
 
   let stopSolanaTestValidator
@@ -210,7 +210,7 @@ describe('transports', () => {
     }
   })
 
-  describe('LocalSignerTransport', () => {
+  describe('LocalSignerCoordinator', () => {
     /** @returns {Promise<object>} A funded Solana signer account, the member's own. */
     async function fundedSignerAccount () {
       const wallet = new WalletManagerSolana(SEED_PHRASE, {
@@ -226,11 +226,11 @@ describe('transports', () => {
 
     it('signs with the member key it was given and broadcasts at once', async () => {
       const signerAccount = await fundedSignerAccount()
-      const transport = new LocalSignerTransport(signerAccount)
+      const coordinator = new LocalSignerCoordinator(signerAccount)
       const { address: recipient } = await generateKeyPairSigner()
       const before = await solanaAccount(SIGNER_0).getBalance()
 
-      const { hash, fee } = await transport.sendTransaction({
+      const { hash, fee } = await coordinator.sendTransaction({
         to: recipient,
         value: TRANSFER_AMOUNT
       })
@@ -246,24 +246,24 @@ describe('transports', () => {
 
     it('refuses to send once disposed', async () => {
       const signerAccount = await fundedSignerAccount()
-      const transport = new LocalSignerTransport(signerAccount)
+      const coordinator = new LocalSignerCoordinator(signerAccount)
       const recipient = (await generateKeyPairSigner()).address
 
-      transport.dispose()
+      coordinator.dispose()
 
       await expect(
-        transport.sendTransaction({ to: recipient, value: TRANSFER_AMOUNT })
-      ).rejects.toThrow('The transport has been disposed.')
+        coordinator.sendTransaction({ to: recipient, value: TRANSFER_AMOUNT })
+      ).rejects.toThrow('The coordinator has been disposed.')
     })
 
     it('leaves the signer account it was given able to sign', async () => {
       const signerAccount = await fundedSignerAccount()
-      const transport = new LocalSignerTransport(signerAccount)
+      const coordinator = new LocalSignerCoordinator(signerAccount)
       const recipient = (await generateKeyPairSigner()).address
 
-      transport.dispose()
+      coordinator.dispose()
 
-      // The signer account belongs to the caller, so the transport must not have erased its key.
+      // The signer account belongs to the caller, so the coordinator must not have erased its key.
       const { hash } = await signerAccount.sendTransaction({
         to: recipient,
         value: TRANSFER_AMOUNT
@@ -279,7 +279,7 @@ describe('transports', () => {
         members: 2,
         threshold: 2,
         fundVault: LAMPORTS_PER_SOL,
-        config: { transport: (signerAccount) => new LocalSignerTransport(signerAccount) }
+        config: { coordinator: (signerAccount) => new LocalSignerCoordinator(signerAccount) }
       })
       const recipient = (await generateKeyPairSigner()).address
 
@@ -299,7 +299,7 @@ describe('transports', () => {
 
       await confirmTransaction(rpc, execution.hash)
 
-      // The same figures the default transport produces: naming it explicitly changes nothing.
+      // The same figures the default coordinator produces: naming it explicitly changes nothing.
       expect(proposal).toEqual({
         proposalId: '1',
         confirmations: 0,
@@ -321,24 +321,24 @@ describe('transports', () => {
     })
   })
 
-  describe('a sponsored transport', () => {
+  describe('a sponsored coordinator', () => {
     /**
      * The configuration that puts every transaction on the sponsor's tab: it pays the fee as the
-     * transport's fee payer and the rent as the configured `rentPayer`.
+     * coordinator's fee payer and the rent as the configured `rentPayer`.
      *
      * @param {object} sponsor - The sponsor's signer.
-     * @param {object[]} transports - Collects the transports the manager builds.
+     * @param {object[]} coordinators - Collects the coordinators the manager builds.
      * @returns {object} The signing configuration.
      */
-    function sponsoredConfig (sponsor, transports) {
+    function sponsoredConfig (sponsor, coordinators) {
       return {
         rentPayer: sponsor.address,
-        transport: (signerAccount) => {
-          const transport = new SponsoredTransport(signerAccount, sponsor, rpc)
+        coordinator: (signerAccount) => {
+          const coordinator = new SponsoredCoordinator(signerAccount, sponsor, rpc)
 
-          transports.push(transport)
+          coordinators.push(coordinator)
 
-          return transport
+          return coordinator
         }
       }
     }
@@ -356,37 +356,37 @@ describe('transports', () => {
      * Builds a sponsored wallet whose multisig is not deployed yet.
      *
      * @param {{ members?: number }} [options]
-     * @returns {Promise<object>} The wallet, its sponsor, and the transports built for it.
+     * @returns {Promise<object>} The wallet, its sponsor, and the coordinators built for it.
      */
     async function sponsoredWallet ({ members = 2 } = {}) {
       const sponsor = await fundedSponsor()
-      const transports = []
+      const coordinators = []
       const wallet = await createWallet({
         members,
-        config: sponsoredConfig(sponsor, transports)
+        config: sponsoredConfig(sponsor, coordinators)
       })
 
-      return { ...wallet, sponsor, transports }
+      return { ...wallet, sponsor, coordinators }
     }
 
     /**
      * Deploys a sponsored multisig, funding the members with nothing.
      *
      * @param {{ members?: number, threshold?: number, fundVault?: bigint }} [options]
-     * @returns {Promise<object>} The multisig, its sponsor, and the transports built for it.
+     * @returns {Promise<object>} The multisig, its sponsor, and the coordinators built for it.
      */
     async function sponsoredMultisig ({ members = 2, threshold = members, fundVault = 0n } = {}) {
       const sponsor = await fundedSponsor()
-      const transports = []
+      const coordinators = []
       const multisig = await deployMultisig({
         members,
         threshold,
         fundVault,
         fundSigners: 0n,
-        config: sponsoredConfig(sponsor, transports)
+        config: sponsoredConfig(sponsor, coordinators)
       })
 
-      return { ...multisig, sponsor, transports }
+      return { ...multisig, sponsor, coordinators }
     }
 
     it('deploys a multisig without charging the members a lamport', async () => {
@@ -431,7 +431,7 @@ describe('transports', () => {
       const executed = await accounts[0].getProposal(proposal.proposalId)
 
       expect(executed.statusName).toBe('Executed')
-      // The votes are the members' own: a transport pays and broadcasts, it is not an identity.
+      // The votes are the members' own: a coordinator pays and broadcasts, it is not an identity.
       expect(sorted(executed.approved)).toEqual(sorted(signers))
       expect(await solanaAccount(recipient).getBalance()).toBe(TRANSFER_AMOUNT)
       expect(await solanaAccount(vaultPda).getBalance()).toBe(
@@ -461,32 +461,32 @@ describe('transports', () => {
     })
 
     it('is disposed with the account, whose derived key the account erases itself', async () => {
-      const { accounts, transports } = await sponsoredMultisig({ members: 1, threshold: 1 })
+      const { accounts, coordinators } = await sponsoredMultisig({ members: 1, threshold: 1 })
 
       accounts[0].dispose()
 
-      expect(transports[0].disposeCount).toBe(1)
+      expect(coordinators[0].disposeCount).toBe(1)
       await expect(accounts[0].sign('hello')).rejects.toThrow(
         'The wallet account has been disposed.'
       )
     })
   })
 
-  describe('a transport that does not broadcast', () => {
+  describe('a coordinator that does not broadcast', () => {
     it('hands the account nothing on the cluster and no proposal to read', async () => {
-      const transports = []
+      const coordinators = []
       const { accounts } = await deployMultisig({ members: 2, threshold: 2 })
       const { accounts: [pending] } = await createWallet({
         members: 1,
         config: {
           multisigPdaOrCreateKey: await accounts[0].getAddress(),
           createKeySecret: undefined,
-          transport: () => {
-            const transport = new UnbroadcastTransport()
+          coordinator: () => {
+            const coordinator = new UnbroadcastCoordinator()
 
-            transports.push(transport)
+            coordinators.push(coordinator)
 
-            return transport
+            return coordinator
           }
         }
       })
@@ -494,16 +494,16 @@ describe('transports', () => {
 
       const proposal = await pending.propose({ to: recipient, value: TRANSFER_AMOUNT })
 
-      // The account reports what the transport told it, and nothing reached the cluster: the
-      // account builds instructions, the transport alone decides when they land.
+      // The account reports what the coordinator told it, and nothing reached the cluster: the
+      // account builds instructions, the coordinator alone decides when they land.
       expect(proposal.hash).toBe(UNBROADCAST_HASH)
       expect(await pending.getProposal(proposal.proposalId)).toBeNull()
       expect(await pending.getNonce()).toBe(0n)
 
-      // Unsigned, with no fee payer and no lifetime: everything past this is the transport's.
-      expect(transports[0].sent).toHaveLength(1)
-      expect(Object.keys(transports[0].sent[0])).toEqual(['instructions'])
-      expect(transports[0].sent[0].instructions).toHaveLength(2)
+      // Unsigned, with no fee payer and no lifetime: everything past this is the coordinator's.
+      expect(coordinators[0].sent).toHaveLength(1)
+      expect(Object.keys(coordinators[0].sent[0])).toEqual(['instructions'])
+      expect(coordinators[0].sent[0].instructions).toHaveLength(2)
     })
   })
 })

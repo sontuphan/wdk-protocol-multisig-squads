@@ -14,8 +14,8 @@
 
 'use strict'
 
-/** @typedef {import('./squads-transaction-transport-interface.js').SquadsTransactionTransportFactory} SquadsTransactionTransportFactory */
+/** @typedef {import('./multisig-coordinator-interface.js').MultisigCoordinatorFactory} MultisigCoordinatorFactory */
 
-export { ISquadsTransactionTransport } from './squads-transaction-transport-interface.js'
+export { IMultisigCoordinator } from './multisig-coordinator-interface.js'
 
-export { default as LocalSignerTransport } from './local-signer.js'
+export { default as LocalSignerCoordinator } from './local-signer.js'

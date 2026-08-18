@@ -1,13 +1,13 @@
 /**
- * The transport a Squads account uses when the configuration names none: the member signs with
+ * The coordinator a Squads account uses when the configuration names none: the member signs with
  * the key derived from its own seed and broadcasts immediately. This is the only place in the
  * package that reaches a signer account to put a transaction on the cluster.
  */
-export default class LocalSignerTransport implements ISquadsTransactionTransport {
+export default class LocalSignerCoordinator implements IMultisigCoordinator {
     /**
-     * Creates a transport over a local signer account.
+     * Creates a coordinator over a local signer account.
      *
-     * @param {WalletAccountSolana} signerAccount - The member's signer account. It is not owned by the transport, which never erases its key.
+     * @param {WalletAccountSolana} signerAccount - The member's signer account. It is not owned by the coordinator, which never erases its key.
      */
     constructor(signerAccount: import("@tetherto/wdk-wallet-solana").WalletAccountSolana);
     /**
@@ -22,7 +22,7 @@ export default class LocalSignerTransport implements ISquadsTransactionTransport
      *
      * @param {SolanaTransaction} tx - The unsigned transaction.
      * @returns {Promise<TransactionResult>} The transaction's signature and the fee it paid.
-     * @throws {Error} The transport must not have been disposed.
+     * @throws {Error} The coordinator must not have been disposed.
      */
     sendTransaction(tx: import("@tetherto/wdk-wallet-solana").SolanaTransaction): Promise<import("@tetherto/wdk-wallet").TransactionResult>;
     /**
@@ -32,12 +32,12 @@ export default class LocalSignerTransport implements ISquadsTransactionTransport
      */
     dispose(): void;
     /**
-     * Returns the signer account, refusing to work once the transport has been disposed.
+     * Returns the signer account, refusing to work once the coordinator has been disposed.
      *
      * @protected
      * @returns {WalletAccountSolana} The member's signer account.
-     * @throws {Error} The transport must not have been disposed.
+     * @throws {Error} The coordinator must not have been disposed.
      */
     protected _requireSignerAccount(): import("@tetherto/wdk-wallet-solana").WalletAccountSolana;
 }
-import { ISquadsTransactionTransport } from './squads-transaction-transport-interface.js';
+import { IMultisigCoordinator } from './multisig-coordinator-interface.js';

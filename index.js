@@ -40,7 +40,7 @@
 /** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigProposalResult} SolanaMultisigProposalResult */
 /** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigTransactionOptions} SolanaMultisigTransactionOptions */
 /** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigAddOwnerOptions} SolanaMultisigAddOwnerOptions */
-/** @typedef {import('./src/transports/index.js').SquadsTransactionTransportFactory} SquadsTransactionTransportFactory */
+/** @typedef {import('./src/coordinators/index.js').MultisigCoordinatorFactory} MultisigCoordinatorFactory */
 
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsMember} SquadsMember */
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsMultisigAccount} SquadsMultisigAccount */
@@ -64,4 +64,4 @@ export { default as WalletAccountReadOnlyMultisigSolanaSquads, SQUADS_PROGRAM_AD
 
 export { default as WalletAccountMultisigSolanaSquads, PERMISSION } from './src/wallet-account-multisig-solana-squads.js'
 
-export { ISquadsTransactionTransport, LocalSignerTransport } from './src/transports/index.js'
+export { IMultisigCoordinator, LocalSignerCoordinator } from './src/coordinators/index.js'

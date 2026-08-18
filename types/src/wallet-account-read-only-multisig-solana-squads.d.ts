@@ -40,7 +40,7 @@
 /** @typedef {import('@tetherto/wdk-wallet').TransactionReceipt} TransactionReceipt */
 /** @typedef {import('@tetherto/wdk-wallet').Finality} Finality */
 /** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
-/** @typedef {import('./transports/index.js').SquadsTransactionTransportFactory} SquadsTransactionTransportFactory */
+/** @typedef {import('./coordinators/index.js').MultisigCoordinatorFactory} MultisigCoordinatorFactory */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
 /**
@@ -63,7 +63,7 @@
  * charges, and the fee ceilings above which it refuses to submit.
  *
  * @typedef {Object} SolanaMultisigSquadsSigningConfig
- * @property {SquadsTransactionTransportFactory} [transport] - Builds the transport the account signs and broadcasts through, from the member's own signer account (default: a `LocalSignerTransport` over that account, which signs and broadcasts at once).
+ * @property {MultisigCoordinatorFactory} [coordinator] - Builds the coordinator the account signs and broadcasts through, from the member's own signer account (default: a `LocalSignerCoordinator` over that account, which signs and broadcasts at once).
  * @property {string} [rentPayer] - The account charged for the rent the multisig, transaction and proposal accounts lock up (default: the signer). It must sign the transaction by other means, which in practice makes it the fee payer of a sponsoring wallet.
  * @property {number | bigint} [createMaxFee] - The maximum fee amount for the create/deploy operation.
  * @property {number | bigint} [transferMaxFee] - The maximum fee amount for transfers.
@@ -677,7 +677,7 @@ export type TransactionResult = import("@tetherto/wdk-wallet").TransactionResult
 export type TransactionReceipt = import("@tetherto/wdk-wallet").TransactionReceipt;
 export type Finality = import("@tetherto/wdk-wallet").Finality;
 export type TransferOptions = import("@tetherto/wdk-wallet").TransferOptions;
-export type SquadsTransactionTransportFactory = import("./transports/index.js").SquadsTransactionTransportFactory;
+export type MultisigCoordinatorFactory = import("./coordinators/index.js").MultisigCoordinatorFactory;
 export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
 export type SolanaTransactionReceipt = import("@tetherto/wdk-wallet-solana").SolanaTransactionReceipt;
 /**
@@ -719,9 +719,9 @@ export type SolanaMultisigSquadsReadOnlyConfig = {
  */
 export type SolanaMultisigSquadsSigningConfig = {
     /**
-     * - Builds the transport the account signs and broadcasts through, from the member's own signer account (default: a `LocalSignerTransport` over that account, which signs and broadcasts at once).
+     * - Builds the coordinator the account signs and broadcasts through, from the member's own signer account (default: a `LocalSignerCoordinator` over that account, which signs and broadcasts at once).
      */
-    transport?: SquadsTransactionTransportFactory;
+    coordinator?: MultisigCoordinatorFactory;
     /**
      * - The account charged for the rent the multisig, transaction and proposal accounts lock up (default: the signer). It must sign the transaction by other means, which in practice makes it the fee payer of a sponsoring wallet.
      */

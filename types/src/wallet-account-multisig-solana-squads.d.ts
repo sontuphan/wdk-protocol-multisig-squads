@@ -1,4 +1,4 @@
-/** @typedef {import('./transports/index.js').ISquadsTransactionTransport} ISquadsTransactionTransport */
+/** @typedef {import('./coordinators/index.js').IMultisigCoordinator} IMultisigCoordinator */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigAutoExecuteResult} MultisigAutoExecuteResult */
@@ -74,13 +74,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     protected _signerAccount: WalletAccountSolana;
     /**
-     * The transport every operation is signed and broadcast through. The account builds the
+     * The coordinator every operation is signed and broadcast through. The account builds the
      * instructions; nothing below this field knows how they reach the cluster.
      *
      * @protected
-     * @type {ISquadsTransactionTransport}
+     * @type {IMultisigCoordinator}
      */
-    protected _transport: ISquadsTransactionTransport;
+    protected _coordinator: IMultisigCoordinator;
     /**
      * The derivation path's index of this account.
      *
@@ -274,7 +274,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /** @private */
     private _requireViableMembers;
 }
-export type ISquadsTransactionTransport = import("./transports/index.js").ISquadsTransactionTransport;
+export type IMultisigCoordinator = import("./coordinators/index.js").IMultisigCoordinator;
 export type IWalletAccountMultisig = import("@tetherto/wdk-wallet/multisig").IWalletAccountMultisig;
 export type IMultisigOwnerManagement = import("@tetherto/wdk-wallet/multisig").IMultisigOwnerManagement;
 export type MultisigAutoExecuteResult = import("@tetherto/wdk-wallet/multisig").MultisigAutoExecuteResult;

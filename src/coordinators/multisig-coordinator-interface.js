@@ -21,20 +21,20 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
 /** @typedef {import('@tetherto/wdk-wallet-solana').WalletAccountSolana} WalletAccountSolana */
 
 /**
- * Builds the transport an account votes and proposes through, from the member's own signer
+ * Builds the coordinator an account votes and proposes through, from the member's own signer
  * account. One configuration is shared by every account a manager derives, and each of those
- * signs with a different key, so the configuration carries this rather than a transport instance.
+ * signs with a different key, so the configuration carries this rather than a coordinator instance.
  *
- * @typedef {(signerAccount: WalletAccountSolana) => ISquadsTransactionTransport} SquadsTransactionTransportFactory
+ * @typedef {(signerAccount: WalletAccountSolana) => IMultisigCoordinator} MultisigCoordinatorFactory
  */
 
 /**
- * Transport for getting a Squads transaction signed and broadcast.
+ * Coordinator for getting a Squads transaction signed and broadcast.
  *
- * The account builds unsigned Solana instructions and hands them here; the transport owns
+ * The account builds unsigned Solana instructions and hands them here; the coordinator owns
  * everything from that point: which signatures the transaction needs, how they are collected, and
- * when it reaches the cluster. The default, `LocalSignerTransport`, signs with the local member
- * key and broadcasts at once, which is what the package did before transports existed. A
+ * when it reaches the cluster. The default, `LocalSignerCoordinator`, signs with the local member
+ * key and broadcasts at once, which is what the package did before coordinators existed. A
  * peer-to-peer implementation would instead distribute the transaction to the other members and
  * broadcast once enough of them have signed, resolving late rather than returning early: the
  * account's public results carry a non-nullable `hash`.
@@ -46,16 +46,16 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
  * votes as the member it derived, and `getSignerAddress()` answers from that account, so the two
  * can never disagree.
  *
- * A transport disposes what it created. The signer account it is given is owned by the caller,
+ * A coordinator disposes what it created. The signer account it is given is owned by the caller,
  * which zeroes that key itself.
  *
  * @interface
  */
-export class ISquadsTransactionTransport {
+export class IMultisigCoordinator {
   /**
    * Signs a transaction and broadcasts it, resolving once it has reached the cluster.
    *
-   * @param {SolanaTransaction} tx - The unsigned transaction. Its instructions may carry embedded signers, which the transport must honour.
+   * @param {SolanaTransaction} tx - The unsigned transaction. Its instructions may carry embedded signers, which the coordinator must honour.
    * @returns {Promise<TransactionResult>} The transaction's signature and the fee it paid.
    * @throws {NotImplementedError} An implementation must provide this method.
    */
@@ -64,7 +64,7 @@ export class ISquadsTransactionTransport {
   }
 
   /**
-   * Releases the transport's resources, erasing any key material it created.
+   * Releases the coordinator's resources, erasing any key material it created.
    *
    * @returns {void}
    * @throws {NotImplementedError} An implementation must provide this method.

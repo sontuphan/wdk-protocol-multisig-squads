@@ -62,7 +62,7 @@ account.dispose()
 - **Transfers**: Propose native SOL and SPL token transfers through the multisig vault
 - **Member Management**: Add, remove, or swap members and change the approval threshold
 - **Read-Only Support**: Inspect multisig state without a signing key
-- **Pluggable Transport**: Swap how transactions are signed and broadcast without touching the operations
+- **Pluggable Coordinator**: Swap how transactions are signed and broadcast without touching the operations
 
 > [!NOTE]
 > Multisig message signing is not part of this module. It is an optional addon of the shared
@@ -111,17 +111,17 @@ approved and left stuck.
 > the result's `status`, which is `'executed'` when it ran and `'pending'` when it did not.
 > `status: 'executed'` comes with a `transaction` holding the send's own hash and fee.
 
-## Transactions and Transports
+## Transactions and Coordinators
 
 Every write this package makes goes through one seam. The account builds the Squads instructions,
-and a **transport** signs them and puts them on the cluster. Omit the option and the account signs
+and a **coordinator** signs them and puts them on the cluster. Omit the option and the account signs
 with the member key derived from your seed and broadcasts at once, which is the behaviour the
 package has always had.
 
 ```javascript
-import { ISquadsTransactionTransport } from '@tetherto/wdk-protocol-multisig-squads'
+import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
 
-class MyTransport extends ISquadsTransactionTransport {
+class MyCoordinator extends IMultisigCoordinator {
   constructor (signerAccount) {
     super()
     this._signerAccount = signerAccount
@@ -141,18 +141,18 @@ class MyTransport extends ISquadsTransactionTransport {
 const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
   provider: 'https://api.devnet.solana.com',
   multisigPdaOrCreateKey: '<existing multisig address>',
-  transport: (signerAccount) => new MyTransport(signerAccount)
+  coordinator: (signerAccount) => new MyCoordinator(signerAccount)
 })
 ```
 
-`transport` takes a factory rather than an instance because one configuration is shared by every
-account the manager derives, and each of those signs with a different key. A transport moves
+`coordinator` takes a factory rather than an instance because one configuration is shared by every
+account the manager derives, and each of those signs with a different key. A coordinator moves
 transactions and does not own an identity: the account always votes as the member it derived.
 
 > [!NOTE]
-> Squads keeps its votes on chain, one transaction per vote, so a transport here is about reaching
+> Squads keeps its votes on chain, one transaction per vote, so a coordinator here is about reaching
 > the cluster and nothing else: it stores no proposals and shares no messages. Proposals and votes
-> are read from the chain through the read-only account. A peer-to-peer transport that collects
+> are read from the chain through the read-only account. A peer-to-peer coordinator that collects
 > member signatures before broadcasting fits this interface and is not part of this package yet.
 
 ## Fees, rent, and who pays
@@ -160,7 +160,7 @@ transactions and does not own an identity: the account always votes as the membe
 Three payers, and one call can involve all three:
 
 - **The fee payer** signs the transaction and pays the Solana network fee. It is whatever the
-  transport provides: the member itself by default, or a paymaster when the transport is built
+  coordinator provides: the member itself by default, or a paymaster when the coordinator is built
   over a sponsoring wallet such as `@tetherto/wdk-wallet-solana-gasless`.
 - **The rent payer** funds the accounts Squads creates. Set it with the `rentPayer` config
   option; it defaults to the signer. It has to sign the transaction by other means, which in
