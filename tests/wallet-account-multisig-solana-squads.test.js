@@ -808,66 +808,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     })
   })
 
-  describe('validateSignerIsOwner', () => {
-    it('resolves when the signer is a member', async () => {
-      stubSolanaRpc({ getAccountInfo: () => serveValue(multisigAccountValue([{ address: TEST_SIGNER }])) })
-
-      await expect(account.validateSignerIsOwner()).resolves.toBeUndefined()
-    })
-
-    it('resolves for a member found alongside others', async () => {
-      stubSolanaRpc({
-        getAccountInfo: () => serveValue(multisigAccountValue([
-          { address: OTHER_MEMBER },
-          { address: TEST_SIGNER }
-        ]))
-      })
-
-      await expect(account.validateSignerIsOwner()).resolves.toBeUndefined()
-    })
-
-    it('throws naming both the signer and the multisig when not a member', async () => {
-      stubSolanaRpc({ getAccountInfo: () => serveValue(multisigAccountValue([{ address: OTHER_MEMBER }])) })
-
-      const error = await account.validateSignerIsOwner().catch((e) => e)
-
-      expect(error.message).toContain(TEST_SIGNER)
-      expect(error.message).toContain(TEST_MULTISIG_PDA)
-    })
-
-    it('resolves for a member holding no permissions', async () => {
-      // Mask 0 is a member who can do nothing. This method checks membership only, so it
-      // passes — delete this test if it ever becomes permission-aware.
-      stubSolanaRpc({ getAccountInfo: () => serveValue(multisigAccountValue([{ address: TEST_SIGNER, mask: 0 }])) })
-
-      await expect(account.validateSignerIsOwner()).resolves.toBeUndefined()
-    })
-
-    it('throws when the multisig does not exist', async () => {
-      stubSolanaRpc({ getAccountInfo: () => serveValue(null) })
-
-      await expect(account.validateSignerIsOwner()).rejects.toThrow(/does not exist/)
-    })
-
-    it('reads the multisig once', async () => {
-      const rpc = stubSolanaRpc({
-        getAccountInfo: () => serveValue(multisigAccountValue([{ address: TEST_SIGNER }]))
-      })
-
-      await account.validateSignerIsOwner()
-
-      expect(rpcRequests(rpc, 'getAccountInfo')).toEqual([[TEST_MULTISIG_PDA, { commitment: 'confirmed', encoding: 'base64' }]])
-    })
-
-    it('propagates RPC failures', async () => {
-      stubSolanaRpc({
-        getAccountInfo: () => { throw new Error('503 Service Unavailable') }
-      })
-
-      await expect(account.validateSignerIsOwner()).rejects.toThrow('503 Service Unavailable')
-    })
-  })
-
   it('still signs with the member key', async () => {
     // sign() is the one message operation that works — one member's consent. Ed25519 is
     // deterministic, so TEST_SIGNER signing 'hello' is this exact signature.

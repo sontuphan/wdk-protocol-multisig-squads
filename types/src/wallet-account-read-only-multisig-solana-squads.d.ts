@@ -275,20 +275,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     isDeployed(): Promise<boolean>;
     /**
-     * Returns the addresses of the multisig's members, in on-chain order.
-     *
-     * @returns {Promise<string[]>} The member addresses.
-     * @throws {Error} The multisig account must exist, and the RPC request must succeed.
-     */
-    getOwners(): Promise<string[]>;
-    /**
-     * Returns the number of approvals a proposal needs before it can be executed.
-     *
-     * @returns {Promise<number>} The threshold.
-     * @throws {Error} The multisig account must exist, and the RPC request must succeed.
-     */
-    getThreshold(): Promise<number>;
-    /**
      * Returns aggregated information about the multisig.
      *
      * @returns {Promise<SolanaMultisigInfo>} The multisig info.

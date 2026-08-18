@@ -501,42 +501,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the addresses of the multisig's members, in on-chain order.
-   *
-   * @returns {Promise<string[]>} The member addresses.
-   * @throws {Error} The multisig account must exist, and the RPC request must succeed.
-   */
-  async getOwners () {
-    const { address: multisigPda, owners, isCreated } = await this.getMultisigInfo()
-
-    if (!isCreated) {
-      throw new Error(
-        `The multisig account ${multisigPda} does not exist. Deploy it before reading its members.`
-      )
-    }
-
-    return owners
-  }
-
-  /**
-   * Returns the number of approvals a proposal needs before it can be executed.
-   *
-   * @returns {Promise<number>} The threshold.
-   * @throws {Error} The multisig account must exist, and the RPC request must succeed.
-   */
-  async getThreshold () {
-    const { address: multisigPda, threshold, isCreated } = await this.getMultisigInfo()
-
-    if (!isCreated) {
-      throw new Error(
-        `The multisig account ${multisigPda} does not exist. Deploy it before reading its threshold.`
-      )
-    }
-
-    return threshold
-  }
-
-  /**
    * Returns aggregated information about the multisig.
    *
    * @returns {Promise<SolanaMultisigInfo>} The multisig info.

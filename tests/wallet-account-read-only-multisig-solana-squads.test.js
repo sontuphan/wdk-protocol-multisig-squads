@@ -691,108 +691,6 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
     })
   })
 
-  describe('getOwners', () => {
-    it('returns the member addresses', async () => {
-      const { account } = mockAccount(multisigAccountValue({
-        members: [{ address: MEMBER_A }, { address: MEMBER_B }]
-      }))
-
-      expect(await account.getOwners()).toEqual([MEMBER_A, MEMBER_B])
-    })
-
-    it('returns the same members when rentCollector is set', async () => {
-      // `rentCollector` shifts every following field by 32 bytes, so a decoder
-      // that ignores the Option tag reads garbage for exactly this case.
-      const { account } = mockAccount(multisigAccountValue({
-        members: [{ address: MEMBER_A }, { address: MEMBER_B }],
-        rentCollector: true
-      }))
-
-      expect(await account.getOwners()).toEqual([MEMBER_A, MEMBER_B])
-    })
-
-    it('includes members that cannot vote', async () => {
-      // Mask 5 is proposer + executor with no voter bit. Filtering such members
-      // out would make them unreachable from removeOwner().
-      const { account } = mockAccount(multisigAccountValue({
-        members: [
-          { address: MEMBER_A, mask: 5 },
-          { address: MEMBER_B, mask: 2 },
-          { address: MEMBER_C, mask: 7 }
-        ]
-      }))
-
-      expect(await account.getOwners()).toEqual([MEMBER_A, MEMBER_B, MEMBER_C])
-    })
-
-    it('ignores the space Squads pre-allocates for future members', async () => {
-      // Room for 9 more members, as seen on mainnet. Reading to the end of the
-      // data would emit 9 phantom members with all-zero addresses.
-      const { account } = mockAccount(multisigAccountValue({
-        members: [{ address: MEMBER_A }],
-        slack: 9 * 33
-      }))
-
-      expect(await account.getOwners()).toEqual([MEMBER_A])
-    })
-
-    it('preserves on-chain order rather than base58 order', async () => {
-      const { account } = mockAccount(multisigAccountValue({
-        members: [{ address: MEMBER_A }, { address: MEMBER_B }]
-      }))
-
-      const owners = await account.getOwners()
-
-      expect(owners).toEqual([MEMBER_A, MEMBER_B])
-      expect(owners).not.toEqual([...owners].sort())
-    })
-
-    it('delegates to getMultisigInfo with a single account read', async () => {
-      const { account, rpc } = mockAccount(multisigAccountValue({
-        members: [{ address: MEMBER_A }]
-      }))
-
-      await account.getOwners()
-
-      expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(1)
-      expect(rpcRequests(rpc, 'getAccountInfo')[0]).toEqual([
-        TEST_MULTISIG_PDA,
-        { commitment: 'confirmed', encoding: 'base64' }
-      ])
-    })
-
-    it('throws when the multisig does not exist', async () => {
-      const { account } = mockAccount(null)
-
-      // Returning [] would be a valid-looking answer that means something false.
-      await expect(account.getOwners()).rejects.toThrow(/does not exist/)
-    })
-
-    it('throws rather than decoding another Squads account type', async () => {
-      const { account } = mockAccount(multisigAccountValue({
-        members: [{ address: MEMBER_A }],
-        discriminator: PROGRAM_CONFIG_DISCRIMINATOR
-      }))
-
-      await expect(account.getOwners()).rejects.toThrow(/not a Squads multisig/)
-    })
-
-    it('throws when the account is owned by another program', async () => {
-      const { account } = mockAccount({
-        ...multisigAccountValue({ members: [{ address: MEMBER_A }] }),
-        owner: SYSTEM_PROGRAM_ADDRESS
-      })
-
-      await expect(account.getOwners()).rejects.toThrow(/not a Squads multisig/)
-    })
-
-    it('propagates RPC failures', async () => {
-      const account = mockFailingAccount(new Error('503 Service Unavailable'))
-
-      await expect(account.getOwners()).rejects.toThrow('503 Service Unavailable')
-    })
-  })
-
   describe('getMultisigInfo', () => {
     it('reads the threshold as a u16, not into the time lock beside it', async () => {
       // `time_lock` is the u32 immediately after the u16 threshold, so a wrong width reads
@@ -804,6 +702,27 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       }))
 
       expect((await account.getMultisigInfo()).threshold).toBe(2)
+    })
+
+    it('reads the full u16 range of the threshold', async () => {
+      // Catches a getUint8, or a signed read that would report -1.
+      const { account } = mockAccount(multisigAccountValue({
+        members: [{ address: MEMBER_A }],
+        threshold: 65535
+      }))
+
+      expect((await account.getMultisigInfo()).threshold).toBe(65535)
+    })
+
+    it('preserves the on-chain order of owners rather than base58 order', async () => {
+      const { account } = mockAccount(multisigAccountValue({
+        members: [{ address: MEMBER_A }, { address: MEMBER_B }]
+      }))
+
+      const { owners } = await account.getMultisigInfo()
+
+      expect(owners).toEqual([MEMBER_A, MEMBER_B])
+      expect(owners).not.toEqual([...owners].sort())
     })
 
     it('reads at the confirmed commitment when the config names none', async () => {
@@ -957,109 +876,6 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       )
 
       expect((await account.getMultisigInfo()).address).toBe(TEST_DERIVED_PDA)
-    })
-  })
-
-  describe('getThreshold', () => {
-    it('returns the threshold', async () => {
-      const { account } = mockAccount(multisigAccountValue({
-        members: [{ address: MEMBER_A }, { address: MEMBER_B }],
-        threshold: 2
-      }))
-
-      expect(await account.getThreshold()).toBe(2)
-    })
-
-    it('returns a threshold of 1', async () => {
-      const { account } = mockAccount(multisigAccountValue({
-        members: [{ address: MEMBER_A }],
-        threshold: 1
-      }))
-
-      expect(await account.getThreshold()).toBe(1)
-    })
-
-    it('reads the full u16 range', async () => {
-      // Catches a getUint8, or a signed read that would report -1.
-      const { account } = mockAccount(multisigAccountValue({
-        members: [{ address: MEMBER_A }],
-        threshold: 65535
-      }))
-
-      expect(await account.getThreshold()).toBe(65535)
-    })
-
-    it('is unaffected by rentCollector being set', async () => {
-      // `threshold` sits at offset 72, before the optional `rentCollector` at 94,
-      // so its offset is fixed. This fails if the method ever borrows
-      // getOwners()'s offset walk.
-      const { account } = mockAccount(multisigAccountValue({
-        members: [{ address: MEMBER_A }, { address: MEMBER_B }],
-        threshold: 2,
-        rentCollector: true
-      }))
-
-      expect(await account.getThreshold()).toBe(2)
-    })
-
-    it('reports the raw threshold even when some members cannot vote', async () => {
-      // Masks 6 and 5: only the first holds the voter bit, so this is a 1-of-1
-      // despite having 2 members. The threshold is still 1.
-      const { account } = mockAccount(multisigAccountValue({
-        members: [
-          { address: MEMBER_A, mask: 6 },
-          { address: MEMBER_B, mask: 5 }
-        ],
-        threshold: 1
-      }))
-
-      expect(await account.getThreshold()).toBe(1)
-    })
-
-    it('delegates to getMultisigInfo with a single account read', async () => {
-      const { account, rpc } = mockAccount(multisigAccountValue({
-        members: [{ address: MEMBER_A }],
-        threshold: 1
-      }))
-
-      await account.getThreshold()
-
-      expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(1)
-      expect(rpcRequests(rpc, 'getAccountInfo')[0]).toEqual([
-        TEST_MULTISIG_PDA,
-        { commitment: 'confirmed', encoding: 'base64' }
-      ])
-    })
-
-    it('throws when the multisig does not exist', async () => {
-      const { account } = mockAccount(null)
-
-      // Returning 0 would read as "no approvals required".
-      await expect(account.getThreshold()).rejects.toThrow(/does not exist/)
-    })
-
-    it('throws rather than decoding another Squads account type', async () => {
-      const { account } = mockAccount(multisigAccountValue({
-        members: [{ address: MEMBER_A }],
-        discriminator: PROGRAM_CONFIG_DISCRIMINATOR
-      }))
-
-      await expect(account.getThreshold()).rejects.toThrow(/not a Squads multisig/)
-    })
-
-    it('throws when the account is owned by another program', async () => {
-      const { account } = mockAccount({
-        ...multisigAccountValue({ members: [{ address: MEMBER_A }] }),
-        owner: SYSTEM_PROGRAM_ADDRESS
-      })
-
-      await expect(account.getThreshold()).rejects.toThrow(/not a Squads multisig/)
-    })
-
-    it('propagates RPC failures', async () => {
-      const account = mockFailingAccount(new Error('503 Service Unavailable'))
-
-      await expect(account.getThreshold()).rejects.toThrow('503 Service Unavailable')
     })
   })
 

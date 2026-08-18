@@ -120,13 +120,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     sendTransaction(tx: SolanaTransaction): Promise<TransactionResult>;
     /**
-     * Validates that the signer is a member of the multisig.
-     *
-     * @returns {Promise<void>} Resolves if the signer is a member, otherwise throws.
-     * @throws {Error} The signer must be a member of the multisig.
-     */
-    validateSignerIsOwner(): Promise<void>;
-    /**
      * Creates the multisig account on-chain, deriving its address from the configured
      * `createKeySecret`.
      *
