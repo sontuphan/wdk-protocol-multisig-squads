@@ -773,6 +773,19 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 
+    it('accepts a quote exactly equal to createMaxFee', async () => {
+      // The cap is a maximum, so the boundary itself is allowed.
+      const { account: quoting } = await deployingAccount()
+      const { fee } = await quoting.quoteDeploy()
+
+      const { account, sendTransaction } = await deployingAccount({
+        config: { createMaxFee: fee }
+      })
+
+      expect(await account.deploy()).toEqual({ hash: DUMMY_DEPLOY_HASH })
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+    })
+
     it('throws when a configured address does not match the createKeySecret', async () => {
       const { account } = await deployingAccount({
         config: { multisigPdaOrCreateKey: TEST_MULTISIG_PDA }
@@ -2844,6 +2857,20 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.transfer(OPTIONS)).rejects.toThrow(/maximum fee/)
       expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('accepts a quote exactly equal to transferMaxFee', async () => {
+      // The cap is a maximum, so the boundary itself is allowed.
+      const { account: quoting } = await transferringAccount()
+      const { fee } = await quoting.quoteTransfer(OPTIONS)
+
+      const { account, sendTransaction } = await transferringAccount({
+        config: { transferMaxFee: fee }
+      })
+
+      await account.transfer(OPTIONS)
+
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
     })
 
     it('throws on a malformed mint before any RPC call', async () => {

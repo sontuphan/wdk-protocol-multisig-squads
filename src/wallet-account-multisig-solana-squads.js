@@ -263,7 +263,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const fee = this._quoteDeployFrom(creationFee, rent)
     const { createMaxFee } = this._config
 
-    if (createMaxFee !== undefined && fee >= BigInt(createMaxFee)) {
+    if (createMaxFee !== undefined && fee > BigInt(createMaxFee)) {
       throw new Error('Exceeded maximum fee cost for the deploy operation.')
     }
 
@@ -341,7 +341,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     )
     const { transferMaxFee } = this._config
 
-    if (transferMaxFee !== undefined && fee >= BigInt(transferMaxFee)) {
+    if (transferMaxFee !== undefined && fee > BigInt(transferMaxFee)) {
       throw new Error('Exceeded maximum fee cost for the transfer operation.')
     }
 
