@@ -403,7 +403,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       instructions.push(execution)
     }
 
-    const { hash, fee } = await this._signerAccount.sendTransaction({ instructions })
+    const { hash, fee } = await this._transport.sendTransaction({ instructions })
 
     return {
       proposalId: index.toString(),
