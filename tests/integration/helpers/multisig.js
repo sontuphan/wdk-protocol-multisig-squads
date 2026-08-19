@@ -63,17 +63,25 @@ export async function createWallet (options = {}) {
 }
 
 /**
- * @param {{ members?: number, threshold?: number, fundVault?: bigint }} [options]
+ * @param {{ members?: number, threshold?: number, fundVault?: bigint, fundSigners?: bigint, config?: object }} [options]
  * @returns {Promise<{ manager: object, accounts: object[], signers: string[], multisigPda: string, vaultPda: string, rpc: object, deployHash: string }>}
  */
 export async function deployMultisig (options = {}) {
-  const { members = 2, threshold = members, fundVault = 0n } = options
+  const {
+    members = 2,
+    threshold = members,
+    fundVault = 0n,
+    fundSigners = SIGNER_FUNDING,
+    config = {}
+  } = options
 
   const rpc = createSolanaRpc(TEST_RPC_URL)
-  const wallet = await createWallet({ members })
+  const wallet = await createWallet({ members, config })
 
-  for (const signer of wallet.signers) {
-    await airdrop(rpc, signer, SIGNER_FUNDING)
+  if (fundSigners > 0n) {
+    for (const signer of wallet.signers) {
+      await airdrop(rpc, signer, fundSigners)
+    }
   }
 
   const [deployer] = wallet.accounts

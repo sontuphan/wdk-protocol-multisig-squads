@@ -36,6 +36,10 @@ import {
 
 import { getProgramDerivedAddressSync } from './helpers/program-derived-address.js'
 
+import LocalSignerCoordinator from './coordinators/local-signer.js'
+
+/** @typedef {import('./coordinators/index.js').IMultisigCoordinator} IMultisigCoordinator */
+
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigAutoExecuteResult} MultisigAutoExecuteResult */
@@ -123,6 +127,17 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @type {WalletAccountSolana}
      */
     this._signerAccount = signerAccount
+
+    /**
+     * The coordinator every operation is signed and broadcast through. The account builds the
+     * instructions; nothing below this field knows how they reach the cluster.
+     *
+     * @protected
+     * @type {IMultisigCoordinator}
+     */
+    this._coordinator = config.coordinator
+      ? config.coordinator(signerAccount)
+      : new LocalSignerCoordinator(signerAccount)
   }
 
   /**
@@ -231,7 +246,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       )
     }
 
-    const members = owners ?? [await this.getSignerAddress()]
+    const signerAddress = await this.getSignerAddress()
+    const members = owners ?? [signerAddress]
 
     if (!Array.isArray(members) || !members.length) {
       throw new Error('At least one owner is required to create a multisig.')
@@ -278,7 +294,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
           role: ACCOUNT_ROLE.readonlySigner,
           signer: createKeySigner
         },
-        this._getRentPayerAccount(this._signerAddress),
+        this._getRentPayerAccount(signerAddress),
         { address: address(PROGRAM_ADDRESS.system), role: ACCOUNT_ROLE.readonly }
       ],
       data: INSTRUCTION.multisigCreateV2.encode({
@@ -294,7 +310,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       })
     }
 
-    const { hash } = await this._signerAccount.sendTransaction({ instructions: [instruction] })
+    const { hash } = await this._coordinator.sendTransaction({ instructions: [instruction] })
 
     return { hash }
   }
@@ -387,7 +403,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       instructions.push(execution)
     }
 
-    const { hash, fee } = await this._signerAccount.sendTransaction({ instructions })
+    const { hash, fee } = await this._coordinator.sendTransaction({ instructions })
 
     return {
       proposalId: index.toString(),
@@ -426,7 +442,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       memo
     )
 
-    const { hash, fee } = await this._signerAccount.sendTransaction({
+    const { hash, fee } = await this._coordinator.sendTransaction({
       instructions: [instruction]
     })
 
@@ -494,7 +510,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       ? await this._buildConfigExecuteInstruction(multisig, proposal, transaction, signerAddress, index)
       : await this._buildVaultExecuteInstruction(multisig, proposal, transaction, signerAddress)
 
-    return this._signerAccount.sendTransaction({ instructions: [instruction] })
+    return this._coordinator.sendTransaction({ instructions: [instruction] })
   }
 
   /**
@@ -668,7 +684,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const multisigPdaOrCreateKey = await this.getAddress()
     const { createKeySecret, ...config } = this._config
 
-    return new WalletAccountReadOnlyMultisigSolanaSquads(this._signerAddress, {
+    return new WalletAccountReadOnlyMultisigSolanaSquads(await this.getSignerAddress(), {
       ...config,
       multisigPdaOrCreateKey
     })
@@ -680,6 +696,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @returns {void} Nothing; the account cannot sign once disposed.
    */
   dispose () {
+    this._coordinator.dispose()
     this._signerAccount.dispose()
   }
 
@@ -783,7 +800,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     instructions.push(...extra)
 
     const rent = options.rent ?? await this._quoteProposalRent(transactionSize, members.length)
-    const { hash, fee } = await this._signerAccount.sendTransaction({ instructions })
+    const { hash, fee } = await this._coordinator.sendTransaction({ instructions })
     const executed = extra.length > 0
 
     const autoExecuteResult = executed

@@ -62,6 +62,7 @@ account.dispose()
 - **Transfers**: Propose native SOL and SPL token transfers through the multisig vault
 - **Member Management**: Add, remove, or swap members and change the approval threshold
 - **Read-Only Support**: Inspect multisig state without a signing key
+- **Pluggable Coordinator**: Swap how transactions are signed and broadcast without touching the operations
 
 > [!NOTE]
 > Multisig message signing is not part of this module. It is an optional addon of the shared
@@ -110,13 +111,57 @@ approved and left stuck.
 > the result's `status`, which is `'executed'` when it ran and `'pending'` when it did not.
 > `status: 'executed'` comes with a `transaction` holding the send's own hash and fee.
 
+## Transactions and Coordinators
+
+Every write this package makes goes through one seam. The account builds the Squads instructions,
+and a **coordinator** signs them and puts them on the cluster. Omit the option and the account signs
+with the member key derived from your seed and broadcasts at once, which is the behaviour the
+package has always had.
+
+```javascript
+import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
+
+class MyCoordinator extends IMultisigCoordinator {
+  constructor (signerAccount) {
+    super()
+    this._signerAccount = signerAccount
+  }
+
+  // Sign `tx.instructions` however you like, then broadcast. Resolve once it has landed.
+  async sendTransaction (tx) {
+    return this._signerAccount.sendTransaction(tx)
+  }
+
+  // Erase whatever key material you created. The signer account above belongs to the caller.
+  dispose () {
+    this._signerAccount = null
+  }
+}
+
+const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
+  provider: 'https://api.devnet.solana.com',
+  multisigPdaOrCreateKey: '<existing multisig address>',
+  coordinator: (signerAccount) => new MyCoordinator(signerAccount)
+})
+```
+
+`coordinator` takes a factory rather than an instance because one configuration is shared by every
+account the manager derives, and each of those signs with a different key. A coordinator moves
+transactions and does not own an identity: the account always votes as the member it derived.
+
+> [!NOTE]
+> Squads keeps its votes on chain, one transaction per vote, so a coordinator here is about reaching
+> the cluster and nothing else: it stores no proposals and shares no messages. Proposals and votes
+> are read from the chain through the read-only account. A peer-to-peer coordinator that collects
+> member signatures before broadcasting fits this interface and is not part of this package yet.
+
 ## Fees, rent, and who pays
 
 Three payers, and one call can involve all three:
 
 - **The fee payer** signs the transaction and pays the Solana network fee. It is whatever the
-  signer account provides: the member itself with `@tetherto/wdk-wallet-solana`, the paymaster
-  with `@tetherto/wdk-wallet-solana-gasless`.
+  coordinator provides: the member itself by default, or a paymaster when the coordinator is built
+  over a sponsoring wallet such as `@tetherto/wdk-wallet-solana-gasless`.
 - **The rent payer** funds the accounts Squads creates. Set it with the `rentPayer` config
   option; it defaults to the signer. It has to sign the transaction by other means, which in
   practice makes it the fee payer of a sponsoring wallet.
@@ -135,6 +180,13 @@ The `fee` a propose-family call reports is the network fee plus that rent, the s
 `quotePropose` and `quoteTransfer` use, so a quote and the call it quotes agree. `deploy` sets
 no rent collector, so rent stays locked for the life of the accounts rather than being
 reclaimable on close.
+
+> [!WARNING]
+> That sum holds only while the coordinator charges in lamports. A paymaster that bills in a fee
+> token, which is what a coordinator built over `@tetherto/wdk-wallet-solana-gasless` does, has its
+> token charge added to a lamport rent figure, and the reported `fee` is then two currencies in one
+> number: the coordinator's own result carries the token charge, and what remains is the rent, in
+> lamports. Read the two from there rather than from `fee`.
 
 ## Squads Protocol Version
 
