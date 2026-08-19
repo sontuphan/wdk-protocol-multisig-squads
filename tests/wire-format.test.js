@@ -982,7 +982,7 @@ describe('wire format', () => {
 
       const sendTransaction = jest.fn(async () => ({ hash: DUMMY_SIGNATURE, fee: 5000n }))
 
-      account._signerAccount.sendTransaction = sendTransaction
+      account._coordinator.sendTransaction = sendTransaction
 
       await account.propose({ to: RECIPIENT, value })
 
@@ -1020,7 +1020,7 @@ describe('wire format', () => {
 
       const sendTransaction = jest.fn(async () => ({ hash: DUMMY_SIGNATURE, fee: 5000n }))
 
-      account._signerAccount.sendTransaction = sendTransaction
+      account._coordinator.sendTransaction = sendTransaction
 
       await account.propose({ to: RECIPIENT, value: 1n }, { vaultIndex })
 

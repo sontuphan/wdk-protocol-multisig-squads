@@ -359,7 +359,7 @@ async function votingAccount ({
   })
   const sendTransaction = jest.fn(async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }))
 
-  account._signerAccount.sendTransaction = sendTransaction
+  account._coordinator.sendTransaction = sendTransaction
 
   return { account, sendTransaction, rpc }
 }
@@ -398,7 +398,7 @@ async function configuringAccount ({
   })
 
   const sendTransaction = jest.fn(async () => ({ hash: DUMMY_CONFIG_HASH, fee: DUMMY_FEE }))
-  account._signerAccount.sendTransaction = sendTransaction
+  account._coordinator.sendTransaction = sendTransaction
 
   return { account, sendTransaction, rpc }
 }
@@ -653,7 +653,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
 
       const sendTransaction = jest.fn(async () => ({ hash: DUMMY_DEPLOY_HASH, fee: DUMMY_FEE }))
-      account._signerAccount.sendTransaction = sendTransaction
+      account._coordinator.sendTransaction = sendTransaction
 
       return { account, sendTransaction, rpc }
     }
@@ -873,7 +873,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
       const sendTransaction = jest.fn(async () => ({ hash: DUMMY_PROPOSE_HASH, fee: DUMMY_FEE }))
 
-      account._signerAccount.sendTransaction = sendTransaction
+      account._coordinator.sendTransaction = sendTransaction
 
       return { account, sendTransaction, rpc }
     }
@@ -1299,7 +1299,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         })
         const sendTransaction = jest.fn(async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }))
 
-        account._signerAccount.sendTransaction = sendTransaction
+        account._coordinator.sendTransaction = sendTransaction
 
         return { account, sendTransaction, rpc }
       }
@@ -1416,7 +1416,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
           })
         })
 
-        account._signerAccount.sendTransaction = jest.fn(
+        account._coordinator.sendTransaction = jest.fn(
           async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE })
         )
 
@@ -2396,7 +2396,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
       const sendTransaction = jest.fn(async () => ({ hash: DUMMY_EXECUTE_HASH, fee: DUMMY_FEE }))
 
-      account._signerAccount.sendTransaction = sendTransaction
+      account._coordinator.sendTransaction = sendTransaction
 
       return { account, sendTransaction, rpc }
     }
@@ -2779,7 +2779,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
 
       const sendTransaction = jest.fn(async () => ({ hash: DUMMY_TRANSFER_HASH, fee: DUMMY_FEE }))
-      account._signerAccount.sendTransaction = sendTransaction
+      account._coordinator.sendTransaction = sendTransaction
 
       return { account, sendTransaction, rpc }
     }
@@ -2996,6 +2996,26 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
 
       const result = await account.approveProposal(3)
+
+      expect(coordinator.sendTransaction).toHaveBeenCalledTimes(1)
+      expect(sent[0].instructions).toHaveLength(1)
+      expect(result.hash).toBe(DUMMY_VOTE_HASH)
+    })
+
+    it('rejects through the coordinator', async () => {
+      const { account, coordinator, sent } = await accountWithCoordinator()
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      const result = await account.rejectProposal(3)
 
       expect(coordinator.sendTransaction).toHaveBeenCalledTimes(1)
       expect(sent[0].instructions).toHaveLength(1)
