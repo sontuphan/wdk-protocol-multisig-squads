@@ -181,6 +181,13 @@ The `fee` a propose-family call reports is the network fee plus that rent, the s
 no rent collector, so rent stays locked for the life of the accounts rather than being
 reclaimable on close.
 
+> [!WARNING]
+> That sum holds only while the coordinator charges in lamports. A paymaster that bills in a fee
+> token, which is what a coordinator built over `@tetherto/wdk-wallet-solana-gasless` does, has its
+> token charge added to a lamport rent figure, and the reported `fee` is then two currencies in one
+> number: the coordinator's own result carries the token charge, and what remains is the rent, in
+> lamports. Read the two from there rather than from `fee`.
+
 ## Squads Protocol Version
 
 > [!IMPORTANT]
