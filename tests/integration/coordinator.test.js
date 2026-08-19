@@ -402,7 +402,7 @@ describe('coordinators', () => {
       const [sponsorAfter] = await balances([sponsor.address])
 
       expect(await accounts[0].isDeployed()).toBe(true)
-      expect(sorted(await accounts[0].getOwners())).toEqual(sorted(signers))
+      expect(sorted((await accounts[0].getMultisigInfo()).owners)).toEqual(sorted(signers))
       // Exactly what the quote says the creator pays: the sponsored transaction carries the same
       // two signatures the quote assumes, the fee payer's and the create key's, and the sponsor
       // is the one debited for both the fee and the multisig's rent.
