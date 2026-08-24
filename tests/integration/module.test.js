@@ -348,17 +348,16 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         value: TRANSFER_AMOUNT
       })
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
 
       expect(proposal).toEqual({
         proposalId: '1',
         confirmations: 0,
         threshold: 2,
         status: 'pending',
-        hash: proposal.hash,
         // The signature fee plus the rent the transaction and proposal accounts lock up, which
         // is what a proposal actually costs. Exact for this message size and member count.
-        fee: 5000n + 5143440n
+        transaction: { hash: proposal.transaction.hash, fee: 5000n + 5143440n }
       })
       expect(await accounts[0].getNonce()).toBe(1n)
 
@@ -410,7 +409,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const proposal = await accounts[0].propose({ to: recipient, value: TRANSFER_AMOUNT })
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
       await approveWithAll(accounts, proposal.proposalId, rpc)
 
       const signerBefore = await solanaAccount(signers[0]).getBalance()
@@ -437,7 +436,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         { autoExecute: true }
       )
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
 
       expect(proposal.status).toBe('executed')
       expect(proposal.confirmations).toBe(1)
@@ -462,7 +461,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         { autoExecute: true }
       )
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
 
       expect(proposal.status).toBe('pending')
       expect(await solanaAccount(recipient).getBalance()).toBe(0n)
@@ -482,11 +481,11 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const first = await accounts[0].propose({ to: recipient, value: TRANSFER_AMOUNT })
 
-      await confirmTransaction(rpc, first.hash)
+      await confirmTransaction(rpc, first.transaction.hash)
 
       const second = await accounts[0].propose({ to: recipient, value: TRANSFER_AMOUNT })
 
-      await confirmTransaction(rpc, second.hash)
+      await confirmTransaction(rpc, second.transaction.hash)
 
       expect(first.proposalId).toBe('1')
       expect(second.proposalId).toBe('2')
@@ -511,7 +510,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       const before = await solanaAccount(await accounts[0].getSignerAddress()).getBalance()
       const proposal = await accounts[0].propose({ to: recipient, value: TRANSFER_AMOUNT })
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
 
       const after = await solanaAccount(await accounts[0].getSignerAddress()).getBalance()
 
@@ -526,7 +525,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const proposal = await accounts[0].propose({ to: recipient, value: TRANSFER_AMOUNT })
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
       await approveWithAll(accounts, proposal.proposalId, rpc)
 
       // Preflight rejects it at send time, and a node without preflight would reject it at
@@ -585,17 +584,16 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         amount: TRANSFER_AMOUNT
       })
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
 
       expect(proposal).toEqual({
         proposalId: '1',
         confirmations: 0,
         threshold: 2,
         status: 'pending',
-        hash: proposal.hash,
         // The signature fee plus the rent the transaction and proposal accounts lock up. Larger
         // than the SOL case because an SPL transfer stores a longer message.
-        fee: 5000n + 6354480n
+        transaction: { hash: proposal.transaction.hash, fee: 5000n + 6354480n }
       })
 
       await approveWithAll(accounts, proposal.proposalId, rpc)
@@ -629,7 +627,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         { autoExecute: true }
       )
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
 
       expect(proposal.status).toBe('executed')
       expect(await solanaAccount(recipient).getTokenBalance(testToken.mint)).toBe(TRANSFER_AMOUNT)
@@ -652,7 +650,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         amount: TRANSFER_AMOUNT
       })
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
 
       const after = await solanaAccount(await accounts[0].getSignerAddress()).getBalance()
 
@@ -680,7 +678,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
         value: TRANSFER_AMOUNT
       })
 
-      await confirmTransaction(multisig.rpc, proposal.hash)
+      await confirmTransaction(multisig.rpc, proposal.transaction.hash)
 
       return { ...proposal, recipient }
     }
@@ -696,7 +694,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const first = await accounts[0].approveProposal(proposal.proposalId)
 
-      await confirmTransaction(rpc, first.hash)
+      await confirmTransaction(rpc, first.transaction.hash)
 
       const afterOne = await accounts[0].getProposal(proposal.proposalId)
 
@@ -709,7 +707,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const second = await accounts[1].approveProposal(proposal.proposalId)
 
-      await confirmTransaction(rpc, second.hash)
+      await confirmTransaction(rpc, second.transaction.hash)
 
       const afterTwo = await accounts[0].getProposal(proposal.proposalId)
 
@@ -728,7 +726,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const rejection = await accounts[1].rejectProposal(proposal.proposalId)
 
-      await confirmTransaction(rpc, rejection.hash)
+      await confirmTransaction(rpc, rejection.transaction.hash)
 
       expect(rejection.confirmations).toBe(0)
 
@@ -750,11 +748,11 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const approval = await accounts[0].approveProposal(proposal.proposalId)
 
-      await confirmTransaction(rpc, approval.hash)
+      await confirmTransaction(rpc, approval.transaction.hash)
 
       const rejection = await accounts[0].rejectProposal(proposal.proposalId)
 
-      await confirmTransaction(rpc, rejection.hash)
+      await confirmTransaction(rpc, rejection.transaction.hash)
 
       // The rejection withdraws the approval, so the count goes down rather than up.
       expect(rejection.confirmations).toBe(0)
@@ -776,7 +774,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const approval = await accounts[0].approveProposal(proposal.proposalId, { memo: 'looks good' })
 
-      await confirmTransaction(rpc, approval.hash)
+      await confirmTransaction(rpc, approval.transaction.hash)
 
       const voted = await accounts[0].getProposal(proposal.proposalId)
 
@@ -794,7 +792,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const approval = await accounts[0].approveProposal(proposal.proposalId)
 
-      await confirmTransaction(rpc, approval.hash)
+      await confirmTransaction(rpc, approval.transaction.hash)
 
       await expect(accounts[0].approveProposal(proposal.proposalId)).rejects.toThrow(/already approved/)
     })
@@ -876,7 +874,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const proposal = await accounts[0].addOwner(newOwner)
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
 
       // Proposing is not applying: the member set is unchanged until execution.
       expect(sorted((await accounts[0].getMultisigInfo()).owners)).toEqual(sorted(signers))
@@ -897,7 +895,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const proposal = await accounts[0].addOwner(newOwner, { threshold: 2 })
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
       await settle(multisig, proposal.proposalId)
 
       const info = await accounts[0].getMultisigInfo()
@@ -912,7 +910,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const proposal = await accounts[0].removeOwner(signers[2], { threshold: 2 })
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
       await settle(multisig, proposal.proposalId)
 
       const info = await accounts[0].getMultisigInfo()
@@ -928,7 +926,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const proposal = await accounts[0].swapOwner(signers[1], newOwner)
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
       await settle(multisig, proposal.proposalId)
 
       const info = await accounts[0].getMultisigInfo()
@@ -945,7 +943,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const proposal = await accounts[0].changeThreshold(2)
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
       await settle(multisig, proposal.proposalId)
 
       expect((await accounts[0].getMultisigInfo()).threshold).toBe(2)
@@ -961,11 +959,11 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       // discriminate them from the account data alone.
       const vault = await accounts[0].propose({ to: recipient, value: 1n })
 
-      await confirmTransaction(rpc, vault.hash)
+      await confirmTransaction(rpc, vault.transaction.hash)
 
       const config = await accounts[0].addOwner(newOwner)
 
-      await confirmTransaction(rpc, config.hash)
+      await confirmTransaction(rpc, config.transaction.hash)
 
       expect(config.proposalId).toBe('2')
 
@@ -987,11 +985,11 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const pending = await accounts[0].propose({ to: recipient, value: 1n })
 
-      await confirmTransaction(rpc, pending.hash)
+      await confirmTransaction(rpc, pending.transaction.hash)
 
       const config = await accounts[0].changeThreshold(1)
 
-      await confirmTransaction(rpc, config.hash)
+      await confirmTransaction(rpc, config.transaction.hash)
       await settle(multisig, config.proposalId)
 
       // The executed config change bumped staleTransactionIndex past the pending proposal,
@@ -1129,7 +1127,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       const proposal = await accounts[0].propose({ to: recipient, value: 1n })
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
       await approveWithAll(accounts, proposal.proposalId, rpc)
 
       const readOnly = await accounts[0].toReadOnlyAccount()

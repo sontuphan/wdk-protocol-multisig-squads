@@ -108,7 +108,9 @@ approved and left stuck.
 > [!NOTE]
 > Where `autoExecute` cannot apply it is dropped silently rather than throwing, so branch on
 > the result's `status`, which is `'executed'` when it ran and `'pending'` when it did not.
-> `status: 'executed'` comes with a `transaction` holding the send's own hash and fee.
+> Either way the result's `transaction` holds the hash and fee of the transaction the call sent,
+> since on Solana a proposal is itself an on-chain transaction. `status` is what says whether that
+> transaction also executed the proposal.
 
 ## Fees, rent, and who pays
 
@@ -131,7 +133,7 @@ Three payers, and one call can involve all three:
 | `executeProposal` for a transfer or other vault transaction | a member holding `Execute` | none | network fee only; the vault funds the transaction itself |
 | `executeProposal` for an owner or threshold change | a member holding `Execute` | growth of the multisig account when the change adds a member | the executing member, even when `rentPayer` is set |
 
-The `fee` a propose-family call reports is the network fee plus that rent, the same basis
+The `transaction.fee` a propose-family call reports is the network fee plus that rent, the same basis
 `quotePropose` and `quoteTransfer` use, so a quote and the call it quotes agree. `deploy` sets
 no rent collector, so rent stays locked for the life of the accounts rather than being
 reclaimable on close.

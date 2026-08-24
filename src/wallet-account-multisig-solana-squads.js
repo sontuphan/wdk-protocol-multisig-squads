@@ -44,11 +44,11 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigAutoExecuteResult} MultisigAutoExecuteResult */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
- * `MultisigProposal` widened with the signature and fee of the transaction that carried the
- * call, plus `transaction` from `MultisigAutoExecuteResult`, which is set only when that same
- * call also executed the proposal.
+ * `MultisigProposal` widened with `transaction` from `MultisigAutoExecuteResult`. On Solana every
+ * call is its own on-chain transaction, so the field is always set: it carries the execution when
+ * `status` is `'executed'`, and the call's own submission when it is `'pending'`.
  *
- * @typedef {MultisigProposal & MultisigAutoExecuteResult & { hash: string, fee: bigint }} SolanaMultisigProposalResult
+ * @typedef {MultisigProposal & MultisigAutoExecuteResult} SolanaMultisigProposalResult
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
 /**
@@ -310,7 +310,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {SolanaTransaction} tx - The transaction to propose.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing. `memo` is recorded on chain with the creation.
-   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
+   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    */
   async propose (tx, { vaultIndex = DEFAULT.vaultIndex, ...transactionOptions } = {}) {
     const vaultPda = address(await this.getVaultAddress(vaultIndex))
@@ -327,7 +327,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {TransferOptions} transferOptions - The transfer options.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing. `memo` is recorded on chain with the creation.
-   * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
+   * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} The transfer options must be valid, the signer must be allowed to propose, and the quote must stay within `transferMaxFee`.
    * @todo Support Token-2022 (Token Extensions Program), whose associated token accounts this method does not derive.
    */
@@ -358,7 +358,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing; the one error it can surface is a stored message whose address lookup tables can no longer be read, which no longer executes by any route. `vaultIndex` does not bear on a vote.
-   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'`, with the send's own `transaction`, when `autoExecute` ran the execution.
+   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission.
    * @throws {Error} The proposal must be open to this signer's approval, and the RPC request must succeed.
    */
   async approveProposal (proposalId, { memo, autoExecute } = {}) {
@@ -396,13 +396,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     return {
       proposalId: index.toString(),
-      hash,
-      fee,
       confirmations,
       threshold: multisig.threshold,
-      ...execution
-        ? { status: 'executed', transaction: { hash, fee } }
-        : { status: 'pending' }
+      status: execution ? 'executed' : 'pending',
+      transaction: { hash, fee }
     }
   }
 
@@ -437,11 +434,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     return {
       proposalId: index.toString(),
-      hash,
-      fee,
       confirmations: proposal.approved.length - (proposal.approved.includes(signerAddress) ? 1 : 0),
       threshold: multisig.threshold,
-      status: 'pending'
+      status: 'pending',
+      transaction: { hash, fee }
     }
   }
 
@@ -507,7 +503,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {string} ownerAddress - The address of the member to add.
    * @param {SolanaMultisigAddOwnerOptions} [options] - The operation options. `mask` is the member's Squads permissions (default: all three).
-   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
+   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} The addition and the resulting configuration must be valid, the signer must be allowed to propose, and the RPC request must succeed.
    */
   async addOwner (ownerAddress, { mask = ALMIGHTY_PERMISSIONS, threshold } = {}) {
@@ -549,7 +545,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {string} ownerAddress - The address of the member to remove.
    * @param {Partial<MultisigOptions>} [options] - The operation options.
-   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
+   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} The removal and the resulting configuration must be valid, the signer must be allowed to propose, and the RPC request must succeed.
    */
   async removeOwner (ownerAddress, { threshold } = {}) {
@@ -586,7 +582,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {string} oldOwnerAddress - The address of the member to replace.
    * @param {string} newOwnerAddress - The address of the new member.
    * @param {Partial<MultisigOptions>} [options] - The operation options.
-   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
+   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} The swap and the resulting configuration must be valid, the signer must be allowed to propose, and the RPC request must succeed.
    */
   async swapOwner (oldOwnerAddress, newOwnerAddress, { threshold } = {}) {
@@ -640,7 +636,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * Proposes changing the approval threshold of the multisig.
    *
    * @param {number} newThreshold - The new threshold.
-   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
+   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} The threshold must be valid and not already in force, the signer must be allowed to propose, and the RPC request must succeed.
    */
   async changeThreshold (newThreshold) {
@@ -791,17 +787,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const { hash, fee } = await this._signerAccount.sendTransaction({ instructions })
     const executed = extra.length > 0
 
-    const autoExecuteResult = executed
-      ? { status: 'executed', transaction: { hash, fee } }
-      : { status: 'pending' }
-
     return {
       proposalId: index.toString(),
-      hash,
-      fee: fee + rent,
       confirmations: executed ? 1 : 0,
       threshold,
-      ...autoExecuteResult
+      status: executed ? 'executed' : 'pending',
+      transaction: { hash, fee: fee + rent }
     }
   }
 

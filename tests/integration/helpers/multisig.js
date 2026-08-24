@@ -103,7 +103,7 @@ export async function approveWithAll (accounts, proposalId, rpc) {
   for (const account of accounts) {
     const result = await account.approveProposal(proposalId)
 
-    await confirmTransaction(rpc, result.hash)
+    await confirmTransaction(rpc, result.transaction.hash)
     results.push(result)
   }
 

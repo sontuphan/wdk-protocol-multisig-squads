@@ -973,7 +973,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const { account } = await proposingAccount({ threshold: 1 })
 
       const { fee: quoted } = await account.quotePropose(TX)
-      const { fee: charged } = await account.propose(TX)
+      const { transaction: { fee: charged } } = await account.propose(TX)
 
       // The quote assumes one signature, which is what the stub charges, so the two agree.
       expect(charged).toBe(quoted)
@@ -985,12 +985,11 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       expect(await account.propose(TX)).toEqual({
         proposalId: '1',
-        hash: DUMMY_PROPOSE_HASH,
         // DUMMY_FEE + rent for a 221 B vault transaction and a 166 B proposal.
-        fee: 4480280n,
         confirmations: 0,
         threshold: 2,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_PROPOSE_HASH, fee: 4480280n }
       })
     })
 
@@ -1037,12 +1036,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
           .toEqual([194, 8, 161, 87, 153, 164, 25, 171])
         expect(result).toEqual({
           proposalId: '1',
-          hash: DUMMY_PROPOSE_HASH,
-          fee: 4480280n,
           confirmations: 1,
           threshold: 1,
           status: 'executed',
-          transaction: { hash: DUMMY_PROPOSE_HASH, fee: DUMMY_FEE }
+          transaction: { hash: DUMMY_PROPOSE_HASH, fee: 4480280n }
         })
       })
 
@@ -1083,11 +1080,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         expect(instructions).toHaveLength(2)
         expect(result).toEqual({
           proposalId: '1',
-          hash: DUMMY_PROPOSE_HASH,
-          fee: 4480280n,
           confirmations: 0,
           threshold: options.threshold,
-          status: 'pending'
+          status: 'pending',
+          transaction: { hash: DUMMY_PROPOSE_HASH, fee: 4480280n }
         })
       })
 
@@ -1099,11 +1095,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(2)
         expect(result).toEqual({
           proposalId: '1',
-          hash: DUMMY_PROPOSE_HASH,
-          fee: 4480280n,
           confirmations: 0,
           threshold: 1,
-          status: 'pending'
+          status: 'pending',
+          transaction: { hash: DUMMY_PROPOSE_HASH, fee: 4480280n }
         })
       })
     })
@@ -1151,11 +1146,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       expect(await account.approveProposal(3)).toEqual({
         proposalId: '3',
-        hash: DUMMY_VOTE_HASH,
-        fee: DUMMY_FEE,
         confirmations: 2,
         threshold: 2,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
       })
     })
 
@@ -1175,11 +1169,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.approveProposal(3)).resolves.toEqual({
         proposalId: '3',
-        hash: DUMMY_VOTE_HASH,
-        fee: DUMMY_FEE,
         confirmations: 1,
         threshold: 2,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
       })
       expect(sendTransaction).toHaveBeenCalledTimes(1)
     })
@@ -1314,8 +1307,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         expect(Array.from(instructions[1].data)).toEqual(VAULT_EXECUTE_DISCRIMINATOR)
         expect(result).toEqual({
           proposalId: '3',
-          hash: DUMMY_VOTE_HASH,
-          fee: DUMMY_FEE,
           confirmations: 2,
           threshold: 2,
           status: 'executed',
@@ -1478,11 +1469,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       expect(await account.rejectProposal(3)).toEqual({
         proposalId: '3',
-        hash: DUMMY_VOTE_HASH,
-        fee: DUMMY_FEE,
         confirmations: 1,
         threshold: 2,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
       })
     })
 
@@ -1494,11 +1484,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.rejectProposal(3)).resolves.toEqual({
         proposalId: '3',
-        hash: DUMMY_VOTE_HASH,
-        fee: DUMMY_FEE,
         confirmations: 1,
         threshold: 2,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
       })
     })
 
@@ -1507,11 +1496,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.rejectProposal(3)).resolves.toEqual({
         proposalId: '3',
-        hash: DUMMY_VOTE_HASH,
-        fee: DUMMY_FEE,
         confirmations: 0,
         threshold: 2,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
       })
     })
 
@@ -1522,11 +1510,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.rejectProposal(3)).resolves.toEqual({
         proposalId: '3',
-        hash: DUMMY_VOTE_HASH,
-        fee: DUMMY_FEE,
         confirmations: 0,
         threshold: 2,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
       })
       expect(sendTransaction).toHaveBeenCalledTimes(1)
     })
@@ -1691,12 +1678,11 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(account.addOwner(OTHER_MEMBER, { mask: PERMISSION.vote, threshold: 2 }))
         .resolves.toEqual({
           proposalId: '5',
-          hash: DUMMY_CONFIG_HASH,
           // DUMMY_FEE + rent for a 122 B config transaction (two actions) and a 166 B proposal.
-          fee: 3791240n,
           confirmations: 0,
           threshold: 1,
-          status: 'pending'
+          status: 'pending',
+          transaction: { hash: DUMMY_CONFIG_HASH, fee: 3791240n }
         })
     })
 
@@ -1752,12 +1738,11 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       expect(await account.addOwner(OTHER_MEMBER)).toEqual({
         proposalId: '5',
-        hash: DUMMY_CONFIG_HASH,
         // DUMMY_FEE + rent for a 119 B config transaction and a 166 B proposal.
-        fee: 3770360n,
         confirmations: 0,
         threshold: 1,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_CONFIG_HASH, fee: 3770360n }
       })
     })
 
@@ -1766,11 +1751,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.addOwner(OTHER_MEMBER, { threshold: 2 })).resolves.toEqual({
         proposalId: '5',
-        hash: DUMMY_CONFIG_HASH,
-        fee: 3791240n,
         confirmations: 0,
         threshold: 1,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_CONFIG_HASH, fee: 3791240n }
       })
       expect(sendTransaction).toHaveBeenCalledTimes(1)
     })
@@ -1810,11 +1794,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.addOwner(OTHER_MEMBER)).resolves.toEqual({
         proposalId: '5',
-        hash: DUMMY_CONFIG_HASH,
-        fee: 3770360n,
         confirmations: 0,
         threshold: 1,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_CONFIG_HASH, fee: 3770360n }
       })
       expect(sendTransaction).toHaveBeenCalledTimes(1)
     })
@@ -1896,12 +1879,11 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       expect(await account.removeOwner(OTHER_MEMBER)).toEqual({
         proposalId: '5',
-        hash: DUMMY_CONFIG_HASH,
         // DUMMY_FEE + rent for a 118 B config transaction and a 358 B proposal.
-        fee: 5099720n,
         confirmations: 0,
         threshold: 1,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_CONFIG_HASH, fee: 5099720n }
       })
     })
 
@@ -1966,11 +1948,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.removeOwner(TEST_SIGNER)).resolves.toEqual({
         proposalId: '5',
-        hash: DUMMY_CONFIG_HASH,
-        fee: 5099720n,
         confirmations: 0,
         threshold: 1,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_CONFIG_HASH, fee: 5099720n }
       })
       expect(sendTransaction).toHaveBeenCalledTimes(1)
     })
@@ -2038,12 +2019,11 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(account.addOwner('CfGcujEkPVDx7yGyn1PUjxn2e353MXbLk8ixzwuJUktK', { threshold: 2 }))
         .resolves.toEqual({
         proposalId: '5',
-        hash: DUMMY_CONFIG_HASH,
         // DUMMY_FEE + rent for a 122 B config transaction and a 358 B proposal.
-        fee: 5127560n,
         confirmations: 0,
         threshold: 1,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_CONFIG_HASH, fee: 5127560n }
       })
     })
   })
@@ -2112,12 +2092,11 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       expect(await account.swapOwner(OTHER_MEMBER, NEW_OWNER)).toEqual({
         proposalId: '5',
-        hash: DUMMY_CONFIG_HASH,
         // DUMMY_FEE + rent for a 152 B config transaction and a 262 B proposal.
-        fee: 4668200n,
         confirmations: 0,
         threshold: 1,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_CONFIG_HASH, fee: 4668200n }
       })
     })
 
@@ -2127,12 +2106,11 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.swapOwner(TEST_SIGNER, NEW_OWNER)).resolves.toEqual({
         proposalId: '5',
-        hash: DUMMY_CONFIG_HASH,
         // DUMMY_FEE + rent for a 152 B config transaction and a 166 B proposal.
-        fee: 4000040n,
         confirmations: 0,
         threshold: 1,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_CONFIG_HASH, fee: 4000040n }
       })
       expect(sendTransaction).toHaveBeenCalledTimes(1)
     })
@@ -2258,12 +2236,11 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       expect(await account.changeThreshold(2)).toEqual({
         proposalId: '5',
-        hash: DUMMY_CONFIG_HASH,
         // DUMMY_FEE + rent for an 88 B config transaction and a 262 B proposal.
-        fee: 4222760n,
         confirmations: 0,
         threshold: 1,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_CONFIG_HASH, fee: 4222760n }
       })
     })
 
@@ -2298,11 +2275,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       await expect(account.changeThreshold(2)).resolves.toEqual({
         proposalId: '5',
-        hash: DUMMY_CONFIG_HASH,
-        fee: 4222760n,
         confirmations: 0,
         threshold: 1,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_CONFIG_HASH, fee: 4222760n }
       })
       expect(sendTransaction).toHaveBeenCalledTimes(1)
     })
@@ -2788,12 +2764,11 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       expect(await account.proposeTransfer(OPTIONS)).toEqual({
         proposalId: '1',
-        hash: DUMMY_TRANSFER_HASH,
         // DUMMY_FEE + the harness rent of 2039280 for each of the two accounts.
-        fee: 4083560n,
         confirmations: 0,
         threshold: 1,
-        status: 'pending'
+        status: 'pending',
+        transaction: { hash: DUMMY_TRANSFER_HASH, fee: 4083560n }
       })
     })
 
@@ -2892,12 +2867,10 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(instructions).toHaveLength(4)
       expect(result).toEqual({
         proposalId: '1',
-        hash: DUMMY_TRANSFER_HASH,
-        fee: 4083560n,
         confirmations: 1,
         threshold: 1,
         status: 'executed',
-        transaction: { hash: DUMMY_TRANSFER_HASH, fee: DUMMY_FEE }
+        transaction: { hash: DUMMY_TRANSFER_HASH, fee: 4083560n }
       })
     })
   })
