@@ -172,6 +172,7 @@ export const SQUADS_PROGRAM_ADDRESS: "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pC
  * @type {{ [K in SquadsTransactionKind]: K }}
  */
 export const TRANSACTION_KIND: { [K in SquadsTransactionKind]: K; };
+export const SIGNATURE_BASE_FEE: bigint;
 export namespace SECRET_SIZE {
     let privateKey: number;
     let keyPair: number;

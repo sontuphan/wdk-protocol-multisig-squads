@@ -61,12 +61,6 @@ export const TRANSACTION_MESSAGE: AnyEncoder;
  */
 export const STORED_TRANSACTION_MESSAGE: AnyEncoder;
 /**
- * The data of the System program transfer a native `propose` wraps.
- *
- * @type {SystemTransferEncoder}
- */
-export const SYSTEM_TRANSFER: SystemTransferEncoder;
-/**
  * The data of each Squads instruction this package submits, keyed by instruction.
  *
  * @type {SquadsInstructionEncoders}
@@ -85,9 +79,6 @@ export type AnyDecoder = import("@solana/codecs").Decoder<any>;
 export type FixedSizeAnyDecoder = import("@solana/codecs").FixedSizeDecoder<any>;
 export type ConfigActionEncoder = import("@solana/codecs").Encoder<ConfigAction>;
 export type ConfigActionsEncoder = import("@solana/codecs").Encoder<ConfigAction[]>;
-export type SystemTransferEncoder = import("@solana/codecs").Encoder<{
-    lamports: bigint;
-}>;
 /**
  * A configuration action, as `CONFIG_ACTION_ENCODER` takes it: a `__kind` tag naming the variant
  * and that variant's fields beside it.

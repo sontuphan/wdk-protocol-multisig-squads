@@ -24,6 +24,9 @@ import WalletAccountReadOnlyMultisigSolanaSquads, {
 } from './wallet-account-read-only-multisig-solana-squads.js'
 import { address, getAddressEncoder } from '@solana/addresses'
 import { getBase64Encoder } from '@solana/codecs'
+import { AccountRole } from '@solana/instructions'
+import { SYSTEM_PROGRAM_ADDRESS } from '@solana-program/system'
+import { ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS } from '@solana-program/address-lookup-table'
 import { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes } from '@solana/signers'
 
 import {
@@ -82,12 +85,6 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
 export const PERMISSION = { initiate: 1, vote: 2, execute: 4 }
 
 const ALMIGHTY_PERMISSIONS = PERMISSION.initiate | PERMISSION.vote | PERMISSION.execute
-const PROGRAM_ADDRESS = {
-  system: '11111111111111111111111111111111',
-  addressLookupTable: 'AddressLookupTab1e1111111111111111111111111'
-}
-
-const ACCOUNT_ROLE = { readonly: 0, writable: 1, readonlySigner: 2, writableSigner: 3 }
 
 const SEED = { prefix: 'multisig', multisig: 'multisig' }
 
@@ -270,16 +267,16 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const instruction = {
       programAddress: this._programId,
       accounts: [
-        { address: address(programConfigPda), role: ACCOUNT_ROLE.readonly },
-        { address: address(treasury), role: ACCOUNT_ROLE.writable },
-        { address: address(expectedPda), role: ACCOUNT_ROLE.writable },
+        { address: address(programConfigPda), role: AccountRole.READONLY },
+        { address: address(treasury), role: AccountRole.WRITABLE },
+        { address: address(expectedPda), role: AccountRole.WRITABLE },
         {
           address: createKeySigner.address,
-          role: ACCOUNT_ROLE.readonlySigner,
+          role: AccountRole.READONLY_SIGNER,
           signer: createKeySigner
         },
         this._getRentPayerAccount(this._signerAddress),
-        { address: address(PROGRAM_ADDRESS.system), role: ACCOUNT_ROLE.readonly }
+        { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY }
       ],
       data: INSTRUCTION.multisigCreateV2.encode({
         configAuthority: null,
@@ -709,7 +706,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   _getRentPayerAccount (signerAddress) {
     return {
       address: address(this._config.rentPayer ?? signerAddress),
-      role: ACCOUNT_ROLE.writableSigner
+      role: AccountRole.WRITABLE_SIGNER
     }
   }
 
@@ -748,15 +745,15 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const rentPayer = this._getRentPayerAccount(signerAddress)
     const creator = rentPayer.address === signerAddress
       ? rentPayer
-      : { address: address(signerAddress), role: ACCOUNT_ROLE.readonlySigner }
-    const systemProgram = { address: address(PROGRAM_ADDRESS.system), role: ACCOUNT_ROLE.readonly }
+      : { address: address(signerAddress), role: AccountRole.READONLY_SIGNER }
+    const systemProgram = { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY }
 
     const instructions = [
       {
         programAddress: this._programId,
         accounts: [
-          { address: address(multisigPda), role: ACCOUNT_ROLE.writable },
-          { address: transactionPda, role: ACCOUNT_ROLE.writable },
+          { address: address(multisigPda), role: AccountRole.WRITABLE },
+          { address: transactionPda, role: AccountRole.WRITABLE },
           creator,
           rentPayer,
           systemProgram
@@ -766,8 +763,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       {
         programAddress: this._programId,
         accounts: [
-          { address: address(multisigPda), role: ACCOUNT_ROLE.readonly },
-          { address: proposalPda, role: ACCOUNT_ROLE.writable },
+          { address: address(multisigPda), role: AccountRole.READONLY },
+          { address: proposalPda, role: AccountRole.WRITABLE },
           creator,
           rentPayer,
           systemProgram
@@ -824,10 +821,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       {
         programAddress: this._programId,
         accounts: [
-          { address: address(multisig.address), role: ACCOUNT_ROLE.readonly },
-          { address: proposalPda, role: ACCOUNT_ROLE.writable },
-          { address: transactionPda, role: ACCOUNT_ROLE.readonly },
-          { address: address(signerAddress), role: ACCOUNT_ROLE.readonlySigner },
+          { address: address(multisig.address), role: AccountRole.READONLY },
+          { address: proposalPda, role: AccountRole.WRITABLE },
+          { address: transactionPda, role: AccountRole.READONLY },
+          { address: address(signerAddress), role: AccountRole.READONLY_SIGNER },
           ...await this._resolveExecutionAccounts(transaction, vaultPda)
         ],
         data: INSTRUCTION.vaultTransactionExecute.encode()
@@ -890,9 +887,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     return {
       programAddress: this._programId,
       accounts: [
-        { address: address(multisigPda), role: ACCOUNT_ROLE.readonly },
-        { address: address(signerAddress), role: ACCOUNT_ROLE.writableSigner },
-        { address: address(proposalPda), role: ACCOUNT_ROLE.writable }
+        { address: address(multisigPda), role: AccountRole.READONLY },
+        { address: address(signerAddress), role: AccountRole.WRITABLE_SIGNER },
+        { address: address(proposalPda), role: AccountRole.WRITABLE }
       ],
       data: vote.encode({ memo: this._toMemo(memo) })
     }
@@ -954,13 +951,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     return {
       programAddress: this._programId,
       accounts: [
-        { address: address(multisig.address), role: ACCOUNT_ROLE.writable },
-        { address: member, role: ACCOUNT_ROLE.readonlySigner },
-        { address: address(proposal.address), role: ACCOUNT_ROLE.writable },
-        { address: address(transaction.address), role: ACCOUNT_ROLE.readonly },
-        { address: member, role: ACCOUNT_ROLE.writableSigner },
-        { address: address(PROGRAM_ADDRESS.system), role: ACCOUNT_ROLE.readonly },
-        ...spendingLimits.map((spendingLimit) => ({ address: spendingLimit, role: ACCOUNT_ROLE.writable }))
+        { address: address(multisig.address), role: AccountRole.WRITABLE },
+        { address: member, role: AccountRole.READONLY_SIGNER },
+        { address: address(proposal.address), role: AccountRole.WRITABLE },
+        { address: address(transaction.address), role: AccountRole.READONLY },
+        { address: member, role: AccountRole.WRITABLE_SIGNER },
+        { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+        ...spendingLimits.map((spendingLimit) => ({ address: spendingLimit, role: AccountRole.WRITABLE }))
       ],
       data: INSTRUCTION.configTransactionExecute.encode()
     }
@@ -979,10 +976,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     return {
       programAddress: this._programId,
       accounts: [
-        { address: address(multisig.address), role: ACCOUNT_ROLE.readonly },
-        { address: address(proposal.address), role: ACCOUNT_ROLE.writable },
-        { address: address(transaction.address), role: ACCOUNT_ROLE.readonly },
-        { address: address(signerAddress), role: ACCOUNT_ROLE.readonlySigner },
+        { address: address(multisig.address), role: AccountRole.READONLY },
+        { address: address(proposal.address), role: AccountRole.WRITABLE },
+        { address: address(transaction.address), role: AccountRole.READONLY },
+        { address: address(signerAddress), role: AccountRole.READONLY_SIGNER },
         ...await this._resolveExecutionAccounts(transaction, vaultPda)
       ],
       data: INSTRUCTION.vaultTransactionExecute.encode()
@@ -999,7 +996,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const lookups = message.addressTableLookups
     const accounts = lookups.map((lookup) => ({
       address: address(lookup.accountKey),
-      role: ACCOUNT_ROLE.readonly
+      role: AccountRole.READONLY
     }))
 
     message.accountKeys.forEach((key, i) => {
@@ -1007,8 +1004,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         (i >= message.numSigners && i - message.numSigners < message.numWritableNonSigners)
       const signer = i < message.numSigners && !signedForByProgram.has(key)
       const role = signer
-        ? (writable ? ACCOUNT_ROLE.writableSigner : ACCOUNT_ROLE.readonlySigner)
-        : (writable ? ACCOUNT_ROLE.writable : ACCOUNT_ROLE.readonly)
+        ? (writable ? AccountRole.WRITABLE_SIGNER : AccountRole.READONLY_SIGNER)
+        : (writable ? AccountRole.WRITABLE : AccountRole.READONLY)
 
       accounts.push({ address: address(key), role })
     })
@@ -1023,8 +1020,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       const addresses = tables.get(lookup.accountKey)
 
       for (const [indexes, role] of [
-        [lookup.writableIndexes, ACCOUNT_ROLE.writable],
-        [lookup.readonlyIndexes, ACCOUNT_ROLE.readonly]
+        [lookup.writableIndexes, AccountRole.WRITABLE],
+        [lookup.readonlyIndexes, AccountRole.READONLY]
       ]) {
         for (const i of indexes) {
           if (!addresses[i]) {
@@ -1052,7 +1049,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const tables = new Map()
 
     value.forEach((account, i) => {
-      if (!account || account.owner !== PROGRAM_ADDRESS.addressLookupTable) {
+      if (!account || account.owner !== ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS) {
         throw new Error(
           `The address lookup table ${keys[i]} does not exist, so the proposal can no longer be executed.`
         )

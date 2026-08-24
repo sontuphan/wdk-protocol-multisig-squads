@@ -22,6 +22,9 @@ import { createSolanaRpc } from '@solana/rpc'
 import { address, getAddressEncoder, isOffCurveAddress } from '@solana/addresses'
 import { getBase58Decoder, getBase58Encoder, getBase64Encoder, getU64Encoder } from '@solana/codecs'
 import { isSignature } from '@solana/keys'
+import { AccountRole } from '@solana/instructions'
+import { SYSTEM_PROGRAM_ADDRESS, getTransferSolInstructionDataEncoder } from '@solana-program/system'
+import { SYSVAR_CLOCK_ADDRESS } from '@solana/sysvars'
 import {
   findAssociatedTokenPda,
   getCreateAssociatedTokenIdempotentInstruction,
@@ -36,7 +39,6 @@ import {
   ACCOUNT_DISCRIMINATOR,
   PROPOSAL_STATUS,
   STORED_TRANSACTION_MESSAGE,
-  SYSTEM_TRANSFER,
   TRANSACTION_MESSAGE
 } from './helpers/layouts.js'
 
@@ -235,14 +237,6 @@ export const SQUADS_PROGRAM_ADDRESS = 'SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52p
  */
 export const TRANSACTION_KIND = { vault: 'vault', config: 'config', batch: 'batch' }
 
-const PROGRAM_ADDRESS = {
-  default: '11111111111111111111111111111111',
-  system: '11111111111111111111111111111111',
-  clockSysvar: 'SysvarC1ock11111111111111111111111111111111'
-}
-
-const ACCOUNT_ROLE = { readonly: 0, writable: 1, readonlySigner: 2, writableSigner: 3 }
-
 const PROPOSAL_STATUS_LABELS = [
   { name: 'Draft', phrase: 'a draft' },
   { name: 'Active', phrase: 'open for voting' },
@@ -278,7 +272,7 @@ const SEED = {
   ephemeralSigner: 'ephemeral_signer'
 }
 
-const DEFAULT = { vaultIndex: 0, memberCount: 1 }
+const DEFAULT = { vaultIndex: 0, memberCount: 1, authority: SYSTEM_PROGRAM_ADDRESS }
 
 export const SECRET_SIZE = { privateKey: 32, keyPair: 64 }
 
@@ -289,7 +283,7 @@ const MAX = {
   multipleAccounts: 100
 }
 
-const SIGNATURE_BASE_FEE = 5000n
+export const SIGNATURE_BASE_FEE = 5000n
 
 const SLOT_TIME = 400
 
@@ -1040,7 +1034,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const { value } = await this._rpc
       .getMultipleAccounts(
-        [address(multisigPda), proposalPda, transactionPda, address(PROGRAM_ADDRESS.clockSysvar)],
+        [address(multisigPda), proposalPda, transactionPda, SYSVAR_CLOCK_ADDRESS],
         { commitment: this._commitment, encoding: 'base64' }
       )
       .send()
@@ -1048,7 +1042,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     const [multisig, proposal, transaction, clock] = value
 
     if (!clock) {
-      throw new Error(`The clock sysvar ${PROGRAM_ADDRESS.clockSysvar} could not be read.`)
+      throw new Error(`The clock sysvar ${SYSVAR_CLOCK_ADDRESS} could not be read.`)
     }
 
     return {
@@ -1111,12 +1105,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     if (tx && tx.to !== undefined && tx.value !== undefined) {
       return [
         {
-          programAddress: address(PROGRAM_ADDRESS.system),
+          programAddress: SYSTEM_PROGRAM_ADDRESS,
           accounts: [
-            { address: vaultPda, role: ACCOUNT_ROLE.writableSigner },
-            { address: address(tx.to), role: ACCOUNT_ROLE.writable }
+            { address: vaultPda, role: AccountRole.WRITABLE_SIGNER },
+            { address: address(tx.to), role: AccountRole.WRITABLE }
           ],
-          data: SYSTEM_TRANSFER.encode({ lamports: BigInt(tx.value) })
+          data: getTransferSolInstructionDataEncoder().encode({ amount: BigInt(tx.value) })
         }
       ]
     }
@@ -1146,8 +1140,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       }))
 
       for (const account of accounts) {
-        const signs = account.role === ACCOUNT_ROLE.readonlySigner ||
-          account.role === ACCOUNT_ROLE.writableSigner
+        const signs = account.role === AccountRole.READONLY_SIGNER ||
+          account.role === AccountRole.WRITABLE_SIGNER
 
         if (signs && account.address !== vaultPda) {
           throw new ValueError(
@@ -1253,8 +1247,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       for (const account of instruction.accounts) {
         note(
           account.address,
-          account.role === ACCOUNT_ROLE.readonlySigner || account.role === ACCOUNT_ROLE.writableSigner,
-          account.role === ACCOUNT_ROLE.writable || account.role === ACCOUNT_ROLE.writableSigner
+          account.role === AccountRole.READONLY_SIGNER || account.role === AccountRole.WRITABLE_SIGNER,
+          account.role === AccountRole.WRITABLE || account.role === AccountRole.WRITABLE_SIGNER
         )
       }
     }
@@ -1614,7 +1608,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       address: multisigPda,
       isCreated: true,
       // Squads writes the default address rather than an option when the multisig governs itself.
-      configAuthority: configAuthority === PROGRAM_ADDRESS.default ? null : configAuthority,
+      configAuthority: configAuthority === DEFAULT.authority ? null : configAuthority,
       threshold,
       timeLock,
       transactionIndex,
