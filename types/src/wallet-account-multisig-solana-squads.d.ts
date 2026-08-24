@@ -154,7 +154,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @throws {Error} The transfer options must be valid, the signer must be allowed to propose, and the quote must stay within `transferMaxFee`.
      * @todo Support Token-2022 (Token Extensions Program), whose associated token accounts this method does not derive.
      */
-    transfer(transferOptions: TransferOptions, { vaultIndex, ...transactionOptions }?: SolanaMultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
+    proposeTransfer(transferOptions: TransferOptions, { vaultIndex, ...transactionOptions }?: SolanaMultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
     /**
      * Approves a pending transaction proposal.
      *

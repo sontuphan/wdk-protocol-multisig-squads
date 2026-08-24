@@ -79,7 +79,7 @@ same way wherever it applies:
 // memo: a note recorded on chain with the call
 // autoExecute: execute in the same transaction, when this call completes the approvals
 await account.propose(tx, { vaultIndex: 0, memo: 'payroll', autoExecute: true })
-await account.transfer(transferOptions, { memo: 'payroll' })
+await account.proposeTransfer(transferOptions, { memo: 'payroll' })
 
 await account.approveProposal(proposalId, { memo: 'looks good', autoExecute: true })
 await account.rejectProposal(proposalId, { memo: 'wrong recipient' })
@@ -87,7 +87,7 @@ await account.rejectProposal(proposalId, { memo: 'wrong recipient' })
 await account.executeProposal(proposalId)
 ```
 
-`vaultIndex` bears on `propose` and `transfer` only, and `autoExecute` on everything but
+`vaultIndex` bears on `propose` and `proposeTransfer` only, and `autoExecute` on everything but
 `rejectProposal`, which executes nothing whatever the votes say. `memo` applies to all four.
 `executeProposal` takes no options. A memo rides in the instruction's data rather than in an
 account, so it adds no rent, and an empty string is a present-but-empty memo rather than none.
@@ -95,7 +95,7 @@ account, so it adds no rent, and an empty string is a present-but-empty memo rat
 `autoExecute` saves the separate `executeProposal` round trip when the same call already
 carries the last approval the proposal needs:
 
-- On `propose` and `transfer`, that means a **threshold of 1**, so it is a 1-of-1 and
+- On `propose` and `proposeTransfer`, that means a **threshold of 1**, so it is a 1-of-1 and
   test-setup convenience.
 - On `approveProposal`, it means **this approval reaching the threshold**, so the last approver
   of a 3-of-5 applies the transaction in the same transaction as their vote.
@@ -126,7 +126,7 @@ Three payers, and one call can involve all three:
 | Call | Who must sign | Rent it creates | Charged to |
 |---|---|---|---|
 | `deploy` | the signer, plus the create key, which `createKeySecret` signs for you | the multisig account, sized by member count, plus the Squads treasury creation fee | `rentPayer`, else the signer |
-| `propose`, `transfer`, `addOwner`, `removeOwner`, `swapOwner`, `changeThreshold` | a member holding `Initiate` | the transaction account, sized by the message, plus the proposal account | `rentPayer`, else the member |
+| `propose`, `proposeTransfer`, `addOwner`, `removeOwner`, `swapOwner`, `changeThreshold` | a member holding `Initiate` | the transaction account, sized by the message, plus the proposal account | `rentPayer`, else the member |
 | `approveProposal`, `rejectProposal` | a member holding `Vote` | none | network fee only |
 | `executeProposal` for a transfer or other vault transaction | a member holding `Execute` | none | network fee only; the vault funds the transaction itself |
 | `executeProposal` for an owner or threshold change | a member holding `Execute` | growth of the multisig account when the change adds a member | the executing member, even when `rentPayer` is set |

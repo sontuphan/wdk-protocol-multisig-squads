@@ -579,7 +579,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       await sendTestTokensTo(rpc, testToken, vaultPda, MINT_AMOUNT)
 
-      const proposal = await accounts[0].transfer({
+      const proposal = await accounts[0].proposeTransfer({
         token: testToken.mint,
         recipient,
         amount: TRANSFER_AMOUNT
@@ -624,7 +624,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
 
       expect(await solanaAccount(recipient).getTokenBalance(testToken.mint)).toBe(0n)
 
-      const proposal = await accounts[0].transfer(
+      const proposal = await accounts[0].proposeTransfer(
         { token: testToken.mint, recipient, amount: TRANSFER_AMOUNT },
         { autoExecute: true }
       )
@@ -646,7 +646,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       })
 
       const before = await solanaAccount(await accounts[0].getSignerAddress()).getBalance()
-      const proposal = await accounts[0].transfer({
+      const proposal = await accounts[0].proposeTransfer({
         token: testToken.mint,
         recipient,
         amount: TRANSFER_AMOUNT
@@ -665,7 +665,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       const recipient = (await generateKeyPairSigner()).address
 
       await expect(
-        accounts[0].transfer({ token: missing, recipient, amount: TRANSFER_AMOUNT })
+        accounts[0].proposeTransfer({ token: missing, recipient, amount: TRANSFER_AMOUNT })
       ).rejects.toThrow(/does not exist/)
     })
   })

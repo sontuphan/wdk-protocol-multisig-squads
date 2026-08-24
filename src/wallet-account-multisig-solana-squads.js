@@ -331,7 +331,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @throws {Error} The transfer options must be valid, the signer must be allowed to propose, and the quote must stay within `transferMaxFee`.
    * @todo Support Token-2022 (Token Extensions Program), whose associated token accounts this method does not derive.
    */
-  async transfer (transferOptions, { vaultIndex = DEFAULT.vaultIndex, ...transactionOptions } = {}) {
+  async proposeTransfer (transferOptions, { vaultIndex = DEFAULT.vaultIndex, ...transactionOptions } = {}) {
     if (!this._rpc) {
       throw new Error('The wallet must be connected to a provider to propose transfers.')
     }
