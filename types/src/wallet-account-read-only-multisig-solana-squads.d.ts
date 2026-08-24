@@ -25,10 +25,9 @@
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountReadOnlyMultisig} IWalletAccountReadOnlyMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInfo} MultisigInfo */
 /**
- * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`, and
- * whether the multisig account exists on-chain.
+ * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`.
  *
- * @typedef {MultisigInfo & { masks: number[], isCreated: boolean }} SolanaMultisigInfo
+ * @typedef {MultisigInfo & { masks: number[] }} SolanaMultisigInfo
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
@@ -651,12 +650,10 @@ export type CompiledTransactionMessage = {
 export type IWalletAccountReadOnlyMultisig = import("@tetherto/wdk-wallet/multisig").IWalletAccountReadOnlyMultisig;
 export type MultisigInfo = import("@tetherto/wdk-wallet/multisig").MultisigInfo;
 /**
- * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`, and
- * whether the multisig account exists on-chain.
+ * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`.
  */
 export type SolanaMultisigInfo = MultisigInfo & {
     masks: number[];
-    isCreated: boolean;
 };
 export type MultisigProposal = import("@tetherto/wdk-wallet/multisig").MultisigProposal;
 /**

@@ -743,7 +743,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         .toEqual([TEST_MULTISIG_PDA, { commitment: 'confirmed', encoding: 'base64' }])
     })
 
-    it('returns address, owners, masks, threshold and isCreated from one read', async () => {
+    it('returns address, owners, masks and threshold from one read', async () => {
       const { account, rpc } = mockAccount(multisigAccountValue({
         members: [{ address: MEMBER_A }, { address: MEMBER_B }],
         threshold: 2
@@ -753,8 +753,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         address: TEST_MULTISIG_PDA,
         owners: [MEMBER_A, MEMBER_B],
         masks: [7, 7],
-        threshold: 2,
-        isCreated: true
+        threshold: 2
       })
       expect(rpcRequests(rpc, 'getAccountInfo')).toHaveLength(1)
     })
@@ -770,8 +769,7 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         address: TEST_MULTISIG_PDA,
         owners: [MEMBER_A, MEMBER_B],
         masks: [7, 7],
-        threshold: 2,
-        isCreated: true
+        threshold: 2
       })
     })
 
@@ -816,32 +814,30 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       expect((await account.getMultisigInfo()).owners).toEqual([MEMBER_A])
     })
 
-    it('reports isCreated false without throwing when the account is missing', async () => {
+    it('returns an empty multisig without throwing when the account is missing', async () => {
       const { account } = mockAccount(null)
 
       expect(await account.getMultisigInfo()).toEqual({
         address: TEST_MULTISIG_PDA,
         owners: [],
         masks: [],
-        threshold: 0,
-        isCreated: false
+        threshold: 0
       })
     })
 
-    it('sets isCreated explicitly rather than leaving it undefined', async () => {
-      // `undefined` is falsy, so an omitted flag would make a real multisig read
-      // as absent to `if (!info.isCreated)`.
+    it('leaves existence to isDeployed rather than reporting it', async () => {
       // The transport is global, so each half configures its own cluster state in turn.
       const { account: missing } = mockAccount(null)
 
-      expect(Object.keys(await missing.getMultisigInfo())).toContain('isCreated')
-      expect((await missing.getMultisigInfo()).isCreated).toBe(false)
+      expect(Object.keys(await missing.getMultisigInfo())).not.toContain('isCreated')
+      expect(await missing.isDeployed()).toBe(false)
 
       const { account: present } = mockAccount(multisigAccountValue({
         members: [{ address: MEMBER_A }]
       }))
 
-      expect((await present.getMultisigInfo()).isCreated).toBe(true)
+      expect(Object.keys(await present.getMultisigInfo())).not.toContain('isCreated')
+      expect(await present.isDeployed()).toBe(true)
     })
 
     it('throws rather than reporting isCreated false for another account type', async () => {

@@ -72,10 +72,9 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountReadOnlyMultisig} IWalletAccountReadOnlyMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInfo} MultisigInfo */
 /**
- * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`, and
- * whether the multisig account exists on-chain.
+ * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`.
  *
- * @typedef {MultisigInfo & { masks: number[], isCreated: boolean }} SolanaMultisigInfo
+ * @typedef {MultisigInfo & { masks: number[] }} SolanaMultisigInfo
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
@@ -491,14 +490,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @returns {Promise<SolanaMultisigInfo>} The multisig info.
    */
   async getMultisigInfo () {
-    const { address: multisigPda, isCreated, threshold, members } = await this._getMultisigAccount()
+    const { address: multisigPda, threshold, members } = await this._getMultisigAccount()
 
     return {
       address: multisigPda,
       owners: members.map((member) => member.address),
       masks: members.map((member) => member.mask),
-      threshold,
-      isCreated
+      threshold
     }
   }
 
@@ -732,7 +730,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       throw new Error('The wallet must be connected to a provider to read proposals.')
     }
 
-    const { address: multisigPda, threshold, isCreated } = await this.getMultisigInfo()
+    const { address: multisigPda, threshold, isCreated } = await this._getMultisigAccount()
 
     if (!isCreated) {
       throw new Error(
@@ -863,7 +861,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    */
   async quotePropose (tx, config) {
     const account = await this._withConfig(config)
-    const { address: multisigPda, owners, isCreated } = await account.getMultisigInfo()
+    const { address: multisigPda, members, isCreated } = await account._getMultisigAccount()
 
     if (!isCreated) {
       throw new Error(
@@ -883,7 +881,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const { fee } = await account._quoteProposal(
       account._vaultTransactionSize(compiled.storedSize),
-      owners.length
+      members.length
     )
 
     return { fee }
@@ -904,7 +902,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     address(transferOptions.recipient)
 
     const account = await this._withConfig(config)
-    const { address: multisigPda, owners, isCreated } = await account.getMultisigInfo()
+    const { address: multisigPda, members, isCreated } = await account._getMultisigAccount()
 
     if (!isCreated) {
       throw new Error(
@@ -927,7 +925,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const { fee } = await account._quoteProposal(
       account._vaultTransactionSize(compiled.storedSize),
-      owners.length
+      members.length
     )
 
     return { fee }
