@@ -2008,10 +2008,30 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       expect(await account.getVaultAddress(3)).toBe(TEST_VAULT_3)
     })
 
-    it('accepts an address and returns it as given', async () => {
+    it('accepts an address that derives from this multisig', async () => {
       const { account } = mockBalanceAccount(0n)
 
       expect(await account.getVaultAddress(TEST_VAULT_3)).toBe(TEST_VAULT_3)
+      expect(await account.getVaultAddress(TEST_VAULT_255)).toBe(TEST_VAULT_255)
+    })
+
+    it('rejects an address that is not a vault of this multisig', async () => {
+      const { account } = mockBalanceAccount(0n)
+
+      await expect(account.getVaultAddress(TEST_MULTISIG_PDA)).rejects.toThrow(
+        `The address ${TEST_MULTISIG_PDA} is not a vault of the multisig ${TEST_MULTISIG_PDA}.`
+      )
+    })
+
+    it('rejects a vault of another multisig', async () => {
+      const { account } = mockBalanceAccount(0n)
+      const { account: other } = mockBalanceAccount(0n, { multisigPdaOrCreateKey: TEST_DERIVED_PDA })
+      const foreignVault = await other.getVaultAddress(0)
+
+      expect(foreignVault).not.toBe(TEST_VAULT_0)
+      await expect(account.getVaultAddress(foreignVault)).rejects.toThrow(
+        `The address ${foreignVault} is not a vault of the multisig ${TEST_MULTISIG_PDA}.`
+      )
     })
 
     it('accepts the full u8 index range', async () => {

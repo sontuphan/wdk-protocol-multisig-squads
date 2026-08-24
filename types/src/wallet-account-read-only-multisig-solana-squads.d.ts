@@ -288,11 +288,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     getNonce(): Promise<bigint>;
     /**
-     * Returns the address of one of the multisig's vaults, where its funds are held.
+     * Returns the address of one of the multisig's vaults, where its funds are held. An address is
+     * accepted only when it derives from this multisig, so a vault of another multisig, or an
+     * unrelated account, is rejected rather than read.
      *
-     * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to use as given (default: 0).
+     * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or the address of one of this multisig's vaults (default: 0).
      * @returns {Promise<string>} The vault address.
-     * @throws {Error} The index must be in range, and the address must be valid base58.
+     * @throws {Error} The index must be in range, and the address must be valid base58 and belong to this multisig.
      */
     getVaultAddress(vaultIndexOrAddress?: number | string): Promise<string>;
     /**
@@ -598,6 +600,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     private _hasDiscriminator;
     /** @private */
     private _withConfig;
+    /** @private */
+    private _getVaultPda;
     /** @private */
     private _getTransactionSeeds;
     /** @private */

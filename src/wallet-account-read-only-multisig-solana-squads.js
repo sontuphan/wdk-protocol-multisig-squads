@@ -557,15 +557,28 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the address of one of the multisig's vaults, where its funds are held.
+   * Returns the address of one of the multisig's vaults, where its funds are held. An address is
+   * accepted only when it derives from this multisig, so a vault of another multisig, or an
+   * unrelated account, is rejected rather than read.
    *
-   * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to use as given (default: 0).
+   * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or the address of one of this multisig's vaults (default: 0).
    * @returns {Promise<string>} The vault address.
-   * @throws {Error} The index must be in range, and the address must be valid base58.
+   * @throws {Error} The index must be in range, and the address must be valid base58 and belong to this multisig.
    */
   async getVaultAddress (vaultIndexOrAddress = DEFAULT.vaultIndex) {
     if (typeof vaultIndexOrAddress === 'string') {
-      return address(vaultIndexOrAddress)
+      const vaultPda = address(vaultIndexOrAddress)
+      const multisigPda = await this.getAddress()
+
+      for (let index = DEFAULT.vaultIndex; index <= MAX.vaultIndex; index++) {
+        if (this._getVaultPda(multisigPda, index) === vaultPda) {
+          return vaultPda
+        }
+      }
+
+      throw new Error(
+        `The address ${vaultIndexOrAddress} is not a vault of the multisig ${multisigPda}.`
+      )
     }
 
     if (
@@ -579,18 +592,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     }
 
     const multisigPda = await this.getAddress()
-
-    const [vaultPda] = getProgramDerivedAddressSync({
-      programAddress: this._programId,
-      seeds: [
-        SEED.prefix,
-        getAddressEncoder().encode(address(multisigPda)),
-        SEED.vault,
-        Uint8Array.of(vaultIndexOrAddress)
-      ]
-    })
-
-    return vaultPda
+    return this._getVaultPda(multisigPda, vaultIndexOrAddress)
   }
 
   /**
@@ -1546,6 +1548,21 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     })
 
     return account
+  }
+
+  /** @private */
+  _getVaultPda (multisigPda, vaultIndex) {
+    const [vaultPda] = getProgramDerivedAddressSync({
+      programAddress: this._programId,
+      seeds: [
+        SEED.prefix,
+        getAddressEncoder().encode(address(multisigPda)),
+        SEED.vault,
+        Uint8Array.of(vaultIndex)
+      ]
+    })
+
+    return vaultPda
   }
 
   /** @private */
