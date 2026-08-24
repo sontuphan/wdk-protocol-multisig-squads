@@ -309,10 +309,9 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   /**
    * Creates a new read-only Solana Squads multisig wallet account.
    *
-   * @param {string | undefined} signerAddress - The signer's address, or undefined for a pure read-only account.
    * @param {SolanaMultisigSquadsReadOnlyConfig} config - The configuration object.
    */
-  constructor (signerAddress, config) {
+  constructor (config) {
     const programId = address(config.programId ?? SQUADS_PROGRAM_ADDRESS)
     const identity = config.multisigPdaOrCreateKey ?? (config.createKeySecret &&
       WalletAccountReadOnlyMultisigSolanaSquads.getCreateKey(config.createKeySecret))
@@ -327,14 +326,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @type {SolanaMultisigSquadsConfig}
      */
     this._config = config
-
-    /**
-     * The signer's address.
-     *
-     * @protected
-     * @type {string | undefined}
-     */
-    this._signerAddress = signerAddress
 
     /**
      * The address of the Squads program to operate against.
@@ -1535,7 +1526,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       }
     }
 
-    const account = new WalletAccountReadOnlyMultisigSolanaSquads(this._signerAddress, {
+    const account = new WalletAccountReadOnlyMultisigSolanaSquads({
       ...this._config,
       ...identity,
       ...config

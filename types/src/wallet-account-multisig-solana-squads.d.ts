@@ -73,6 +73,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     protected _signerAccount: WalletAccountSolana;
     /**
+     * The signer's address.
+     *
+     * @protected
+     * @type {string}
+     */
+    protected _signerAddress: string;
+    /**
      * The derivation path's index of this account.
      *
      * @type {number}

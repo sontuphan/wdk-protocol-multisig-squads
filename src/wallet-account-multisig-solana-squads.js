@@ -111,7 +111,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   constructor (seed, path, config) {
     const signerAccount = new WalletAccountSolana(seed, path, config)
 
-    super(signerAccount._address, config)
+    super(config)
 
     /**
      * The underlying Solana signer account.
@@ -120,6 +120,14 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * @type {WalletAccountSolana}
      */
     this._signerAccount = signerAccount
+
+    /**
+     * The signer's address.
+     *
+     * @protected
+     * @type {string}
+     */
+    this._signerAddress = signerAccount._address
   }
 
   /**
@@ -665,7 +673,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const multisigPdaOrCreateKey = await this.getAddress()
     const { createKeySecret, ...config } = this._config
 
-    return new WalletAccountReadOnlyMultisigSolanaSquads(this._signerAddress, {
+    return new WalletAccountReadOnlyMultisigSolanaSquads({
       ...config,
       multisigPdaOrCreateKey
     })

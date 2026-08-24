@@ -228,10 +228,9 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Creates a new read-only Solana Squads multisig wallet account.
      *
-     * @param {string | undefined} signerAddress - The signer's address, or undefined for a pure read-only account.
      * @param {SolanaMultisigSquadsReadOnlyConfig} config - The configuration object.
      */
-    constructor(signerAddress: string | undefined, config: SolanaMultisigSquadsReadOnlyConfig);
+    constructor(config: SolanaMultisigSquadsReadOnlyConfig);
     /**
      * The multisig Squads configuration. It carries the signing fields too when a signing
      * account owns it, or when one derived this account through `_withConfig`.
@@ -240,13 +239,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @type {SolanaMultisigSquadsConfig}
      */
     protected _config: SolanaMultisigSquadsConfig;
-    /**
-     * The signer's address.
-     *
-     * @protected
-     * @type {string | undefined}
-     */
-    protected _signerAddress: string | undefined;
     /**
      * The address of the Squads program to operate against.
      *
