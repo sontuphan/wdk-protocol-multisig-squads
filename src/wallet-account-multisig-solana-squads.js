@@ -41,14 +41,14 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
 
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */
-/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigAutoExecuteResult} MultisigAutoExecuteResult */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInteractionResult} MultisigInteractionResult */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
- * `MultisigProposal` widened with `transaction` from `MultisigAutoExecuteResult`. On Solana every
+ * `MultisigProposal` widened with `transaction` from `MultisigInteractionResult`. On Solana every
  * call is its own on-chain transaction, so the field is always set: it carries the execution when
  * `status` is `'executed'`, and the call's own submission when it is `'pending'`.
  *
- * @typedef {MultisigProposal & MultisigAutoExecuteResult} SolanaMultisigProposalResult
+ * @typedef {MultisigProposal & MultisigInteractionResult} SolanaMultisigProposalResult
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
 /**

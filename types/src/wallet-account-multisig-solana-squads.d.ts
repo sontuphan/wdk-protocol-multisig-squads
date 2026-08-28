@@ -1,13 +1,13 @@
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */
-/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigAutoExecuteResult} MultisigAutoExecuteResult */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInteractionResult} MultisigInteractionResult */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
- * `MultisigProposal` widened with `transaction` from `MultisigAutoExecuteResult`. On Solana every
+ * `MultisigProposal` widened with `transaction` from `MultisigInteractionResult`. On Solana every
  * call is its own on-chain transaction, so the field is always set: it carries the execution when
  * `status` is `'executed'`, and the call's own submission when it is `'pending'`.
  *
- * @typedef {MultisigProposal & MultisigAutoExecuteResult} SolanaMultisigProposalResult
+ * @typedef {MultisigProposal & MultisigInteractionResult} SolanaMultisigProposalResult
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
 /**
@@ -274,14 +274,14 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 }
 export type IWalletAccountMultisig = import("@tetherto/wdk-wallet/multisig").IWalletAccountMultisig;
 export type IMultisigOwnerManagement = import("@tetherto/wdk-wallet/multisig").IMultisigOwnerManagement;
-export type MultisigAutoExecuteResult = import("@tetherto/wdk-wallet/multisig").MultisigAutoExecuteResult;
+export type MultisigInteractionResult = import("@tetherto/wdk-wallet/multisig").MultisigInteractionResult;
 export type MultisigProposal = import("@tetherto/wdk-wallet/multisig").MultisigProposal;
 /**
- * `MultisigProposal` widened with `transaction` from `MultisigAutoExecuteResult`. On Solana every
+ * `MultisigProposal` widened with `transaction` from `MultisigInteractionResult`. On Solana every
  * call is its own on-chain transaction, so the field is always set: it carries the execution when
  * `status` is `'executed'`, and the call's own submission when it is `'pending'`.
  */
-export type SolanaMultisigProposalResult = MultisigProposal & MultisigAutoExecuteResult;
+export type SolanaMultisigProposalResult = MultisigProposal & MultisigInteractionResult;
 export type MultisigTransactionOptions = import("@tetherto/wdk-wallet/multisig").MultisigTransactionOptions;
 /**
  * `MultisigTransactionOptions` widened with the vault the proposal spends from and the note the
