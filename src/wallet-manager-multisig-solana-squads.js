@@ -18,6 +18,8 @@ import WalletManager, { UnsupportedOperationError } from '@tetherto/wdk-wallet'
 
 import WalletAccountMultisigSolanaSquads from './wallet-account-multisig-solana-squads.js'
 
+import { SIGNATURE_BASE_FEE } from './wallet-account-read-only-multisig-solana-squads.js'
+
 /** @typedef {ReturnType<typeof import('@solana/rpc').createSolanaRpc>} SolanaRpc */
 
 /** @typedef {import('@tetherto/wdk-wallet').FeeRates} FeeRates */
@@ -25,8 +27,6 @@ import WalletAccountMultisigSolanaSquads from './wallet-account-multisig-solana-
 /** @typedef {import('./wallet-account-read-only-multisig-solana-squads.js').SolanaMultisigSquadsConfig} SolanaMultisigSquadsConfig */
 
 const FEE_RATE_MULTIPLIER = { normal: 110n, fast: 200n }
-
-const DEFAULT_BASE_FEE = 5_000n
 
 /**
  * Wallet manager for Solana Squads multisig wallets.
@@ -113,7 +113,7 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
     const fee =
       nonZeroFees.length > 0
         ? nonZeroFees.reduce((max, fee) => (fee > max ? fee : max), 0n)
-        : DEFAULT_BASE_FEE
+        : SIGNATURE_BASE_FEE
 
     return {
       normal: (fee * FEE_RATE_MULTIPLIER.normal) / 100n,

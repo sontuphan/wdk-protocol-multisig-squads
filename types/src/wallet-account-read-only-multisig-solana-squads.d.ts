@@ -25,10 +25,9 @@
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountReadOnlyMultisig} IWalletAccountReadOnlyMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInfo} MultisigInfo */
 /**
- * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`, and
- * whether the multisig account exists on-chain.
+ * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`.
  *
- * @typedef {MultisigInfo & { masks: number[], isCreated: boolean }} SolanaMultisigInfo
+ * @typedef {MultisigInfo & { masks: number[] }} SolanaMultisigInfo
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
@@ -174,6 +173,7 @@ export const SQUADS_PROGRAM_ADDRESS: "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pC
  * @type {{ [K in SquadsTransactionKind]: K }}
  */
 export const TRANSACTION_KIND: { [K in SquadsTransactionKind]: K; };
+export const SIGNATURE_BASE_FEE: bigint;
 export namespace SECRET_SIZE {
     let privateKey: number;
     let keyPair: number;
@@ -229,10 +229,9 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /**
      * Creates a new read-only Solana Squads multisig wallet account.
      *
-     * @param {string | undefined} signerAddress - The signer's address, or undefined for a pure read-only account.
      * @param {SolanaMultisigSquadsReadOnlyConfig} config - The configuration object.
      */
-    constructor(signerAddress: string | undefined, config: SolanaMultisigSquadsReadOnlyConfig);
+    constructor(config: SolanaMultisigSquadsReadOnlyConfig);
     /**
      * The multisig Squads configuration. It carries the signing fields too when a signing
      * account owns it, or when one derived this account through `_withConfig`.
@@ -241,13 +240,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @type {SolanaMultisigSquadsConfig}
      */
     protected _config: SolanaMultisigSquadsConfig;
-    /**
-     * The signer's address.
-     *
-     * @protected
-     * @type {string | undefined}
-     */
-    protected _signerAddress: string | undefined;
     /**
      * The address of the Squads program to operate against.
      *
@@ -290,11 +282,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     getNonce(): Promise<bigint>;
     /**
-     * Returns the address of one of the multisig's vaults, where its funds are held.
+     * Returns the address of one of the multisig's vaults, where its funds are held. An address is
+     * accepted only when it derives from this multisig, so a vault of another multisig, or an
+     * unrelated account, is rejected rather than read.
      *
-     * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to use as given (default: 0).
+     * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or the address of one of this multisig's vaults (default: 0).
      * @returns {Promise<string>} The vault address.
-     * @throws {Error} The index must be in range, and the address must be valid base58.
+     * @throws {Error} The index must be in range, and the address must be valid base58 and belong to this multisig.
      */
     getVaultAddress(vaultIndexOrAddress?: number | string): Promise<string>;
     /**
@@ -601,6 +595,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     /** @private */
     private _withConfig;
     /** @private */
+    private _getVaultPda;
+    /** @private */
     private _getTransactionSeeds;
     /** @private */
     private _decodeMultisigAccount;
@@ -656,12 +652,10 @@ export type CompiledTransactionMessage = {
 export type IWalletAccountReadOnlyMultisig = import("@tetherto/wdk-wallet/multisig").IWalletAccountReadOnlyMultisig;
 export type MultisigInfo = import("@tetherto/wdk-wallet/multisig").MultisigInfo;
 /**
- * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`, and
- * whether the multisig account exists on-chain.
+ * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`.
  */
 export type SolanaMultisigInfo = MultisigInfo & {
     masks: number[];
-    isCreated: boolean;
 };
 export type MultisigProposal = import("@tetherto/wdk-wallet/multisig").MultisigProposal;
 /**

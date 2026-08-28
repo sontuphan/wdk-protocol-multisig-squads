@@ -24,6 +24,9 @@ import WalletAccountReadOnlyMultisigSolanaSquads, {
 } from './wallet-account-read-only-multisig-solana-squads.js'
 import { address, getAddressEncoder } from '@solana/addresses'
 import { getBase64Encoder } from '@solana/codecs'
+import { AccountRole } from '@solana/instructions'
+import { SYSTEM_PROGRAM_ADDRESS } from '@solana-program/system'
+import { ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS } from '@solana-program/address-lookup-table'
 import { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes } from '@solana/signers'
 
 import {
@@ -42,14 +45,14 @@ import LocalSignerCoordinator from './coordinators/local-signer.js'
 
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */
-/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigAutoExecuteResult} MultisigAutoExecuteResult */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInteractionResult} MultisigInteractionResult */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
- * `MultisigProposal` widened with the signature and fee of the transaction that carried the
- * call, plus `transaction` from `MultisigAutoExecuteResult`, which is set only when that same
- * call also executed the proposal.
+ * `MultisigProposal` widened with `transaction` from `MultisigInteractionResult`. On Solana every
+ * call is its own on-chain transaction, so the field is always set: it carries the execution when
+ * `status` is `'executed'`, and the call's own submission when it is `'pending'`.
  *
- * @typedef {MultisigProposal & MultisigAutoExecuteResult & { hash: string, fee: bigint }} SolanaMultisigProposalResult
+ * @typedef {MultisigProposal & MultisigInteractionResult} SolanaMultisigProposalResult
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
 /**
@@ -86,12 +89,6 @@ import LocalSignerCoordinator from './coordinators/local-signer.js'
 export const PERMISSION = { initiate: 1, vote: 2, execute: 4 }
 
 const ALMIGHTY_PERMISSIONS = PERMISSION.initiate | PERMISSION.vote | PERMISSION.execute
-const PROGRAM_ADDRESS = {
-  system: '11111111111111111111111111111111',
-  addressLookupTable: 'AddressLookupTab1e1111111111111111111111111'
-}
-
-const ACCOUNT_ROLE = { readonly: 0, writable: 1, readonlySigner: 2, writableSigner: 3 }
 
 const SEED = { prefix: 'multisig', multisig: 'multisig' }
 
@@ -118,7 +115,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   constructor (seed, path, config) {
     const signerAccount = new WalletAccountSolana(seed, path, config)
 
-    super(signerAccount._address, config)
+    super(config)
 
     /**
      * The underlying Solana signer account.
@@ -286,16 +283,16 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const instruction = {
       programAddress: this._programId,
       accounts: [
-        { address: address(programConfigPda), role: ACCOUNT_ROLE.readonly },
-        { address: address(treasury), role: ACCOUNT_ROLE.writable },
-        { address: address(expectedPda), role: ACCOUNT_ROLE.writable },
+        { address: address(programConfigPda), role: AccountRole.READONLY },
+        { address: address(treasury), role: AccountRole.WRITABLE },
+        { address: address(expectedPda), role: AccountRole.WRITABLE },
         {
           address: createKeySigner.address,
-          role: ACCOUNT_ROLE.readonlySigner,
+          role: AccountRole.READONLY_SIGNER,
           signer: createKeySigner
         },
         this._getRentPayerAccount(signerAddress),
-        { address: address(PROGRAM_ADDRESS.system), role: ACCOUNT_ROLE.readonly }
+        { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY }
       ],
       data: INSTRUCTION.multisigCreateV2.encode({
         configAuthority: null,
@@ -321,7 +318,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {SolanaTransaction} tx - The transaction to propose.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing. `memo` is recorded on chain with the creation.
-   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
+   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    */
   async propose (tx, { vaultIndex = DEFAULT.vaultIndex, ...transactionOptions } = {}) {
     const vaultPda = address(await this.getVaultAddress(vaultIndex))
@@ -338,11 +335,11 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {TransferOptions} transferOptions - The transfer options.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing. `memo` is recorded on chain with the creation.
-   * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
+   * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} The transfer options must be valid, the signer must be allowed to propose, and the quote must stay within `transferMaxFee`.
    * @todo Support Token-2022 (Token Extensions Program), whose associated token accounts this method does not derive.
    */
-  async transfer (transferOptions, { vaultIndex = DEFAULT.vaultIndex, ...transactionOptions } = {}) {
+  async proposeTransfer (transferOptions, { vaultIndex = DEFAULT.vaultIndex, ...transactionOptions } = {}) {
     if (!this._rpc) {
       throw new Error('The wallet must be connected to a provider to propose transfers.')
     }
@@ -369,7 +366,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing; the one error it can surface is a stored message whose address lookup tables can no longer be read, which no longer executes by any route. `vaultIndex` does not bear on a vote.
-   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'`, with the send's own `transaction`, when `autoExecute` ran the execution.
+   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission.
    * @throws {Error} The proposal must be open to this signer's approval, and the RPC request must succeed.
    */
   async approveProposal (proposalId, { memo, autoExecute } = {}) {
@@ -407,13 +404,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     return {
       proposalId: index.toString(),
-      hash,
-      fee,
       confirmations,
       threshold: multisig.threshold,
-      ...execution
-        ? { status: 'executed', transaction: { hash, fee } }
-        : { status: 'pending' }
+      status: execution ? 'executed' : 'pending',
+      transaction: { hash, fee }
     }
   }
 
@@ -448,11 +442,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     return {
       proposalId: index.toString(),
-      hash,
-      fee,
       confirmations: proposal.approved.length - (proposal.approved.includes(signerAddress) ? 1 : 0),
       threshold: multisig.threshold,
-      status: 'pending'
+      status: 'pending',
+      transaction: { hash, fee }
     }
   }
 
@@ -518,7 +511,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {string} ownerAddress - The address of the member to add.
    * @param {SolanaMultisigAddOwnerOptions} [options] - The operation options. `mask` is the member's Squads permissions (default: all three).
-   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
+   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} The addition and the resulting configuration must be valid, the signer must be allowed to propose, and the RPC request must succeed.
    */
   async addOwner (ownerAddress, { mask = ALMIGHTY_PERMISSIONS, threshold } = {}) {
@@ -560,7 +553,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {string} ownerAddress - The address of the member to remove.
    * @param {Partial<MultisigOptions>} [options] - The operation options.
-   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
+   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} The removal and the resulting configuration must be valid, the signer must be allowed to propose, and the RPC request must succeed.
    */
   async removeOwner (ownerAddress, { threshold } = {}) {
@@ -597,7 +590,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {string} oldOwnerAddress - The address of the member to replace.
    * @param {string} newOwnerAddress - The address of the new member.
    * @param {Partial<MultisigOptions>} [options] - The operation options.
-   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
+   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} The swap and the resulting configuration must be valid, the signer must be allowed to propose, and the RPC request must succeed.
    */
   async swapOwner (oldOwnerAddress, newOwnerAddress, { threshold } = {}) {
@@ -651,7 +644,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * Proposes changing the approval threshold of the multisig.
    *
    * @param {number} newThreshold - The new threshold.
-   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
+   * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
    * @throws {Error} The threshold must be valid and not already in force, the signer must be allowed to propose, and the RPC request must succeed.
    */
   async changeThreshold (newThreshold) {
@@ -684,7 +677,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const multisigPdaOrCreateKey = await this.getAddress()
     const { createKeySecret, ...config } = this._config
 
-    return new WalletAccountReadOnlyMultisigSolanaSquads(await this.getSignerAddress(), {
+    return new WalletAccountReadOnlyMultisigSolanaSquads({
       ...config,
       multisigPdaOrCreateKey
     })
@@ -726,7 +719,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   _getRentPayerAccount (signerAddress) {
     return {
       address: address(this._config.rentPayer ?? signerAddress),
-      role: ACCOUNT_ROLE.writableSigner
+      role: AccountRole.WRITABLE_SIGNER
     }
   }
 
@@ -765,15 +758,15 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const rentPayer = this._getRentPayerAccount(signerAddress)
     const creator = rentPayer.address === signerAddress
       ? rentPayer
-      : { address: address(signerAddress), role: ACCOUNT_ROLE.readonlySigner }
-    const systemProgram = { address: address(PROGRAM_ADDRESS.system), role: ACCOUNT_ROLE.readonly }
+      : { address: address(signerAddress), role: AccountRole.READONLY_SIGNER }
+    const systemProgram = { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY }
 
     const instructions = [
       {
         programAddress: this._programId,
         accounts: [
-          { address: address(multisigPda), role: ACCOUNT_ROLE.writable },
-          { address: transactionPda, role: ACCOUNT_ROLE.writable },
+          { address: address(multisigPda), role: AccountRole.WRITABLE },
+          { address: transactionPda, role: AccountRole.WRITABLE },
           creator,
           rentPayer,
           systemProgram
@@ -783,8 +776,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       {
         programAddress: this._programId,
         accounts: [
-          { address: address(multisigPda), role: ACCOUNT_ROLE.readonly },
-          { address: proposalPda, role: ACCOUNT_ROLE.writable },
+          { address: address(multisigPda), role: AccountRole.READONLY },
+          { address: proposalPda, role: AccountRole.WRITABLE },
           creator,
           rentPayer,
           systemProgram
@@ -803,17 +796,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const { hash, fee } = await this._coordinator.sendTransaction({ instructions })
     const executed = extra.length > 0
 
-    const autoExecuteResult = executed
-      ? { status: 'executed', transaction: { hash, fee } }
-      : { status: 'pending' }
-
     return {
       proposalId: index.toString(),
-      hash,
-      fee: fee + rent,
       confirmations: executed ? 1 : 0,
       threshold,
-      ...autoExecuteResult
+      status: executed ? 'executed' : 'pending',
+      transaction: { hash, fee: fee + rent }
     }
   }
 
@@ -841,10 +829,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       {
         programAddress: this._programId,
         accounts: [
-          { address: address(multisig.address), role: ACCOUNT_ROLE.readonly },
-          { address: proposalPda, role: ACCOUNT_ROLE.writable },
-          { address: transactionPda, role: ACCOUNT_ROLE.readonly },
-          { address: address(signerAddress), role: ACCOUNT_ROLE.readonlySigner },
+          { address: address(multisig.address), role: AccountRole.READONLY },
+          { address: proposalPda, role: AccountRole.WRITABLE },
+          { address: transactionPda, role: AccountRole.READONLY },
+          { address: address(signerAddress), role: AccountRole.READONLY_SIGNER },
           ...await this._resolveExecutionAccounts(transaction, vaultPda)
         ],
         data: INSTRUCTION.vaultTransactionExecute.encode()
@@ -907,9 +895,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     return {
       programAddress: this._programId,
       accounts: [
-        { address: address(multisigPda), role: ACCOUNT_ROLE.readonly },
-        { address: address(signerAddress), role: ACCOUNT_ROLE.writableSigner },
-        { address: address(proposalPda), role: ACCOUNT_ROLE.writable }
+        { address: address(multisigPda), role: AccountRole.READONLY },
+        { address: address(signerAddress), role: AccountRole.WRITABLE_SIGNER },
+        { address: address(proposalPda), role: AccountRole.WRITABLE }
       ],
       data: vote.encode({ memo: this._toMemo(memo) })
     }
@@ -971,13 +959,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     return {
       programAddress: this._programId,
       accounts: [
-        { address: address(multisig.address), role: ACCOUNT_ROLE.writable },
-        { address: member, role: ACCOUNT_ROLE.readonlySigner },
-        { address: address(proposal.address), role: ACCOUNT_ROLE.writable },
-        { address: address(transaction.address), role: ACCOUNT_ROLE.readonly },
-        { address: member, role: ACCOUNT_ROLE.writableSigner },
-        { address: address(PROGRAM_ADDRESS.system), role: ACCOUNT_ROLE.readonly },
-        ...spendingLimits.map((spendingLimit) => ({ address: spendingLimit, role: ACCOUNT_ROLE.writable }))
+        { address: address(multisig.address), role: AccountRole.WRITABLE },
+        { address: member, role: AccountRole.READONLY_SIGNER },
+        { address: address(proposal.address), role: AccountRole.WRITABLE },
+        { address: address(transaction.address), role: AccountRole.READONLY },
+        { address: member, role: AccountRole.WRITABLE_SIGNER },
+        { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+        ...spendingLimits.map((spendingLimit) => ({ address: spendingLimit, role: AccountRole.WRITABLE }))
       ],
       data: INSTRUCTION.configTransactionExecute.encode()
     }
@@ -996,10 +984,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     return {
       programAddress: this._programId,
       accounts: [
-        { address: address(multisig.address), role: ACCOUNT_ROLE.readonly },
-        { address: address(proposal.address), role: ACCOUNT_ROLE.writable },
-        { address: address(transaction.address), role: ACCOUNT_ROLE.readonly },
-        { address: address(signerAddress), role: ACCOUNT_ROLE.readonlySigner },
+        { address: address(multisig.address), role: AccountRole.READONLY },
+        { address: address(proposal.address), role: AccountRole.WRITABLE },
+        { address: address(transaction.address), role: AccountRole.READONLY },
+        { address: address(signerAddress), role: AccountRole.READONLY_SIGNER },
         ...await this._resolveExecutionAccounts(transaction, vaultPda)
       ],
       data: INSTRUCTION.vaultTransactionExecute.encode()
@@ -1016,7 +1004,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const lookups = message.addressTableLookups
     const accounts = lookups.map((lookup) => ({
       address: address(lookup.accountKey),
-      role: ACCOUNT_ROLE.readonly
+      role: AccountRole.READONLY
     }))
 
     message.accountKeys.forEach((key, i) => {
@@ -1024,8 +1012,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         (i >= message.numSigners && i - message.numSigners < message.numWritableNonSigners)
       const signer = i < message.numSigners && !signedForByProgram.has(key)
       const role = signer
-        ? (writable ? ACCOUNT_ROLE.writableSigner : ACCOUNT_ROLE.readonlySigner)
-        : (writable ? ACCOUNT_ROLE.writable : ACCOUNT_ROLE.readonly)
+        ? (writable ? AccountRole.WRITABLE_SIGNER : AccountRole.READONLY_SIGNER)
+        : (writable ? AccountRole.WRITABLE : AccountRole.READONLY)
 
       accounts.push({ address: address(key), role })
     })
@@ -1040,8 +1028,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       const addresses = tables.get(lookup.accountKey)
 
       for (const [indexes, role] of [
-        [lookup.writableIndexes, ACCOUNT_ROLE.writable],
-        [lookup.readonlyIndexes, ACCOUNT_ROLE.readonly]
+        [lookup.writableIndexes, AccountRole.WRITABLE],
+        [lookup.readonlyIndexes, AccountRole.READONLY]
       ]) {
         for (const i of indexes) {
           if (!addresses[i]) {
@@ -1069,7 +1057,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const tables = new Map()
 
     value.forEach((account, i) => {
-      if (!account || account.owner !== PROGRAM_ADDRESS.addressLookupTable) {
+      if (!account || account.owner !== ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS) {
         throw new Error(
           `The address lookup table ${keys[i]} does not exist, so the proposal can no longer be executed.`
         )

@@ -22,6 +22,9 @@ import { createSolanaRpc } from '@solana/rpc'
 import { address, getAddressEncoder, isOffCurveAddress } from '@solana/addresses'
 import { getBase58Decoder, getBase58Encoder, getBase64Encoder, getU64Encoder } from '@solana/codecs'
 import { isSignature } from '@solana/keys'
+import { AccountRole } from '@solana/instructions'
+import { SYSTEM_PROGRAM_ADDRESS, getTransferSolInstructionDataEncoder } from '@solana-program/system'
+import { SYSVAR_CLOCK_ADDRESS } from '@solana/sysvars'
 import {
   findAssociatedTokenPda,
   getCreateAssociatedTokenIdempotentInstruction,
@@ -36,7 +39,6 @@ import {
   ACCOUNT_DISCRIMINATOR,
   PROPOSAL_STATUS,
   STORED_TRANSACTION_MESSAGE,
-  SYSTEM_TRANSFER,
   TRANSACTION_MESSAGE
 } from './helpers/layouts.js'
 
@@ -70,10 +72,9 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountReadOnlyMultisig} IWalletAccountReadOnlyMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInfo} MultisigInfo */
 /**
- * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`, and
- * whether the multisig account exists on-chain.
+ * `MultisigInfo` widened with each owner's Squads permission mask, aligned with `owners`.
  *
- * @typedef {MultisigInfo & { masks: number[], isCreated: boolean }} SolanaMultisigInfo
+ * @typedef {MultisigInfo & { masks: number[] }} SolanaMultisigInfo
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
@@ -238,14 +239,6 @@ export const SQUADS_PROGRAM_ADDRESS = 'SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52p
  */
 export const TRANSACTION_KIND = { vault: 'vault', config: 'config', batch: 'batch' }
 
-const PROGRAM_ADDRESS = {
-  default: '11111111111111111111111111111111',
-  system: '11111111111111111111111111111111',
-  clockSysvar: 'SysvarC1ock11111111111111111111111111111111'
-}
-
-const ACCOUNT_ROLE = { readonly: 0, writable: 1, readonlySigner: 2, writableSigner: 3 }
-
 const PROPOSAL_STATUS_LABELS = [
   { name: 'Draft', phrase: 'a draft' },
   { name: 'Active', phrase: 'open for voting' },
@@ -281,7 +274,7 @@ const SEED = {
   ephemeralSigner: 'ephemeral_signer'
 }
 
-const DEFAULT = { vaultIndex: 0, memberCount: 1 }
+const DEFAULT = { vaultIndex: 0, memberCount: 1, authority: SYSTEM_PROGRAM_ADDRESS }
 
 export const SECRET_SIZE = { privateKey: 32, keyPair: 64 }
 
@@ -292,7 +285,7 @@ const MAX = {
   multipleAccounts: 100
 }
 
-const SIGNATURE_BASE_FEE = 5000n
+export const SIGNATURE_BASE_FEE = 5000n
 
 const SLOT_TIME = 400
 
@@ -318,10 +311,9 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   /**
    * Creates a new read-only Solana Squads multisig wallet account.
    *
-   * @param {string | undefined} signerAddress - The signer's address, or undefined for a pure read-only account.
    * @param {SolanaMultisigSquadsReadOnlyConfig} config - The configuration object.
    */
-  constructor (signerAddress, config) {
+  constructor (config) {
     const programId = address(config.programId ?? SQUADS_PROGRAM_ADDRESS)
     const identity = config.multisigPdaOrCreateKey ?? (config.createKeySecret &&
       WalletAccountReadOnlyMultisigSolanaSquads.getCreateKey(config.createKeySecret))
@@ -336,14 +328,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @type {SolanaMultisigSquadsConfig}
      */
     this._config = config
-
-    /**
-     * The signer's address.
-     *
-     * @protected
-     * @type {string | undefined}
-     */
-    this._signerAddress = signerAddress
 
     /**
      * The address of the Squads program to operate against.
@@ -509,14 +493,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @returns {Promise<SolanaMultisigInfo>} The multisig info.
    */
   async getMultisigInfo () {
-    const { address: multisigPda, isCreated, threshold, members } = await this._getMultisigAccount()
+    const { address: multisigPda, threshold, members } = await this._getMultisigAccount()
 
     return {
       address: multisigPda,
       owners: members.map((member) => member.address),
       masks: members.map((member) => member.mask),
-      threshold,
-      isCreated
+      threshold
     }
   }
 
@@ -560,15 +543,28 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Returns the address of one of the multisig's vaults, where its funds are held.
+   * Returns the address of one of the multisig's vaults, where its funds are held. An address is
+   * accepted only when it derives from this multisig, so a vault of another multisig, or an
+   * unrelated account, is rejected rather than read.
    *
-   * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to use as given (default: 0).
+   * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or the address of one of this multisig's vaults (default: 0).
    * @returns {Promise<string>} The vault address.
-   * @throws {Error} The index must be in range, and the address must be valid base58.
+   * @throws {Error} The index must be in range, and the address must be valid base58 and belong to this multisig.
    */
   async getVaultAddress (vaultIndexOrAddress = DEFAULT.vaultIndex) {
     if (typeof vaultIndexOrAddress === 'string') {
-      return address(vaultIndexOrAddress)
+      const vaultPda = address(vaultIndexOrAddress)
+      const multisigPda = await this.getAddress()
+
+      for (let index = DEFAULT.vaultIndex; index <= MAX.vaultIndex; index++) {
+        if (this._getVaultPda(multisigPda, index) === vaultPda) {
+          return vaultPda
+        }
+      }
+
+      throw new Error(
+        `The address ${vaultIndexOrAddress} is not a vault of the multisig ${multisigPda}.`
+      )
     }
 
     if (
@@ -582,18 +578,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     }
 
     const multisigPda = await this.getAddress()
-
-    const [vaultPda] = getProgramDerivedAddressSync({
-      programAddress: this._programId,
-      seeds: [
-        SEED.prefix,
-        getAddressEncoder().encode(address(multisigPda)),
-        SEED.vault,
-        Uint8Array.of(vaultIndexOrAddress)
-      ]
-    })
-
-    return vaultPda
+    return this._getVaultPda(multisigPda, vaultIndexOrAddress)
   }
 
   /**
@@ -748,7 +733,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       throw new Error('The wallet must be connected to a provider to read proposals.')
     }
 
-    const { address: multisigPda, threshold, isCreated } = await this.getMultisigInfo()
+    const { address: multisigPda, threshold, isCreated } = await this._getMultisigAccount()
 
     if (!isCreated) {
       throw new Error(
@@ -879,7 +864,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    */
   async quotePropose (tx, config) {
     const account = await this._withConfig(config)
-    const { address: multisigPda, owners, isCreated } = await account.getMultisigInfo()
+    const { address: multisigPda, members, isCreated } = await account._getMultisigAccount()
 
     if (!isCreated) {
       throw new Error(
@@ -899,7 +884,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const { fee } = await account._quoteProposal(
       account._vaultTransactionSize(compiled.storedSize),
-      owners.length
+      members.length
     )
 
     return { fee }
@@ -920,7 +905,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     address(transferOptions.recipient)
 
     const account = await this._withConfig(config)
-    const { address: multisigPda, owners, isCreated } = await account.getMultisigInfo()
+    const { address: multisigPda, members, isCreated } = await account._getMultisigAccount()
 
     if (!isCreated) {
       throw new Error(
@@ -943,7 +928,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const { fee } = await account._quoteProposal(
       account._vaultTransactionSize(compiled.storedSize),
-      owners.length
+      members.length
     )
 
     return { fee }
@@ -1041,7 +1026,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
 
     const { value } = await this._rpc
       .getMultipleAccounts(
-        [address(multisigPda), proposalPda, transactionPda, address(PROGRAM_ADDRESS.clockSysvar)],
+        [address(multisigPda), proposalPda, transactionPda, SYSVAR_CLOCK_ADDRESS],
         { commitment: this._commitment, encoding: 'base64' }
       )
       .send()
@@ -1049,7 +1034,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     const [multisig, proposal, transaction, clock] = value
 
     if (!clock) {
-      throw new Error(`The clock sysvar ${PROGRAM_ADDRESS.clockSysvar} could not be read.`)
+      throw new Error(`The clock sysvar ${SYSVAR_CLOCK_ADDRESS} could not be read.`)
     }
 
     return {
@@ -1112,12 +1097,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     if (tx && tx.to !== undefined && tx.value !== undefined) {
       return [
         {
-          programAddress: address(PROGRAM_ADDRESS.system),
+          programAddress: SYSTEM_PROGRAM_ADDRESS,
           accounts: [
-            { address: vaultPda, role: ACCOUNT_ROLE.writableSigner },
-            { address: address(tx.to), role: ACCOUNT_ROLE.writable }
+            { address: vaultPda, role: AccountRole.WRITABLE_SIGNER },
+            { address: address(tx.to), role: AccountRole.WRITABLE }
           ],
-          data: SYSTEM_TRANSFER.encode({ lamports: BigInt(tx.value) })
+          data: getTransferSolInstructionDataEncoder().encode({ amount: BigInt(tx.value) })
         }
       ]
     }
@@ -1147,8 +1132,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       }))
 
       for (const account of accounts) {
-        const signs = account.role === ACCOUNT_ROLE.readonlySigner ||
-          account.role === ACCOUNT_ROLE.writableSigner
+        const signs = account.role === AccountRole.READONLY_SIGNER ||
+          account.role === AccountRole.WRITABLE_SIGNER
 
         if (signs && account.address !== vaultPda) {
           throw new ValueError(
@@ -1254,8 +1239,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       for (const account of instruction.accounts) {
         note(
           account.address,
-          account.role === ACCOUNT_ROLE.readonlySigner || account.role === ACCOUNT_ROLE.writableSigner,
-          account.role === ACCOUNT_ROLE.writable || account.role === ACCOUNT_ROLE.writableSigner
+          account.role === AccountRole.READONLY_SIGNER || account.role === AccountRole.WRITABLE_SIGNER,
+          account.role === AccountRole.WRITABLE || account.role === AccountRole.WRITABLE_SIGNER
         )
       }
     }
@@ -1542,13 +1527,28 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       }
     }
 
-    const account = new WalletAccountReadOnlyMultisigSolanaSquads(this._signerAddress, {
+    const account = new WalletAccountReadOnlyMultisigSolanaSquads({
       ...this._config,
       ...identity,
       ...config
     })
 
     return account
+  }
+
+  /** @private */
+  _getVaultPda (multisigPda, vaultIndex) {
+    const [vaultPda] = getProgramDerivedAddressSync({
+      programAddress: this._programId,
+      seeds: [
+        SEED.prefix,
+        getAddressEncoder().encode(address(multisigPda)),
+        SEED.vault,
+        Uint8Array.of(vaultIndex)
+      ]
+    })
+
+    return vaultPda
   }
 
   /** @private */
@@ -1600,7 +1600,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       address: multisigPda,
       isCreated: true,
       // Squads writes the default address rather than an option when the multisig governs itself.
-      configAuthority: configAuthority === PROGRAM_ADDRESS.default ? null : configAuthority,
+      configAuthority: configAuthority === DEFAULT.authority ? null : configAuthority,
       threshold,
       timeLock,
       transactionIndex,

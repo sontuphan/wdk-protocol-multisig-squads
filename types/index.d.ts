@@ -2,7 +2,7 @@ export { default } from "./src/wallet-manager-multisig-solana-squads.js";
 export { default as WalletAccountMultisigSolanaSquads, PERMISSION } from "./src/wallet-account-multisig-solana-squads.js";
 export type MultisigInfo = import("@tetherto/wdk-wallet/multisig").MultisigInfo;
 export type MultisigProposal = import("@tetherto/wdk-wallet/multisig").MultisigProposal;
-export type MultisigAutoExecuteResult = import("@tetherto/wdk-wallet/multisig").MultisigAutoExecuteResult;
+export type MultisigInteractionResult = import("@tetherto/wdk-wallet/multisig").MultisigInteractionResult;
 export type MultisigTransactionOptions = import("@tetherto/wdk-wallet/multisig").MultisigTransactionOptions;
 export type MultisigOptions = import("@tetherto/wdk-wallet/multisig").MultisigOptions;
 export type TransactionResult = import("@tetherto/wdk-wallet").TransactionResult;

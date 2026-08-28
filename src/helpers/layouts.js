@@ -23,6 +23,10 @@
 
 import { getAddressCodec, getAddressDecoder, getAddressEncoder } from '@solana/addresses'
 
+import { getAddressLookupTableDecoder } from '@solana-program/address-lookup-table'
+
+import { getSysvarClockDecoder } from '@solana/sysvars'
+
 import {
   addDecoderSizePrefix,
   addEncoderSizePrefix,
@@ -61,7 +65,6 @@ import {
   getUnionDecoder,
   getUnitEncoder,
   getUtf8Encoder,
-  padLeftDecoder,
   transformDecoder
 } from '@solana/codecs'
 
@@ -71,7 +74,6 @@ import {
 /** @typedef {import('@solana/codecs').FixedSizeDecoder<any>} FixedSizeAnyDecoder */
 /** @typedef {import('@solana/codecs').Encoder<ConfigAction>} ConfigActionEncoder */
 /** @typedef {import('@solana/codecs').Encoder<ConfigAction[]>} ConfigActionsEncoder */
-/** @typedef {import('@solana/codecs').Encoder<{ lamports: bigint }>} SystemTransferEncoder */
 /**
  * A configuration action, as `CONFIG_ACTION_ENCODER` takes it: a `__kind` tag naming the variant
  * and that variant's fields beside it.
@@ -122,10 +124,6 @@ export const PROPOSAL_STATUS = {
   executed: 5,
   cancelled: 6
 }
-
-const SYSTEM_TRANSFER_INSTRUCTION = 2
-
-const LOOKUP_TABLE_HEADER_SIZE = 56
 
 const ADDRESS = getAddressCodec()
 const ADDRESS_ENCODER = getAddressEncoder()
@@ -301,16 +299,6 @@ const MULTISIG_HEADER_FIELDS = [
 ]
 
 /**
- * The data of the System program transfer a native `propose` wraps.
- *
- * @type {SystemTransferEncoder}
- */
-export const SYSTEM_TRANSFER = getHiddenPrefixEncoder(
-  getStructEncoder([['lamports', getU64Encoder()]]),
-  [getConstantEncoder(getU32Encoder().encode(SYSTEM_TRANSFER_INSTRUCTION))]
-)
-
-/**
  * The data of each Squads instruction this package submits, keyed by instruction.
  *
  * @type {SquadsInstructionEncoders}
@@ -414,18 +402,9 @@ export const ACCOUNT = {
     ['creationFee', getU64Decoder()],
     ['treasury', ADDRESS_DECODER]
   ]),
-  // The clock sysvar belongs to the runtime, not to Anchor: it carries no discriminator.
-  clock: getStructDecoder([
-    ['slot', getU64Decoder()],
-    ['epochStartTimestamp', getI64Decoder()],
-    ['epoch', getU64Decoder()],
-    ['leaderScheduleEpoch', getU64Decoder()],
-    ['unixTimestamp', getI64Decoder()]
-  ]),
-  // An address lookup table stores its addresses unprefixed, from the end of its header to the
-  // end of the account.
-  lookupTableAddresses: padLeftDecoder(
-    getArrayDecoder(ADDRESS_DECODER, { size: 'remainder' }),
-    LOOKUP_TABLE_HEADER_SIZE
+  clock: getSysvarClockDecoder(),
+  lookupTableAddresses: transformDecoder(
+    getAddressLookupTableDecoder(),
+    (table) => table.addresses
   )
 }
