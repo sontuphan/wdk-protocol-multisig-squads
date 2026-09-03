@@ -470,7 +470,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @param {Address} vaultPda - The vault the transfer executes from, and the payer of the account it may create.
      * @param {TransferOptions} transferOptions - The transfer options.
      * @returns {Promise<CompilableInstruction[]>} The instructions, in kit's shape.
-     * @throws {NoSuchElementError} The token mint must exist.
+     * @throws {InvalidTokenError} The token must be an existing mint.
      */
     protected _toTransferInstructions(vaultPda: Address, transferOptions: TransferOptions): Promise<CompilableInstruction[]>;
     /**

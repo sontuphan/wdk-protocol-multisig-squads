@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals
 
 import { getBase58Decoder, getBase58Encoder, getBase64Decoder, getBase64Encoder } from '@solana/codecs'
 
-import { NoSuchElementError, NotImplementedError, ProviderRequiredError, UnsupportedOperationError, WdkError } from '@tetherto/wdk-wallet'
+import { InvalidTokenError, NoSuchElementError, NotImplementedError, ProviderRequiredError, UnsupportedOperationError, WdkError } from '@tetherto/wdk-wallet'
 
 import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 
@@ -2502,6 +2502,22 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       await expect(account.quoteTransfer(OPTIONS)).rejects.toThrow(ProviderRequiredError)
       await expect(account.quoteTransfer(OPTIONS))
         .rejects.toThrow('The wallet must be connected to a provider to quote transfer operations.')
+    })
+
+    it('throws an invalid token error when the mint does not exist', async () => {
+      const { account } = mockTransferQuote()
+
+      stubSolanaRpc({
+        getAccountInfo: () => ({
+          context: { slot: 1 },
+          value: multisigAccountValue({ members: [{ address: MEMBER_A }], threshold: 1 })
+        }),
+        getMultipleAccounts: () => ({ context: { slot: 1 }, value: [null, null] })
+      })
+
+      await expect(account.quoteTransfer(OPTIONS)).rejects.toThrow(InvalidTokenError)
+      await expect(account.quoteTransfer(OPTIONS))
+        .rejects.toThrow(`The token mint ${USDC_MINT} does not exist.`)
     })
 
     it('throws on a malformed mint or recipient before any RPC call', async () => {

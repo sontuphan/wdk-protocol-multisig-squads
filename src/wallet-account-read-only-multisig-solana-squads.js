@@ -14,7 +14,7 @@
 
 'use strict'
 
-import { NoSuchElementError, ProviderError, ProviderErrorReason, ProviderRequiredError, UnsupportedOperationError, ValueError, WalletAccountReadOnly } from '@tetherto/wdk-wallet'
+import { InvalidTokenError, NoSuchElementError, ProviderError, ProviderErrorReason, ProviderRequiredError, UnsupportedOperationError, ValueError, WalletAccountReadOnly } from '@tetherto/wdk-wallet'
 
 import FailoverProvider from '@tetherto/wdk-failover-provider'
 
@@ -1164,7 +1164,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {Address} vaultPda - The vault the transfer executes from, and the payer of the account it may create.
    * @param {TransferOptions} transferOptions - The transfer options.
    * @returns {Promise<CompilableInstruction[]>} The instructions, in kit's shape.
-   * @throws {NoSuchElementError} The token mint must exist.
+   * @throws {InvalidTokenError} The token must be an existing mint.
    */
   async _toTransferInstructions (vaultPda, transferOptions) {
     const mint = address(transferOptions.token)
@@ -1185,7 +1185,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     const [mintAccount, destinationAccount] = value
 
     if (!mintAccount) {
-      throw new NoSuchElementError(`The token mint ${mint} does not exist.`)
+      throw new InvalidTokenError(`The token mint ${mint} does not exist.`)
     }
 
     const instructions = []
