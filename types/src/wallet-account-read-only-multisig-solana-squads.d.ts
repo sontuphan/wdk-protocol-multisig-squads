@@ -264,26 +264,21 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      *
      * @returns {Promise<boolean>} Whether the multisig account exists.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the multisig account.
      */
     isDeployed(): Promise<boolean>;
     /**
      * Returns aggregated information about the multisig.
      *
      * @returns {Promise<SolanaMultisigInfo>} The multisig info.
-     * @throws {ValueError} The configured address must hold a Squads multisig.
-     * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the multisig account.
      */
     getMultisigInfo(): Promise<SolanaMultisigInfo>;
     /**
      * Returns the transaction index of the most recently created transaction.
      *
      * @returns {Promise<bigint>} The transaction index.
-     * @throws {NoSuchElementError} The multisig account must exist.
-     * @throws {ValueError} The configured address must hold a Squads multisig.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the multisig account.
+     * @throws {NoSuchElementError} The multisig account must exist.
+     * @throws {ValueError} The account must hold a Squads multisig.
      */
     getNonce(): Promise<bigint>;
     /**
@@ -301,9 +296,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      *
      * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to read as given (default: 0).
      * @returns {Promise<bigint>} The balance in lamports.
-     * @throws {ValueError} The vault must resolve.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the vault's balance.
      */
     getBalance(vaultIndexOrAddress?: number | string): Promise<bigint>;
     /**
@@ -312,9 +305,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @param {string} tokenAddress - The SPL token mint address.
      * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to read as given (default: 0).
      * @returns {Promise<bigint>} The token balance (in base unit).
-     * @throws {ValueError} The mint address must be well-formed, and the vault must resolve.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the associated token account.
      * @todo Support Token-2022 (Token Extensions Program).
      */
     getTokenBalance(tokenAddress: string, vaultIndexOrAddress?: number | string): Promise<bigint>;
@@ -323,9 +314,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      *
      * @param {string} hash - The transaction signature.
      * @returns {Promise<SolanaTransactionReceipt | null>} The receipt, or null if the transaction was not found.
-     * @throws {ValueError} The signature must be 64 base58-encoded bytes.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the transaction.
+     * @throws {ValueError} The signature must be 64 base58-encoded bytes.
      */
     getTransactionReceipt(hash: string): Promise<SolanaTransactionReceipt | null>;
     /**
@@ -338,10 +328,9 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      *
      * @param {string} hash - The transaction signature.
      * @returns {Promise<TransactionReceipt>} The normalized receipt. `fee` is omitted while the transaction is below the account's commitment.
+     * @throws {ProviderRequiredError} The wallet must be connected to a provider.
      * @throws {ValueError} The signature must be 64 base58-encoded bytes.
      * @throws {NoSuchElementError} The cluster must hold a status for the signature.
-     * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the signature status.
      */
     getTransaction(hash: string): Promise<TransactionReceipt>;
     /**
@@ -358,10 +347,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      *
      * @param {(number | bigint | string)[]} proposalIds - The proposal (transaction index) ids.
      * @returns {Promise<Record<string, SolanaMultisigProposal | null>>} For each id, the proposal, or null if no proposal exists at that id.
-     * @throws {ValueError} Every id must be an integer between 0 and `MAX.proposalIndex`, and the configured address must hold a Squads multisig.
-     * @throws {NoSuchElementError} The multisig account must exist.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the multisig and proposal accounts.
+     * @throws {NoSuchElementError} The multisig account must exist.
      */
     getProposals(proposalIds: (number | bigint | string)[]): Promise<Record<string, SolanaMultisigProposal | null>>;
     /**
@@ -369,10 +356,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @returns {Promise<SolanaMultisigProposal | null>} The proposal, or null if no proposal exists at that id.
-     * @throws {ValueError} The id must be an integer between 0 and `MAX.proposalIndex`, and the configured address must hold a Squads multisig.
-     * @throws {NoSuchElementError} The multisig account must exist.
-     * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the multisig and proposal accounts.
      */
     getProposal(proposalId: number | bigint | string): Promise<SolanaMultisigProposal | null>;
     /**
@@ -382,9 +365,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @returns {Promise<boolean>} Whether the proposal can be executed.
-     * @throws {ValueError} The id must be an integer between 0 and `MAX.proposalIndex`, and the configured address must hold a Squads multisig.
-     * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the accounts and the cluster clock.
      */
     isReadyToExecute(proposalId: number | bigint | string): Promise<boolean>;
     /**
@@ -400,10 +380,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      *
      * @param {number} [memberCount] - The number of members the multisig will hold (default: 1).
      * @returns {Promise<Omit<TransactionResult, 'hash'>>} The deploy quote, in lamports.
-     * @throws {ValueError} `memberCount` must be in range.
-     * @throws {NoSuchElementError} The Squads program config account must exist.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the program config and the rent quote.
      */
     quoteDeploy(memberCount?: number): Promise<Omit<TransactionResult, "hash">>;
     /**
@@ -412,10 +389,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @param {SolanaTransaction} tx - The transaction to quote, either arm of `SolanaTransaction`.
      * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged over this account's configuration.
      * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transaction quote, in lamports. Sized from the message the proposal would store, so it is exact for any transaction `propose` accepts.
-     * @throws {ValueError} The transaction must be valid, and the configured address must hold a Squads multisig.
      * @throws {NoSuchElementError} The multisig must exist.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the multisig account and the rent quote.
      */
     quotePropose(tx: SolanaTransaction, config?: SolanaMultisigSquadsConfig): Promise<Omit<TransactionResult, "hash">>;
     /**
@@ -424,10 +399,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @param {TransferOptions} transferOptions - The transfer options.
      * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged over this account's configuration.
      * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transfer quote, in lamports.
-     * @throws {ValueError} The transfer options must be valid, and the configured address must hold a Squads multisig.
-     * @throws {NoSuchElementError} The multisig and the token mint must exist.
+     * @throws {NoSuchElementError} The multisig must exist.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the accounts the transfer is built from.
      * @todo Support Token-2022 (Token Extensions Program).
      */
     quoteTransfer(transferOptions: TransferOptions, config?: SolanaMultisigSquadsConfig): Promise<Omit<TransactionResult, "hash">>;
@@ -436,10 +409,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @returns {Promise<Omit<TransactionResult, 'hash'>>} The execution quote, in lamports.
-     * @throws {ValueError} The id must be an integer between 0 and `MAX.proposalIndex`, and the configured address must hold a Squads multisig.
      * @throws {NoSuchElementError} A proposal must exist at that id.
-     * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the multisig and proposal accounts.
      */
     quoteExecuteProposal(proposalId: number | bigint | string): Promise<Omit<TransactionResult, "hash">>;
     /**
@@ -447,9 +417,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      *
      * @protected
      * @returns {Promise<SquadsMultisigAccount>} The decoded account.
-     * @throws {ValueError} The address must hold a Squads multisig.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the multisig account.
      */
     protected _getMultisigAccount(): Promise<SquadsMultisigAccount>;
     /**
@@ -458,9 +426,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @protected
      * @param {bigint} index - The proposal (transaction index) id.
      * @returns {Promise<Pick<SquadsProposalContext, 'multisig' | 'proposal'>>} The decoded multisig and proposal accounts.
-     * @throws {ValueError} The multisig address must hold a Squads multisig.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the two accounts.
      */
     protected _getMultisigAndProposal(index: bigint): Promise<Pick<SquadsProposalContext, "multisig" | "proposal">>;
     /**
@@ -469,9 +435,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @protected
      * @param {bigint} index - The proposal (transaction index) id.
      * @returns {Promise<SquadsProposalContext>} The decoded accounts and the cluster's current Unix timestamp.
-     * @throws {ValueError} The multisig address must hold a Squads multisig.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the four accounts, the cluster clock among them.
+     * @throws {ProviderError} The provider must serve the cluster clock.
      */
     protected _getMultisigProposalAndTransaction(index: bigint): Promise<SquadsProposalContext>;
     /**
@@ -479,9 +444,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      *
      * @protected
      * @returns {Promise<SquadsProgramConfig>} The program config address, its multisig creation fee, and its treasury address.
-     * @throws {NoSuchElementError} The account must exist and must be a program config.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the program config account.
+     * @throws {NoSuchElementError} The account must exist and must be a program config.
      */
     protected _getProgramConfig(): Promise<SquadsProgramConfig>;
     /**
@@ -506,9 +470,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @param {Address} vaultPda - The vault the transfer executes from, and the payer of the account it may create.
      * @param {TransferOptions} transferOptions - The transfer options.
      * @returns {Promise<CompilableInstruction[]>} The instructions, in kit's shape.
-     * @throws {ValueError} The token and the recipient must be valid addresses.
-     * @throws {NoSuchElementError} The mint must exist.
-     * @throws {ProviderError} The provider must serve the mint and the destination account.
+     * @throws {NoSuchElementError} The token mint must exist.
      */
     protected _toTransferInstructions(vaultPda: Address, transferOptions: TransferOptions): Promise<CompilableInstruction[]>;
     /**
@@ -585,7 +547,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @param {number} memberCount - How many members the multisig holds.
      * @returns {Promise<bigint>} The rent both accounts lock up, in lamports.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the two rent quotes.
      */
     protected _quoteProposalRent(transactionSize: number, memberCount: number): Promise<bigint>;
     /**

@@ -42,7 +42,6 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
      *
      * @returns {Promise<FeeRates>} The fee rates (in lamports).
      * @throws {ProviderRequiredError} A provider must be configured.
-     * @throws {ProviderError} The provider must serve the recent prioritization fees.
      */
     getFeeRates(): Promise<FeeRates>;
 }
