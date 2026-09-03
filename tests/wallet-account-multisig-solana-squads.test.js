@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals'
 
 import { getBase58Decoder, getBase58Encoder, getBase64Decoder } from '@solana/codecs'
 
-import { MaximumFeeExceededError, NoSuchElementError, UnsupportedOperationError, ValueError } from '@tetherto/wdk-wallet'
+import { AssertionError, MaximumFeeExceededError, NoSuchElementError, UnsupportedOperationError, ValueError } from '@tetherto/wdk-wallet'
 
 import { AccountNotOwnerError, ThresholdNotMetError } from '@tetherto/wdk-wallet/multisig'
 
@@ -2719,6 +2719,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
         const { account } = await executingAccount({ transaction: accountValue(data) })
 
+        await expect(account.executeProposal(3)).rejects.toThrow(AssertionError)
         await expect(account.executeProposal(3)).rejects.toThrow(/Unknown Squads config action 99/)
       })
     })
