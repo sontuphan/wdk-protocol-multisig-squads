@@ -62,3 +62,11 @@ export { default } from './src/wallet-manager-multisig-solana-squads.js'
 export { default as WalletAccountReadOnlyMultisigSolanaSquads, SQUADS_PROGRAM_ADDRESS, TRANSACTION_KIND } from './src/wallet-account-read-only-multisig-solana-squads.js'
 
 export { default as WalletAccountMultisigSolanaSquads, PERMISSION } from './src/wallet-account-multisig-solana-squads.js'
+
+// ============================================
+// Re-export the errors this package throws
+// ============================================
+
+export { AccountNotOwnerError, ThresholdNotMetError } from '@tetherto/wdk-wallet/multisig'
+
+export { AssertionError, InvalidTokenError, MaximumFeeExceededError, NoSuchElementError, NotImplementedError, ProviderError, ProviderErrorReason, ProviderRequiredError, UnsupportedOperationError, ValueError, WdkError } from '@tetherto/wdk-wallet'
