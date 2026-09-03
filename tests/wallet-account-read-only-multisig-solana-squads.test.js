@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals
 
 import { getBase58Decoder, getBase58Encoder, getBase64Decoder, getBase64Encoder } from '@solana/codecs'
 
-import { NoSuchElementError, NotImplementedError, UnsupportedOperationError, WdkError } from '@tetherto/wdk-wallet'
+import { NoSuchElementError, NotImplementedError, ProviderRequiredError, UnsupportedOperationError, WdkError } from '@tetherto/wdk-wallet'
 
 import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 
@@ -1863,6 +1863,8 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         multisigPdaOrCreateKey: TEST_MULTISIG_PDA
       })
 
+      await expect(account.getTransaction(DUMMY_SIGNATURE))
+        .rejects.toThrow(ProviderRequiredError)
       await expect(account.getTransaction(DUMMY_SIGNATURE))
         .rejects.toThrow('The wallet must be connected to a provider to retrieve transactions.')
     })

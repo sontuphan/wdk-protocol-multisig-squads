@@ -21,6 +21,8 @@
 // only ever written and accounts only ever read, so each gets an encoder or a decoder rather
 // than a codec. Field names follow this package's own typedefs where the two disagree.
 
+import { ValueError } from '@tetherto/wdk-wallet'
+
 import { getAddressCodec, getAddressDecoder, getAddressEncoder } from '@solana/addresses'
 
 import { getAddressLookupTableDecoder } from '@solana-program/address-lookup-table'
@@ -201,7 +203,7 @@ export const CONFIG_ACTION_DECODER = getUnionDecoder(
     const tag = bytes[offset]
 
     if (tag >= CONFIG_ACTION_VARIANTS.length) {
-      throw new Error(
+      throw new ValueError(
         `Unknown Squads config action ${tag}. This package cannot read config transactions created by a newer program version.`
       )
     }

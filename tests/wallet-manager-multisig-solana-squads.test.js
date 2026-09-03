@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals'
 
-import { ValueError } from '@tetherto/wdk-wallet'
+import { ProviderRequiredError, ValueError } from '@tetherto/wdk-wallet'
 
 import WalletManagerMultisigSolanaSquads, {
   WalletAccountMultisigSolanaSquads
@@ -223,6 +223,7 @@ describe('WalletManagerMultisigSolanaSquads', () => {
     it('should throw error when no RPC connection', async () => {
       const noRpcWallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE)
 
+      await expect(noRpcWallet.getFeeRates()).rejects.toThrow(ProviderRequiredError)
       await expect(noRpcWallet.getFeeRates()).rejects.toThrow(
         'The wallet must be connected to a provider to get fee rates'
       )

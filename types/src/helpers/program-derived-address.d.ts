@@ -5,7 +5,7 @@
  * @param {string} input.programAddress - The program to derive for.
  * @param {(string | Uint8Array)[]} input.seeds - The seeds, strings taken as UTF-8.
  * @returns {Address} The derived address.
- * @throws {Error} There must be at most 16 seeds, each of at most 32 bytes, and the address they hash to must lie off the ed25519 curve.
+ * @throws {ValueError} There must be at most 16 seeds, each of at most 32 bytes, and the address they hash to must lie off the ed25519 curve.
  */
 export function createProgramDerivedAddressSync({ programAddress, seeds }: {
     programAddress: string;
@@ -20,7 +20,7 @@ export function createProgramDerivedAddressSync({ programAddress, seeds }: {
  * @param {string} input.programAddress - The program to derive for.
  * @param {(string | Uint8Array)[]} input.seeds - The seeds, strings taken as UTF-8.
  * @returns {ProgramDerivedAddress} The address and the bump it was found at.
- * @throws {Error} There must be at most 16 seeds, each of at most 32 bytes, and some bump must yield an address off the curve.
+ * @throws {ValueError} There must be at most 16 seeds, each of at most 32 bytes, and some bump must yield an address off the curve.
  */
 export function getProgramDerivedAddressSync({ programAddress, seeds }: {
     programAddress: string;

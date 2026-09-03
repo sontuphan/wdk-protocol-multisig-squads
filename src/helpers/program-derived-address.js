@@ -22,6 +22,8 @@
 // take the result only if it lies off the ed25519 curve. `sha256` comes from `@noble/hashes`,
 // and the curve test from `@solana/addresses`, which is already sync.
 
+import { ValueError } from '@tetherto/wdk-wallet'
+
 import { address, getAddressDecoder, getAddressEncoder, isOffCurveAddress } from '@solana/addresses'
 
 import { sha256 } from '@noble/hashes/sha2.js'
@@ -40,11 +42,11 @@ const MAX = { seeds: 16, seedLength: 32, bump: 255 }
  * @param {string} input.programAddress - The program to derive for.
  * @param {(string | Uint8Array)[]} input.seeds - The seeds, strings taken as UTF-8.
  * @returns {Address} The derived address.
- * @throws {Error} There must be at most 16 seeds, each of at most 32 bytes, and the address they hash to must lie off the ed25519 curve.
+ * @throws {ValueError} There must be at most 16 seeds, each of at most 32 bytes, and the address they hash to must lie off the ed25519 curve.
  */
 export function createProgramDerivedAddressSync ({ programAddress, seeds }) {
   if (seeds.length > MAX.seeds) {
-    throw new Error(`Expected at most ${MAX.seeds} seeds, got ${seeds.length}.`)
+    throw new ValueError(`Expected at most ${MAX.seeds} seeds, got ${seeds.length}.`)
   }
 
   const encoder = new TextEncoder()
@@ -52,7 +54,7 @@ export function createProgramDerivedAddressSync ({ programAddress, seeds }) {
     const bytes = typeof seed === 'string' ? encoder.encode(seed) : seed
 
     if (bytes.length > MAX.seedLength) {
-      throw new Error(
+      throw new ValueError(
         `The seed at index ${index} is ${bytes.length} bytes, above the maximum of ${MAX.seedLength}.`
       )
     }
@@ -65,7 +67,7 @@ export function createProgramDerivedAddressSync ({ programAddress, seeds }) {
   const derived = getAddressDecoder().decode(sha256(concat(parts)))
 
   if (!isOffCurveAddress(derived)) {
-    throw new Error(`The seeds derive ${derived}, which lies on the ed25519 curve.`)
+    throw new ValueError(`The seeds derive ${derived}, which lies on the ed25519 curve.`)
   }
 
   return derived
@@ -80,7 +82,7 @@ export function createProgramDerivedAddressSync ({ programAddress, seeds }) {
  * @param {string} input.programAddress - The program to derive for.
  * @param {(string | Uint8Array)[]} input.seeds - The seeds, strings taken as UTF-8.
  * @returns {ProgramDerivedAddress} The address and the bump it was found at.
- * @throws {Error} There must be at most 16 seeds, each of at most 32 bytes, and some bump must yield an address off the curve.
+ * @throws {ValueError} There must be at most 16 seeds, each of at most 32 bytes, and some bump must yield an address off the curve.
  */
 export function getProgramDerivedAddressSync ({ programAddress, seeds }) {
   for (let bump = MAX.bump; bump > 0; bump--) {
@@ -99,7 +101,7 @@ export function getProgramDerivedAddressSync ({ programAddress, seeds }) {
     }
   }
 
-  throw new Error('No bump seed yields an address off the ed25519 curve.')
+  throw new ValueError('No bump seed yields an address off the ed25519 curve.')
 }
 
 function concat (parts) {
