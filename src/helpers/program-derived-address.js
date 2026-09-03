@@ -36,15 +36,50 @@ const PDA_MARKER = new TextEncoder().encode('ProgramDerivedAddress')
 const MAX = { seeds: 16, seedLength: 32, bump: 255 }
 
 /**
- * Derives a program address from seeds and a bump, the runtime's `create_program_address`.
+ * Derives a program address from seeds and a bump, the runtime's `create_program_address`. There
+ * must be at most 16 seeds, each of at most 32 bytes, both of which a `ValueError` reports.
  *
  * @param {Object} input - The derivation input.
  * @param {string} input.programAddress - The program to derive for.
  * @param {(string | Uint8Array)[]} input.seeds - The seeds, strings taken as UTF-8.
  * @returns {Address} The derived address.
- * @throws {ValueError} There must be at most 16 seeds, each of at most 32 bytes, and the address they hash to must lie off the ed25519 curve.
+ * @throws {ValueError} The address the seeds hash to must lie off the ed25519 curve.
  */
 export function createProgramDerivedAddressSync ({ programAddress, seeds }) {
+  const derived = deriveAddress(programAddress, seeds)
+
+  if (!isOffCurveAddress(derived)) {
+    throw new ValueError(`The seeds derive ${derived}, which lies on the ed25519 curve.`)
+  }
+
+  return derived
+}
+
+/**
+ * Derives the canonical program-derived address for the given seeds, the highest bump whose
+ * address lies off the ed25519 curve. The synchronous counterpart of
+ * `getProgramDerivedAddress` from `@solana/addresses`, returning the same pair. The appended
+ * bump counts toward the limit of 16 seeds, so at most 15 may be given.
+ *
+ * @param {Object} input - The derivation input.
+ * @param {string} input.programAddress - The program to derive for.
+ * @param {(string | Uint8Array)[]} input.seeds - The seeds, strings taken as UTF-8.
+ * @returns {ProgramDerivedAddress} The address and the bump it was found at.
+ * @throws {AssertionError} Some bump must yield an address off the ed25519 curve.
+ */
+export function getProgramDerivedAddressSync ({ programAddress, seeds }) {
+  for (let bump = MAX.bump; bump > 0; bump--) {
+    const derived = deriveAddress(programAddress, [...seeds, Uint8Array.of(bump)])
+
+    if (isOffCurveAddress(derived)) {
+      return [derived, bump]
+    }
+  }
+
+  throw new AssertionError('No bump seed yields an address off the ed25519 curve.')
+}
+
+function deriveAddress (programAddress, seeds) {
   if (seeds.length > MAX.seeds) {
     throw new ValueError(`Expected at most ${MAX.seeds} seeds, got ${seeds.length}.`)
   }
@@ -64,44 +99,7 @@ export function createProgramDerivedAddressSync ({ programAddress, seeds }) {
 
   parts.push(getAddressEncoder().encode(address(programAddress)), PDA_MARKER)
 
-  const derived = getAddressDecoder().decode(sha256(concat(parts)))
-
-  if (!isOffCurveAddress(derived)) {
-    throw new ValueError(`The seeds derive ${derived}, which lies on the ed25519 curve.`)
-  }
-
-  return derived
-}
-
-/**
- * Derives the canonical program-derived address for the given seeds, the highest bump whose
- * address lies off the ed25519 curve. The synchronous counterpart of
- * `getProgramDerivedAddress` from `@solana/addresses`, returning the same pair.
- *
- * @param {Object} input - The derivation input.
- * @param {string} input.programAddress - The program to derive for.
- * @param {(string | Uint8Array)[]} input.seeds - The seeds, strings taken as UTF-8.
- * @returns {ProgramDerivedAddress} The address and the bump it was found at.
- * @throws {AssertionError} Some bump must yield an address off the ed25519 curve.
- */
-export function getProgramDerivedAddressSync ({ programAddress, seeds }) {
-  for (let bump = MAX.bump; bump > 0; bump--) {
-    try {
-      return [
-        createProgramDerivedAddressSync({
-          programAddress,
-          seeds: [...seeds, Uint8Array.of(bump)]
-        }),
-        bump
-      ]
-    } catch (error) {
-      if (!error.message.endsWith('lies on the ed25519 curve.')) {
-        throw error
-      }
-    }
-  }
-
-  throw new AssertionError('No bump seed yields an address off the ed25519 curve.')
+  return getAddressDecoder().decode(sha256(concat(parts)))
 }
 
 function concat (parts) {
