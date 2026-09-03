@@ -2372,6 +2372,16 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
 
       await expect(account.quotePropose(TX)).rejects.toThrow('503 Service Unavailable')
     })
+
+    it('throws without a provider, before reading the multisig', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads({
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA
+      })
+
+      await expect(account.quotePropose(TX)).rejects.toThrow(ProviderRequiredError)
+      await expect(account.quotePropose(TX))
+        .rejects.toThrow('The wallet must be connected to a provider to quote transactions.')
+    })
   })
 
   describe('quoteTransfer', () => {
@@ -2482,6 +2492,16 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
       const rent = (128n + 251n) * 6960n + (128n + 262n) * 6960n
 
       expect(fee - rent).toBe(5000n)
+    })
+
+    it('throws without a provider, before reading the multisig', async () => {
+      const account = new WalletAccountReadOnlyMultisigSolanaSquads({
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA
+      })
+
+      await expect(account.quoteTransfer(OPTIONS)).rejects.toThrow(ProviderRequiredError)
+      await expect(account.quoteTransfer(OPTIONS))
+        .rejects.toThrow('The wallet must be connected to a provider to quote transfer operations.')
     })
 
     it('throws on a malformed mint or recipient before any RPC call', async () => {

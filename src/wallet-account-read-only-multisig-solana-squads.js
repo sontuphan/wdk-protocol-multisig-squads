@@ -860,21 +860,22 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {SolanaTransaction} tx - The transaction to quote, either arm of `SolanaTransaction`.
    * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged over this account's configuration.
    * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transaction quote, in lamports. Sized from the message the proposal would store, so it is exact for any transaction `propose` accepts.
-   * @throws {NoSuchElementError} The multisig must exist.
    * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+   * @throws {NoSuchElementError} The multisig must exist.
    */
   async quotePropose (tx, config) {
     const account = await this._withConfig(config)
+
+    if (!account._rpc) {
+      throw new ProviderRequiredError('The wallet must be connected to a provider to quote transactions.')
+    }
+
     const { address: multisigPda, members, isCreated } = await account._getMultisigAccount()
 
     if (!isCreated) {
       throw new NoSuchElementError(
         `The multisig account ${multisigPda} does not exist. Deploy it before quoting transactions.`
       )
-    }
-
-    if (!account._rpc) {
-      throw new ProviderRequiredError('The wallet must be connected to a provider to quote transactions.')
     }
 
     const vaultPda = address(await account.getVaultAddress(DEFAULT.vaultIndex))
@@ -897,16 +898,20 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {TransferOptions} transferOptions - The transfer options.
    * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged over this account's configuration.
    * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transfer quote, in lamports.
-   * @throws {NoSuchElementError} The multisig must exist.
    * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+   * @throws {NoSuchElementError} The multisig must exist.
    * @todo Support Token-2022 (Token Extensions Program).
    */
   async quoteTransfer (transferOptions, config) {
-    // Read before the first request, so a malformed argument is reported without a round trip.
     address(transferOptions.token)
     address(transferOptions.recipient)
 
     const account = await this._withConfig(config)
+
+    if (!account._rpc) {
+      throw new ProviderRequiredError('The wallet must be connected to a provider to quote transfer operations.')
+    }
+
     const { address: multisigPda, members, isCreated } = await account._getMultisigAccount()
 
     if (!isCreated) {
@@ -915,14 +920,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       )
     }
 
-    if (!account._rpc) {
-      throw new ProviderRequiredError('The wallet must be connected to a provider to quote transfer operations.')
-    }
-
     const vaultPda = address(await account.getVaultAddress(DEFAULT.vaultIndex))
-
-    // Compiled rather than taken from a constant, so the quote cannot drift from the message
-    // `transfer` goes on to store.
     const compiled = account._compileTransactionMessage(
       vaultPda,
       await account._toTransferInstructions(vaultPda, transferOptions)
@@ -1177,8 +1175,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       findAssociatedTokenPda({ mint, owner: recipient, tokenProgram: TOKEN_PROGRAM_ADDRESS })
     ])
 
-    // One request for the two accounts that decide whether the transfer can be built at all and
-    // what shape it takes.
     const { value } = await this._rpc
       .getMultipleAccounts([mint, destination], {
         commitment: this._commitment,

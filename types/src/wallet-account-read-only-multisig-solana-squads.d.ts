@@ -389,8 +389,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @param {SolanaTransaction} tx - The transaction to quote, either arm of `SolanaTransaction`.
      * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged over this account's configuration.
      * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transaction quote, in lamports. Sized from the message the proposal would store, so it is exact for any transaction `propose` accepts.
-     * @throws {NoSuchElementError} The multisig must exist.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+     * @throws {NoSuchElementError} The multisig must exist.
      */
     quotePropose(tx: SolanaTransaction, config?: SolanaMultisigSquadsConfig): Promise<Omit<TransactionResult, "hash">>;
     /**
@@ -399,8 +399,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      * @param {TransferOptions} transferOptions - The transfer options.
      * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged over this account's configuration.
      * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transfer quote, in lamports.
-     * @throws {NoSuchElementError} The multisig must exist.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+     * @throws {NoSuchElementError} The multisig must exist.
      * @todo Support Token-2022 (Token Extensions Program).
      */
     quoteTransfer(transferOptions: TransferOptions, config?: SolanaMultisigSquadsConfig): Promise<Omit<TransactionResult, "hash">>;

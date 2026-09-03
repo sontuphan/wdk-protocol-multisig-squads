@@ -274,7 +274,6 @@ export const STORED_TRANSACTION_MESSAGE = getStructEncoder([
   ]))]
 ])
 
-// The decoder side of the same stored format.
 const STORED_TRANSACTION_MESSAGE_DECODER = getStructDecoder([
   ['numSigners', getU8Decoder()],
   ['numWritableSigners', getU8Decoder()],
