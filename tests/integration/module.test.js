@@ -145,8 +145,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       expect(await account.isDeployed()).toBe(true)
       expect(await account.getMultisigInfo()).toMatchObject({
         owners: expect.arrayContaining(signers),
-        threshold: 1,
-        isCreated: true
+        threshold: 1
       })
       expect(await account.getNonce()).toBe(0n)
     })
@@ -165,7 +164,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       const info = await accounts[0].getMultisigInfo()
 
       expect(sorted(info.owners)).toEqual(sorted(signers))
-      expect(info).toMatchObject({ masks: [7, 7], threshold: 2, isCreated: true })
+      expect(info).toMatchObject({ masks: [7, 7], threshold: 2 })
     })
 
     it('holds funds in the vault rather than the multisig account', async () => {
@@ -743,7 +742,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       const { accounts } = multisig
       const proposal = await propose(multisig)
 
-      await expect(accounts[0].executeProposal(proposal.proposalId)).rejects.toThrow(/open for voting/)
+      await expect(accounts[0].executeProposal(proposal.proposalId)).rejects.toThrow(/holds 0 of the 2 approvals it needs to execute/)
     })
 
     it('refuses to execute a proposal twice', async () => {
@@ -1072,8 +1071,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       expect(await account.getMultisigInfo()).toMatchObject({
         owners: [],
         masks: [],
-        threshold: 0,
-        isCreated: false
+        threshold: 0
       })
     })
 
