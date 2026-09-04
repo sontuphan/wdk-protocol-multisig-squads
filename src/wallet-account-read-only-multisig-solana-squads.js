@@ -14,7 +14,7 @@
 
 'use strict'
 
-import { NoSuchElementError, UnsupportedOperationError, ValueError, WalletAccountReadOnly } from '@tetherto/wdk-wallet'
+import { InvalidTokenError, NoSuchElementError, ProviderError, ProviderErrorReason, ProviderRequiredError, UnsupportedOperationError, ValueError, WalletAccountReadOnly } from '@tetherto/wdk-wallet'
 
 import FailoverProvider from '@tetherto/wdk-failover-provider'
 
@@ -360,11 +360,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {string | Uint8Array} createKeySecret - The secret, base58 or raw bytes.
    * @returns {Uint8Array} The secret's bytes, either 32 or 64 of them.
-   * @throws {Error} The secret must be given, and must be 32 or 64 bytes.
+   * @throws {ValueError} The secret must be given, and must be 32 or 64 bytes.
    */
   static toCreateKeySecretBytes (createKeySecret) {
     if (!createKeySecret) {
-      throw new Error(
+      throw new ValueError(
         'A `createKeySecret` is required to create a multisig. Provide it in the configuration.'
       )
     }
@@ -374,7 +374,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       : createKeySecret
 
     if (bytes.length !== SECRET_SIZE.privateKey && bytes.length !== SECRET_SIZE.keyPair) {
-      throw new Error(
+      throw new ValueError(
         `Invalid createKeySecret of ${bytes.length} bytes. Expected ${SECRET_SIZE.privateKey} or ${SECRET_SIZE.keyPair}.`
       )
     }
@@ -456,11 +456,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * Returns whether the multisig account exists on-chain.
    *
    * @returns {Promise<boolean>} Whether the multisig account exists.
-   * @throws {Error} An address must be configured, and the RPC request must succeed.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
    */
   async isDeployed () {
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to check whether the multisig exists.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to check whether the multisig exists.')
     }
 
     const multisigPda = await this.getAddress()
@@ -507,11 +507,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * Returns the transaction index of the most recently created transaction.
    *
    * @returns {Promise<bigint>} The transaction index.
-   * @throws {Error} The multisig account must exist, and the RPC request must succeed.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+   * @throws {NoSuchElementError} The multisig account must exist.
+   * @throws {ValueError} The account must hold a Squads multisig.
    */
   async getNonce () {
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to read the transaction index.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to read the transaction index.')
     }
 
     const multisigPda = await this.getAddress()
@@ -525,7 +527,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       .send()
 
     if (!value) {
-      throw new Error(
+      throw new NoSuchElementError(
         `The multisig account ${multisigPda} does not exist. Deploy it before reading its transaction index.`
       )
     }
@@ -536,7 +538,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       value.owner !== this._programId ||
       !this._hasDiscriminator(data, ACCOUNT_DISCRIMINATOR.multisig)
     ) {
-      throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
+      throw new ValueError(`The account ${multisigPda} is not a Squads multisig.`)
     }
 
     return ACCOUNT.multisigHeader.decode(data).transactionIndex
@@ -549,7 +551,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or the address of one of this multisig's vaults (default: 0).
    * @returns {Promise<string>} The vault address.
-   * @throws {Error} The index must be in range, and the address must be valid base58 and belong to this multisig.
+   * @throws {ValueError} The index must be in range, and the address must be valid base58 and belong to this multisig.
    */
   async getVaultAddress (vaultIndexOrAddress = DEFAULT.vaultIndex) {
     if (typeof vaultIndexOrAddress === 'string') {
@@ -562,7 +564,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
         }
       }
 
-      throw new Error(
+      throw new ValueError(
         `The address ${vaultIndexOrAddress} is not a vault of the multisig ${multisigPda}.`
       )
     }
@@ -572,7 +574,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       vaultIndexOrAddress < DEFAULT.vaultIndex ||
       vaultIndexOrAddress > MAX.vaultIndex
     ) {
-      throw new Error(
+      throw new ValueError(
         `Invalid vault index ${vaultIndexOrAddress}. It must be an integer between ${DEFAULT.vaultIndex} and ${MAX.vaultIndex}.`
       )
     }
@@ -586,11 +588,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to read as given (default: 0).
    * @returns {Promise<bigint>} The balance in lamports.
-   * @throws {Error} The vault must resolve, and the RPC request must succeed.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
    */
   async getBalance (vaultIndexOrAddress = DEFAULT.vaultIndex) {
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to retrieve balances.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to retrieve balances.')
     }
 
     const vaultPda = await this.getVaultAddress(vaultIndexOrAddress)
@@ -608,12 +610,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {string} tokenAddress - The SPL token mint address.
    * @param {number | string} [vaultIndexOrAddress] - A vault index between 0 and `MAX.vaultIndex`, or a vault address to read as given (default: 0).
    * @returns {Promise<bigint>} The token balance (in base unit).
-   * @throws {Error} The mint address must be well-formed, and the RPC request must succeed.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
    * @todo Support Token-2022 (Token Extensions Program).
    */
   async getTokenBalance (tokenAddress, vaultIndexOrAddress = DEFAULT.vaultIndex) {
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to retrieve token balances.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to retrieve token balances.')
     }
 
     const mint = address(tokenAddress)
@@ -641,12 +643,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {string} hash - The transaction signature.
    * @returns {Promise<SolanaTransactionReceipt | null>} The receipt, or null if the transaction was not found.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
    * @throws {ValueError} The signature must be 64 base58-encoded bytes.
-   * @throws {Error} The wallet must be connected to a provider, and the RPC request must succeed.
    */
   async getTransactionReceipt (hash) {
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to retrieve transaction receipts.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to retrieve transaction receipts.')
     }
 
     if (!isSignature(hash)) {
@@ -672,13 +674,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {string} hash - The transaction signature.
    * @returns {Promise<TransactionReceipt>} The normalized receipt. `fee` is omitted while the transaction is below the account's commitment.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
    * @throws {ValueError} The signature must be 64 base58-encoded bytes.
    * @throws {NoSuchElementError} The cluster must hold a status for the signature.
-   * @throws {Error} The wallet must be connected to a provider, and the RPC request must succeed.
    */
   async getTransaction (hash) {
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to retrieve transactions.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to retrieve transactions.')
     }
 
     if (!isSignature(hash)) {
@@ -722,7 +724,8 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {(number | bigint | string)[]} proposalIds - The proposal (transaction index) ids.
    * @returns {Promise<Record<string, SolanaMultisigProposal | null>>} For each id, the proposal, or null if no proposal exists at that id.
-   * @throws {Error} Every id must be a non-negative integer, and the RPC request must succeed.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+   * @throws {NoSuchElementError} The multisig account must exist.
    */
   async getProposals (proposalIds) {
     if (!proposalIds.length) {
@@ -730,13 +733,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     }
 
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to read proposals.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to read proposals.')
     }
 
     const { address: multisigPda, threshold, isCreated } = await this._getMultisigAccount()
 
     if (!isCreated) {
-      throw new Error(
+      throw new NoSuchElementError(
         `The multisig account ${multisigPda} does not exist. Deploy it before reading its proposals.`
       )
     }
@@ -835,13 +838,13 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @param {number} [memberCount] - The number of members the multisig will hold (default: 1).
    * @returns {Promise<Omit<TransactionResult, 'hash'>>} The deploy quote, in lamports.
-   * @throws {Error} `memberCount` must be in range, and the RPC request must succeed.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
    */
   async quoteDeploy (memberCount = DEFAULT.memberCount) {
     this._validateMemberCount(memberCount)
 
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to quote deploy operations.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to quote deploy operations.')
     }
 
     const [programConfig, rent] = await Promise.all([
@@ -860,20 +863,22 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {SolanaTransaction} tx - The transaction to quote, either arm of `SolanaTransaction`.
    * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged over this account's configuration.
    * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transaction quote, in lamports. Sized from the message the proposal would store, so it is exact for any transaction `propose` accepts.
-   * @throws {Error} The multisig must exist, and the RPC request must succeed.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+   * @throws {NoSuchElementError} The multisig must exist.
    */
   async quotePropose (tx, config) {
     const account = await this._withConfig(config)
+
+    if (!account._rpc) {
+      throw new ProviderRequiredError('The wallet must be connected to a provider to quote transactions.')
+    }
+
     const { address: multisigPda, members, isCreated } = await account._getMultisigAccount()
 
     if (!isCreated) {
-      throw new Error(
+      throw new NoSuchElementError(
         `The multisig account ${multisigPda} does not exist. Deploy it before quoting transactions.`
       )
-    }
-
-    if (!account._rpc) {
-      throw new Error('The wallet must be connected to a provider to quote transactions.')
     }
 
     const vaultPda = address(await account.getVaultAddress(DEFAULT.vaultIndex))
@@ -896,31 +901,29 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {TransferOptions} transferOptions - The transfer options.
    * @param {SolanaMultisigSquadsConfig} [config] - An optional config override, merged over this account's configuration.
    * @returns {Promise<Omit<TransactionResult, 'hash'>>} The transfer quote, in lamports.
-   * @throws {Error} The transfer options must be valid, the multisig must exist, and the RPC request must succeed.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+   * @throws {NoSuchElementError} The multisig must exist.
    * @todo Support Token-2022 (Token Extensions Program).
    */
   async quoteTransfer (transferOptions, config) {
-    // Read before the first request, so a malformed argument is reported without a round trip.
     address(transferOptions.token)
     address(transferOptions.recipient)
 
     const account = await this._withConfig(config)
+
+    if (!account._rpc) {
+      throw new ProviderRequiredError('The wallet must be connected to a provider to quote transfer operations.')
+    }
+
     const { address: multisigPda, members, isCreated } = await account._getMultisigAccount()
 
     if (!isCreated) {
-      throw new Error(
+      throw new NoSuchElementError(
         `The multisig account ${multisigPda} does not exist. Deploy it before quoting transfers.`
       )
     }
 
-    if (!account._rpc) {
-      throw new Error('The wallet must be connected to a provider to quote transfer operations.')
-    }
-
     const vaultPda = address(await account.getVaultAddress(DEFAULT.vaultIndex))
-
-    // Compiled rather than taken from a constant, so the quote cannot drift from the message
-    // `transfer` goes on to store.
     const compiled = account._compileTransactionMessage(
       vaultPda,
       await account._toTransferInstructions(vaultPda, transferOptions)
@@ -959,11 +962,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @protected
    * @returns {Promise<SquadsMultisigAccount>} The decoded account.
-   * @throws {Error} The address must hold a Squads account, and the RPC request must succeed.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
    */
   async _getMultisigAccount () {
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to read the multisig account.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to read the multisig account.')
     }
 
     const multisigPda = await this.getAddress()
@@ -984,11 +987,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @protected
    * @param {bigint} index - The proposal (transaction index) id.
    * @returns {Promise<Pick<SquadsProposalContext, 'multisig' | 'proposal'>>} The decoded multisig and proposal accounts.
-   * @throws {Error} The multisig address must hold a Squads account, and the RPC request must succeed.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
    */
   async _getMultisigAndProposal (index) {
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to read the multisig and its proposals.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to read the multisig and its proposals.')
     }
 
     const multisigPda = await this.getAddress()
@@ -1013,11 +1016,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @protected
    * @param {bigint} index - The proposal (transaction index) id.
    * @returns {Promise<SquadsProposalContext>} The decoded accounts and the cluster's current Unix timestamp.
-   * @throws {Error} The multisig address must hold a Squads account, and the RPC request must succeed.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+   * @throws {ProviderError} The provider must serve the cluster clock.
    */
   async _getMultisigProposalAndTransaction (index) {
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to read the multisig and its proposals.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to read the multisig and its proposals.')
     }
 
     const multisigPda = await this.getAddress()
@@ -1034,7 +1038,9 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     const [multisig, proposal, transaction, clock] = value
 
     if (!clock) {
-      throw new Error(`The clock sysvar ${SYSVAR_CLOCK_ADDRESS} could not be read.`)
+      throw new ProviderError(`The clock sysvar ${SYSVAR_CLOCK_ADDRESS} could not be read.`, {
+        reason: ProviderErrorReason.INTERNAL_SERVER_ERROR
+      })
     }
 
     return {
@@ -1050,11 +1056,12 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    *
    * @protected
    * @returns {Promise<SquadsProgramConfig>} The program config address, its multisig creation fee, and its treasury address.
-   * @throws {Error} The account must exist and must be a program config.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+   * @throws {NoSuchElementError} The account must exist and must be a program config.
    */
   async _getProgramConfig () {
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to read the Squads program config.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to read the Squads program config.')
     }
 
     const [programConfigPda] = getProgramDerivedAddressSync({
@@ -1072,7 +1079,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     const data = value && getBase64Encoder().encode(value.data[0])
 
     if (!data || !this._hasDiscriminator(data, ACCOUNT_DISCRIMINATOR.programConfig)) {
-      throw new Error(
+      throw new NoSuchElementError(
         `The Squads program config account ${programConfigPda} could not be read.`
       )
     }
@@ -1160,7 +1167,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {Address} vaultPda - The vault the transfer executes from, and the payer of the account it may create.
    * @param {TransferOptions} transferOptions - The transfer options.
    * @returns {Promise<CompilableInstruction[]>} The instructions, in kit's shape.
-   * @throws {Error} The token and the recipient must be valid addresses, the mint must exist, and the RPC request must succeed.
+   * @throws {InvalidTokenError} The token must be an existing mint.
    */
   async _toTransferInstructions (vaultPda, transferOptions) {
     const mint = address(transferOptions.token)
@@ -1171,8 +1178,6 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       findAssociatedTokenPda({ mint, owner: recipient, tokenProgram: TOKEN_PROGRAM_ADDRESS })
     ])
 
-    // One request for the two accounts that decide whether the transfer can be built at all and
-    // what shape it takes.
     const { value } = await this._rpc
       .getMultipleAccounts([mint, destination], {
         commitment: this._commitment,
@@ -1183,7 +1188,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
     const [mintAccount, destinationAccount] = value
 
     if (!mintAccount) {
-      throw new Error(`The token mint ${mint} does not exist.`)
+      throw new InvalidTokenError(`The token mint ${mint} does not exist.`)
     }
 
     const instructions = []
@@ -1290,11 +1295,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @protected
    * @param {number} memberCount - How many members the multisig would hold.
    * @returns {void} Nothing; throws when the count is out of range.
-   * @throws {Error} The count must be an integer between 1 and 65,535.
+   * @throws {ValueError} The count must be an integer between 1 and 65,535.
    */
   _validateMemberCount (memberCount) {
     if (!Number.isInteger(memberCount) || memberCount < 1 || memberCount > MAX.memberCount) {
-      throw new Error(
+      throw new ValueError(
         `Invalid member count ${memberCount}. It must be an integer between 1 and ${MAX.memberCount}.`
       )
     }
@@ -1368,11 +1373,11 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @param {number} transactionSize - The size of the transaction account, in bytes.
    * @param {number} memberCount - How many members the multisig holds.
    * @returns {Promise<bigint>} The rent both accounts lock up, in lamports.
-   * @throws {Error} The wallet must be connected to a provider, and the RPC request must succeed.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
    */
   async _quoteProposalRent (transactionSize, memberCount) {
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to quote account rent.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to quote account rent.')
     }
 
     const proposalSize = SIZE.proposalBase + SIZE.proposalMember * memberCount
@@ -1391,10 +1396,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @protected
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @returns {bigint} The transaction index.
-   * @throws {Error} The id must be an integer between 0 and `MAX.proposalIndex`.
+   * @throws {ValueError} The id must be an integer between 0 and `MAX.proposalIndex`.
    */
   _toProposalIndex (proposalId) {
-    const invalid = new Error(
+    const invalid = new ValueError(
       `Invalid proposal id ${String(proposalId)}. It must be an integer between 0 and ${MAX.proposalIndex}.`
     )
 
@@ -1583,7 +1588,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
       account.owner !== this._programId ||
       !this._hasDiscriminator(data, ACCOUNT_DISCRIMINATOR.multisig)
     ) {
-      throw new Error(`The account ${multisigPda} is not a Squads multisig.`)
+      throw new ValueError(`The account ${multisigPda} is not a Squads multisig.`)
     }
 
     const {

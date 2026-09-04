@@ -18,7 +18,9 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals'
 
 import { getBase58Decoder, getBase58Encoder, getBase64Decoder } from '@solana/codecs'
 
-import { NoSuchElementError, UnsupportedOperationError, ValueError } from '@tetherto/wdk-wallet'
+import { AssertionError, MaximumFeeExceededError, NoSuchElementError, UnsupportedOperationError, ValueError } from '@tetherto/wdk-wallet'
+
+import { AccountNotOwnerError, ThresholdNotMetError } from '@tetherto/wdk-wallet/multisig'
 
 import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 
@@ -770,6 +772,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         config: { createMaxFee: 1000n }
       })
 
+      await expect(account.deploy()).rejects.toThrow(MaximumFeeExceededError)
       await expect(account.deploy()).rejects.toThrow(/maximum fee/)
       expect(sendTransaction).not.toHaveBeenCalled()
     })
@@ -1006,6 +1009,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       // Mask 2 is vote-only: a member, but without the permission to initiate.
       const { account, sendTransaction } = await proposingAccount({ mask: 2 })
 
+      await expect(account.propose(TX)).rejects.toThrow(AccountNotOwnerError)
       await expect(account.propose(TX)).rejects.toThrow(/does not hold the permission/)
       expect(sendTransaction).not.toHaveBeenCalled()
     })
@@ -2469,7 +2473,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     })
 
     it.each([
-      ['open for voting', 1],
       ['a draft', 0],
       ['rejected', 2],
       ['executed', 5]
@@ -2477,6 +2480,16 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const { account, sendTransaction } = await executingAccount({ proposal: { status } })
 
       await expect(account.executeProposal(3)).rejects.toThrow(/rather than approved/)
+      expect(sendTransaction).not.toHaveBeenCalled()
+    })
+
+    it('throws a threshold not met error when the proposal is still open for voting', async () => {
+      const { account, sendTransaction } = await executingAccount({ proposal: { status: 1 } })
+
+      await expect(account.executeProposal(3)).rejects.toThrow(ThresholdNotMetError)
+      await expect(account.executeProposal(3)).rejects.toThrow(
+        'The proposal 3 holds 0 of the 1 approvals it needs to execute.'
+      )
       expect(sendTransaction).not.toHaveBeenCalled()
     })
 
@@ -2707,6 +2720,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
         const { account } = await executingAccount({ transaction: accountValue(data) })
 
+        await expect(account.executeProposal(3)).rejects.toThrow(AssertionError)
         await expect(account.executeProposal(3)).rejects.toThrow(/Unknown Squads config action 99/)
       })
     })
@@ -2831,6 +2845,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         config: { transferMaxFee: 1000n }
       })
 
+      await expect(account.proposeTransfer(OPTIONS)).rejects.toThrow(MaximumFeeExceededError)
       await expect(account.proposeTransfer(OPTIONS)).rejects.toThrow(/maximum fee/)
       expect(sendTransaction).not.toHaveBeenCalled()
     })

@@ -14,7 +14,7 @@
 
 'use strict'
 
-import WalletManager, { UnsupportedOperationError } from '@tetherto/wdk-wallet'
+import WalletManager, { ProviderRequiredError, UnsupportedOperationError } from '@tetherto/wdk-wallet'
 
 import WalletAccountMultisigSolanaSquads from './wallet-account-multisig-solana-squads.js'
 
@@ -97,11 +97,11 @@ export default class WalletManagerMultisigSolanaSquads extends WalletManager {
    * Returns the current fee rates.
    *
    * @returns {Promise<FeeRates>} The fee rates (in lamports).
-   * @throws {Error} A provider must be configured, and the RPC request must succeed.
+   * @throws {ProviderRequiredError} A provider must be configured.
    */
   async getFeeRates () {
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to get fee rates.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to get fee rates.')
     }
 
     const fees = await this._rpc.getRecentPrioritizationFees().send()

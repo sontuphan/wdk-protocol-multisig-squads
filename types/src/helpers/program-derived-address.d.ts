@@ -1,11 +1,12 @@
 /**
- * Derives a program address from seeds and a bump, the runtime's `create_program_address`.
+ * Derives a program address from seeds and a bump, the runtime's `create_program_address`. There
+ * must be at most 16 seeds, each of at most 32 bytes, both of which a `ValueError` reports.
  *
  * @param {Object} input - The derivation input.
  * @param {string} input.programAddress - The program to derive for.
  * @param {(string | Uint8Array)[]} input.seeds - The seeds, strings taken as UTF-8.
  * @returns {Address} The derived address.
- * @throws {Error} There must be at most 16 seeds, each of at most 32 bytes, and the address they hash to must lie off the ed25519 curve.
+ * @throws {ValueError} The address the seeds hash to must lie off the ed25519 curve.
  */
 export function createProgramDerivedAddressSync({ programAddress, seeds }: {
     programAddress: string;
@@ -14,13 +15,14 @@ export function createProgramDerivedAddressSync({ programAddress, seeds }: {
 /**
  * Derives the canonical program-derived address for the given seeds, the highest bump whose
  * address lies off the ed25519 curve. The synchronous counterpart of
- * `getProgramDerivedAddress` from `@solana/addresses`, returning the same pair.
+ * `getProgramDerivedAddress` from `@solana/addresses`, returning the same pair. The appended
+ * bump counts toward the limit of 16 seeds, so at most 15 may be given.
  *
  * @param {Object} input - The derivation input.
  * @param {string} input.programAddress - The program to derive for.
  * @param {(string | Uint8Array)[]} input.seeds - The seeds, strings taken as UTF-8.
  * @returns {ProgramDerivedAddress} The address and the bump it was found at.
- * @throws {Error} There must be at most 16 seeds, each of at most 32 bytes, and some bump must yield an address off the curve.
+ * @throws {AssertionError} Some bump must yield an address off the ed25519 curve.
  */
 export function getProgramDerivedAddressSync({ programAddress, seeds }: {
     programAddress: string;

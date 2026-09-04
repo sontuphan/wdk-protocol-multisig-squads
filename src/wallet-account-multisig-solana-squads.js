@@ -14,7 +14,9 @@
 
 'use strict'
 
-import { NoSuchElementError, NotImplementedError, UnsupportedOperationError, ValueError } from '@tetherto/wdk-wallet'
+import { MaximumFeeExceededError, NoSuchElementError, NotImplementedError, ProviderRequiredError, UnsupportedOperationError, ValueError } from '@tetherto/wdk-wallet'
+
+import { AccountNotOwnerError, ThresholdNotMetError } from '@tetherto/wdk-wallet/multisig'
 
 import { WalletAccountSolana } from '@tetherto/wdk-wallet-solana'
 
@@ -226,7 +228,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {string[]} [owners] - The member addresses. Defaults to this account's signer.
    * @param {number} [threshold] - The approvals a proposal needs (default: 1).
    * @returns {Promise<Pick<TransactionResult, 'hash'>>} The creation transaction's signature.
-   * @throws {Error} `createKeySecret` must be configured, the arguments must be valid, the multisig must not exist yet, and the quote must stay within `createMaxFee`.
+   * @throws {ValueError} The configured multisig must derive from `createKeySecret`, the owners must be non-empty and unique, and the multisig must not exist yet.
+   * @throws {MaximumFeeExceededError} The quote must stay within `createMaxFee`.
    */
   async deploy (owners, threshold = DEFAULT.threshold) {
     const createKeySigner = await WalletAccountMultisigSolanaSquads.getCreateKeySigner(
@@ -238,7 +241,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     })
 
     if (this._address && this._address !== expectedPda) {
-      throw new Error(
+      throw new ValueError(
         `The configured multisig ${this._address} does not derive from the configured createKeySecret (${expectedPda}).`
       )
     }
@@ -247,13 +250,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const members = owners ?? [signerAddress]
 
     if (!Array.isArray(members) || !members.length) {
-      throw new Error('At least one owner is required to create a multisig.')
+      throw new ValueError('At least one owner is required to create a multisig.')
     }
 
     this._validateMemberCount(members.length)
 
     if (new Set(members).size !== members.length) {
-      throw new Error('The owners of a multisig must be unique.')
+      throw new ValueError('The owners of a multisig must be unique.')
     }
 
     for (const member of members) {
@@ -263,7 +266,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     this._validateThreshold(threshold, members.length)
 
     if (await this.isDeployed()) {
-      throw new Error(`The multisig account ${expectedPda} already exists.`)
+      throw new ValueError(`The multisig account ${expectedPda} already exists.`)
     }
 
     const [{ programConfigPda, treasury, creationFee }, rent] = await Promise.all([
@@ -277,7 +280,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const { createMaxFee } = this._config
 
     if (createMaxFee !== undefined && fee > BigInt(createMaxFee)) {
-      throw new Error('Exceeded maximum fee cost for the deploy operation.')
+      throw new MaximumFeeExceededError('Exceeded maximum fee cost for the deploy operation.')
     }
 
     const instruction = {
@@ -336,12 +339,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {TransferOptions} transferOptions - The transfer options.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `vaultIndex` names the vault to spend from (default: 0). `autoExecute` executes the proposal in the same transaction only when it can: threshold 1, no time lock, and a signer holding both vote and execute. Where it cannot, it goes inert and the result's `status` stays `'pending'` rather than throwing. `memo` is recorded on chain with the creation.
    * @returns {Promise<SolanaMultisigProposalResult>} The transfer proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
-   * @throws {Error} The transfer options must be valid, the signer must be allowed to propose, and the quote must stay within `transferMaxFee`.
+   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+   * @throws {MaximumFeeExceededError} The quote must stay within `transferMaxFee`.
    * @todo Support Token-2022 (Token Extensions Program), whose associated token accounts this method does not derive.
    */
   async proposeTransfer (transferOptions, { vaultIndex = DEFAULT.vaultIndex, ...transactionOptions } = {}) {
     if (!this._rpc) {
-      throw new Error('The wallet must be connected to a provider to propose transfers.')
+      throw new ProviderRequiredError('The wallet must be connected to a provider to propose transfers.')
     }
 
     const vaultPda = address(await this.getVaultAddress(vaultIndex))
@@ -355,7 +359,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const { transferMaxFee } = this._config
 
     if (transferMaxFee !== undefined && fee > BigInt(transferMaxFee)) {
-      throw new Error('Exceeded maximum fee cost for the transfer operation.')
+      throw new MaximumFeeExceededError('Exceeded maximum fee cost for the transfer operation.')
     }
 
     return this._proposeVaultTransaction(compiled, { vaultIndex, ...transactionOptions, multisig, rent })
@@ -367,7 +371,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing; the one error it can surface is a stored message whose address lookup tables can no longer be read, which no longer executes by any route. `vaultIndex` does not bear on a vote.
    * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission.
-   * @throws {Error} The proposal must be open to this signer's approval, and the RPC request must succeed.
+   * @throws {ValueError} The signer must not have approved the proposal already.
    */
   async approveProposal (proposalId, { memo, autoExecute } = {}) {
     const index = this._toProposalIndex(proposalId)
@@ -377,7 +381,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const signerAddress = await this._requireVotableProposal(multisig, proposal, index)
 
     if (proposal.approved.includes(signerAddress)) {
-      throw new Error(`The signer ${signerAddress} has already approved the proposal ${index}.`)
+      throw new ValueError(`The signer ${signerAddress} has already approved the proposal ${index}.`)
     }
 
     const confirmations = proposal.approved.length + 1
@@ -417,7 +421,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. Only `memo` bears on a rejection, as the note recorded on chain with it: a rejected proposal executes nothing, so `autoExecute` is inert here whatever the votes say.
    * @returns {Promise<SolanaMultisigProposalResult>} The rejection result.
-   * @throws {Error} The proposal must be open to this signer's rejection, and the RPC request must succeed.
+   * @throws {ValueError} The signer must not have rejected the proposal already.
    */
   async rejectProposal (proposalId, { memo } = {}) {
     const index = this._toProposalIndex(proposalId)
@@ -425,7 +429,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const signerAddress = await this._requireVotableProposal(multisig, proposal, index)
 
     if (proposal.rejected.includes(signerAddress)) {
-      throw new Error(`The signer ${signerAddress} has already rejected the proposal ${index}.`)
+      throw new ValueError(`The signer ${signerAddress} has already rejected the proposal ${index}.`)
     }
 
     const instruction = this._buildProposalVoteInstruction(
@@ -454,9 +458,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @returns {Promise<TransactionResult>} The execution transaction's result.
-   * @throws {NoSuchElementError} A proposal must exist at that id.
-   * @throws {ValueError} The proposal must have reached the approval threshold, and its transaction account must still be open.
-   * @throws {Error} The proposal must be executable by this signer, and the RPC request must succeed.
+   * @throws {NoSuchElementError} The multisig and a proposal at that id must exist.
+   * @throws {ThresholdNotMetError} The proposal must have reached the approval threshold.
+   * @throws {ValueError} The proposal must be approved rather than in another status, its time lock must have elapsed, and its transaction account must still be open.
    */
   async executeProposal (proposalId) {
     const index = this._toProposalIndex(proposalId)
@@ -464,7 +468,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       await this._getMultisigProposalAndTransaction(index)
 
     if (!multisig.isCreated) {
-      throw new Error(
+      throw new NoSuchElementError(
         `The multisig account ${multisig.address} does not exist. Deploy it before executing proposals.`
       )
     }
@@ -479,6 +483,12 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       )
     }
 
+    if (proposal.status === PROPOSAL_STATUS.active) {
+      throw new ThresholdNotMetError(
+        `The proposal ${index} holds ${proposal.approved.length} of the ${multisig.threshold} approvals it needs to execute.`
+      )
+    }
+
     if (proposal.status !== PROPOSAL_STATUS.approved) {
       throw new ValueError(
         `The proposal ${index} is ${proposal.statusPhrase} rather than approved and ready to execute.`
@@ -488,7 +498,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const remaining = BigInt(multisig.timeLock) - (now - proposal.statusTimestamp)
 
     if (remaining > 0n) {
-      throw new Error(
+      throw new ValueError(
         `The proposal ${index} is under a time lock for another ${remaining} seconds.`
       )
     }
@@ -512,13 +522,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {string} ownerAddress - The address of the member to add.
    * @param {SolanaMultisigAddOwnerOptions} [options] - The operation options. `mask` is the member's Squads permissions (default: all three).
    * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
-   * @throws {Error} The addition and the resulting configuration must be valid, the signer must be allowed to propose, and the RPC request must succeed.
+   * @throws {ValueError} The permission mask must be valid, and the address must not already be a member.
    */
   async addOwner (ownerAddress, { mask = ALMIGHTY_PERMISSIONS, threshold } = {}) {
     const newOwner = address(ownerAddress)
 
     if (!Number.isInteger(mask) || mask < PERMISSION.initiate || mask > ALMIGHTY_PERMISSIONS) {
-      throw new Error(
+      throw new ValueError(
         `Invalid permission mask ${mask}. It must be an integer between ${PERMISSION.initiate} and ${ALMIGHTY_PERMISSIONS}, a bitwise OR of initiate (${PERMISSION.initiate}), vote (${PERMISSION.vote}) and execute (${PERMISSION.execute}).`
       )
     }
@@ -530,7 +540,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     this._requirePermission(multisig, await this.getSignerAddress(), PERMISSION.initiate)
 
     if (multisig.members.some((member) => member.address === newOwner)) {
-      throw new Error(
+      throw new ValueError(
         `The address ${newOwner} is already a member of the multisig ${multisig.address}.`
       )
     }
@@ -554,7 +564,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {string} ownerAddress - The address of the member to remove.
    * @param {Partial<MultisigOptions>} [options] - The operation options.
    * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
-   * @throws {Error} The removal and the resulting configuration must be valid, the signer must be allowed to propose, and the RPC request must succeed.
+   * @throws {ValueError} The address must be a member of the multisig.
    */
   async removeOwner (ownerAddress, { threshold } = {}) {
     const owner = address(ownerAddress)
@@ -565,7 +575,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     this._requirePermission(multisig, await this.getSignerAddress(), PERMISSION.initiate)
 
     if (!multisig.members.some((member) => member.address === owner)) {
-      throw new Error(
+      throw new ValueError(
         `The address ${owner} is not a member of the multisig ${multisig.address}.`
       )
     }
@@ -591,14 +601,14 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {string} newOwnerAddress - The address of the new member.
    * @param {Partial<MultisigOptions>} [options] - The operation options.
    * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
-   * @throws {Error} The swap and the resulting configuration must be valid, the signer must be allowed to propose, and the RPC request must succeed.
+   * @throws {ValueError} The two addresses must differ, the old one must be a member, and the new one must not be.
    */
   async swapOwner (oldOwnerAddress, newOwnerAddress, { threshold } = {}) {
     const oldOwner = address(oldOwnerAddress)
     const newOwner = address(newOwnerAddress)
 
     if (oldOwner === newOwner) {
-      throw new Error(`Cannot swap the member ${oldOwner} of the multisig for itself.`)
+      throw new ValueError(`Cannot swap the member ${oldOwner} of the multisig for itself.`)
     }
 
     const multisig = await this._getMultisigAccount()
@@ -610,13 +620,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const replaced = multisig.members.find((member) => member.address === oldOwner)
 
     if (!replaced) {
-      throw new Error(
+      throw new ValueError(
         `The address ${oldOwner} is not a member of the multisig ${multisig.address}.`
       )
     }
 
     if (multisig.members.some((member) => member.address === newOwner)) {
-      throw new Error(
+      throw new ValueError(
         `The address ${newOwner} is already a member of the multisig ${multisig.address}.`
       )
     }
@@ -645,7 +655,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {number} newThreshold - The new threshold.
    * @returns {Promise<SolanaMultisigProposalResult>} The proposal result. `transaction.fee` is the network fee plus the rent the transaction and proposal accounts lock up, the same basis the quotes use.
-   * @throws {Error} The threshold must be valid and not already in force, the signer must be allowed to propose, and the RPC request must succeed.
+   * @throws {ValueError} The threshold must not already be in force.
    */
   async changeThreshold (newThreshold) {
     const multisig = await this._getMultisigAccount()
@@ -655,7 +665,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     this._requirePermission(multisig, await this.getSignerAddress(), PERMISSION.initiate)
 
     if (newThreshold === multisig.threshold) {
-      throw new Error(
+      throw new ValueError(
         `The multisig ${multisig.address} already requires ${newThreshold} approvals.`
       )
     }
@@ -735,7 +745,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /** @private */
   _requireDeployed (multisig, action) {
     if (!multisig.isCreated) {
-      throw new Error(
+      throw new NoSuchElementError(
         `The multisig account ${multisig.address} does not exist. Deploy it before ${action}.`
       )
     }
@@ -845,13 +855,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const member = multisig.members.find((candidate) => candidate.address === signerAddress)
 
     if (!member) {
-      throw new Error(
+      throw new AccountNotOwnerError(
         `The signer ${signerAddress} is not a member of the multisig ${multisig.address}.`
       )
     }
 
     if (!(member.mask & mask)) {
-      throw new Error(`The signer ${signerAddress} does not hold the permission.`)
+      throw new AccountNotOwnerError(`The signer ${signerAddress} does not hold the permission.`)
     }
 
     return member
@@ -860,7 +870,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /** @private */
   async _requireVotableProposal (multisig, proposal, index) {
     if (!multisig.isCreated) {
-      throw new Error(
+      throw new NoSuchElementError(
         `The multisig account ${multisig.address} does not exist. Deploy it before voting on proposals.`
       )
     }
@@ -876,13 +886,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
 
     if (proposal.status !== PROPOSAL_STATUS.active) {
-      throw new Error(
+      throw new ValueError(
         `The proposal ${index} is ${proposal.statusPhrase} rather than open for voting.`
       )
     }
 
     if (index <= multisig.staleTransactionIndex) {
-      throw new Error(
+      throw new ValueError(
         `The proposal ${index} was invalidated by a later configuration change and can no longer be voted on.`
       )
     }
@@ -910,7 +920,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
 
     if (typeof memo !== 'string') {
-      throw new Error(`Invalid memo ${memo}. It must be a string.`)
+      throw new ValueError(`Invalid memo ${memo}. It must be a string.`)
     }
 
     return memo
@@ -944,7 +954,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /** @private */
   async _buildConfigExecuteInstruction (multisig, proposal, transaction, signerAddress, index) {
     if (index <= multisig.staleTransactionIndex) {
-      throw new Error(
+      throw new ValueError(
         `The config proposal ${index} was invalidated by a later configuration change and can no longer be executed.`
       )
     }
@@ -1033,7 +1043,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       ]) {
         for (const i of indexes) {
           if (!addresses[i]) {
-            throw new Error(
+            throw new NoSuchElementError(
               `The address lookup table ${lookup.accountKey} holds no address at index ${i}, so the proposal cannot be executed.`
             )
           }
@@ -1058,7 +1068,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     value.forEach((account, i) => {
       if (!account || account.owner !== ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS) {
-        throw new Error(
+        throw new NoSuchElementError(
           `The address lookup table ${keys[i]} does not exist, so the proposal can no longer be executed.`
         )
       }
@@ -1075,7 +1085,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /** @private */
   _requireAutonomous (multisig) {
     if (multisig.configAuthority) {
-      throw new Error(
+      throw new ValueError(
         `The multisig ${multisig.address} is controlled by the configuration authority ${multisig.configAuthority}, which alone can change its members and threshold.`
       )
     }
@@ -1084,7 +1094,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /** @private */
   _validateThreshold (threshold, voterCount) {
     if (!Number.isInteger(threshold) || threshold < 1 || threshold > voterCount) {
-      throw new Error(
+      throw new ValueError(
         `Invalid threshold ${threshold}. It must be an integer between 1 and the number of owners able to vote (${voterCount}).`
       )
     }
@@ -1093,7 +1103,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   /** @private */
   _requireViableMembers (members, threshold, multisigPda) {
     if (!members.length) {
-      throw new Error(`The multisig ${multisigPda} would be left with no members.`)
+      throw new ValueError(`The multisig ${multisigPda} would be left with no members.`)
     }
 
     const required = [
@@ -1104,7 +1114,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     for (const [mask, permission] of required) {
       if (!members.some((member) => member.mask & mask)) {
-        throw new Error(
+        throw new ValueError(
           `The multisig ${multisigPda} would be left with no member able to ${permission}.`
         )
       }
