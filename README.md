@@ -116,9 +116,9 @@ approved and left stuck.
 ## Transactions and Coordinators
 
 Every write this package makes goes through one seam. The account builds the Squads instructions,
-and a **coordinator** signs them and puts them on the cluster. Omit the option and the account signs
-with the member key derived from your seed and broadcasts at once, which is the behaviour the
-package has always had.
+and a **coordinator** signs them and puts them on the cluster. Omit the option and the account gets
+a `LocalSignerCoordinator`, which signs with the member key derived from your seed and broadcasts at
+once, the behaviour the package has always had.
 
 ```javascript
 import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
@@ -136,7 +136,7 @@ class MyCoordinator extends IMultisigCoordinator {
 
   // Erase whatever key material you created. The signer account above belongs to the caller.
   dispose () {
-    this._signerAccount = null
+    this._signerAccount = undefined
   }
 }
 
@@ -217,7 +217,7 @@ npm run test:integration  # against a local validator running the real Squads pr
 
 The integration suite starts and stops its own `solana-test-validator`, so it needs only
 that binary on `PATH`; the Squads program it loads is committed to the repository. See
-[tests/integration/README.md](tests/integration/README.md).
+[tests/integration/fixtures/README.md](tests/integration/fixtures/README.md).
 
 ## Community
 
