@@ -285,15 +285,15 @@ describe('coordinators', () => {
 
       const proposal = await accounts[0].propose({ to: recipient, value: TRANSFER_AMOUNT })
 
-      await confirmTransaction(rpc, proposal.hash)
+      await confirmTransaction(rpc, proposal.transaction.hash)
 
       const first = await accounts[0].approveProposal(proposal.proposalId)
 
-      await confirmTransaction(rpc, first.hash)
+      await confirmTransaction(rpc, first.transaction.hash)
 
       const second = await accounts[1].approveProposal(proposal.proposalId)
 
-      await confirmTransaction(rpc, second.hash)
+      await confirmTransaction(rpc, second.transaction.hash)
 
       const execution = await accounts[1].executeProposal(proposal.proposalId)
 
@@ -305,8 +305,7 @@ describe('coordinators', () => {
         confirmations: 0,
         threshold: 2,
         status: 'pending',
-        hash: proposal.hash,
-        fee: SIGNATURE_FEE + PROPOSAL_RENT
+        transaction: { hash: proposal.transaction.hash, fee: SIGNATURE_FEE + PROPOSAL_RENT }
       })
       expect(execution.fee).toBe(SIGNATURE_FEE)
 
@@ -424,7 +423,7 @@ describe('coordinators', () => {
       const second = await accounts[1].approveProposal(proposal.proposalId)
       const execution = await accounts[1].executeProposal(proposal.proposalId)
 
-      expect(proposal.fee).toBe(SPONSORED_FEE + PROPOSAL_RENT)
+      expect(proposal.transaction.fee).toBe(SPONSORED_FEE + PROPOSAL_RENT)
       expect(first.confirmations).toBe(1)
       expect(second.confirmations).toBe(2)
 
@@ -455,8 +454,8 @@ describe('coordinators', () => {
       const [after] = await balances([sponsor.address])
 
       // `fee` is the network fee plus the rent, and the sponsor paid both halves of it.
-      expect(before - after).toBe(proposal.fee)
-      expect(proposal.fee).toBe(SPONSORED_FEE + PROPOSAL_RENT)
+      expect(before - after).toBe(proposal.transaction.fee)
+      expect(proposal.transaction.fee).toBe(SPONSORED_FEE + PROPOSAL_RENT)
       expect(await balances(signers)).toEqual(membersBefore)
     })
 
@@ -496,7 +495,7 @@ describe('coordinators', () => {
 
       // The account reports what the coordinator told it, and nothing reached the cluster: the
       // account builds instructions, the coordinator alone decides when they land.
-      expect(proposal.hash).toBe(UNBROADCAST_HASH)
+      expect(proposal.transaction.hash).toBe(UNBROADCAST_HASH)
       expect(await pending.getProposal(proposal.proposalId)).toBeNull()
       expect(await pending.getNonce()).toBe(0n)
 
