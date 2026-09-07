@@ -14,6 +14,8 @@
 
 'use strict'
 
+import { InvalidSignerError } from '@tetherto/wdk-wallet'
+
 /** @typedef {import('./index.js').IMultisigCoordinator} IMultisigCoordinator */
 
 /** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
@@ -48,10 +50,14 @@ export default class LocalSignerCoordinator {
    *
    * @param {SolanaTransaction} tx - The unsigned transaction.
    * @returns {Promise<TransactionResult>} The transaction's signature and the fee it paid.
-   * @throws {Error} The coordinator must not have been disposed.
+   * @throws {InvalidSignerError} The coordinator must not have been disposed.
    */
   async sendTransaction (tx) {
-    return this._requireSignerAccount().sendTransaction(tx)
+    if (!this._signerAccount) {
+      throw new InvalidSignerError('The coordinator has been disposed.')
+    }
+
+    return this._signerAccount.sendTransaction(tx)
   }
 
   /**
@@ -61,20 +67,5 @@ export default class LocalSignerCoordinator {
    */
   dispose () {
     this._signerAccount = undefined
-  }
-
-  /**
-   * Returns the signer account, refusing to work once the coordinator has been disposed.
-   *
-   * @protected
-   * @returns {WalletAccountSolana} The member's signer account.
-   * @throws {Error} The coordinator must not have been disposed.
-   */
-  _requireSignerAccount () {
-    if (!this._signerAccount) {
-      throw new Error('The coordinator has been disposed.')
-    }
-
-    return this._signerAccount
   }
 }

@@ -22,7 +22,7 @@ export default class LocalSignerCoordinator implements IMultisigCoordinator {
      *
      * @param {SolanaTransaction} tx - The unsigned transaction.
      * @returns {Promise<TransactionResult>} The transaction's signature and the fee it paid.
-     * @throws {Error} The coordinator must not have been disposed.
+     * @throws {InvalidSignerError} The coordinator must not have been disposed.
      */
     sendTransaction(tx: import("@tetherto/wdk-wallet-solana").SolanaTransaction): Promise<import("@tetherto/wdk-wallet").TransactionResult>;
     /**
@@ -31,13 +31,5 @@ export default class LocalSignerCoordinator implements IMultisigCoordinator {
      * @returns {void}
      */
     dispose(): void;
-    /**
-     * Returns the signer account, refusing to work once the coordinator has been disposed.
-     *
-     * @protected
-     * @returns {WalletAccountSolana} The member's signer account.
-     * @throws {Error} The coordinator must not have been disposed.
-     */
-    protected _requireSignerAccount(): import("@tetherto/wdk-wallet-solana").WalletAccountSolana;
 }
 import { IMultisigCoordinator } from './multisig-coordinator-interface.js';

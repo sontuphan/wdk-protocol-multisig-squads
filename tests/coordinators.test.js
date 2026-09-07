@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals'
 
-import { NotImplementedError } from '@tetherto/wdk-wallet'
+import { InvalidSignerError, NotImplementedError } from '@tetherto/wdk-wallet'
 
 import {
   IMultisigCoordinator,
@@ -58,6 +58,7 @@ describe('LocalSignerCoordinator', () => {
       coordinator.dispose()
 
       // Nothing reaches the signer account: the coordinator no longer holds it.
+      await expect(coordinator.sendTransaction(TRANSACTION)).rejects.toThrow(InvalidSignerError)
       await expect(coordinator.sendTransaction(TRANSACTION)).rejects.toThrow(
         'The coordinator has been disposed.'
       )
