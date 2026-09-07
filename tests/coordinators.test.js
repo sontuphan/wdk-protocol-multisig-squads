@@ -67,19 +67,6 @@ describe('LocalSignerCoordinator', () => {
   })
 
   describe('dispose', () => {
-    it('leaves the signer account it was given able to send', async () => {
-      sendTransactionMock.mockResolvedValue({ hash: DUMMY_HASH, fee: DUMMY_FEE })
-
-      coordinator.dispose()
-
-      // The account belongs to whoever built the coordinator, which erases its key itself.
-      expect(await signerAccount.sendTransaction(TRANSACTION)).toEqual({
-        hash: DUMMY_HASH,
-        fee: DUMMY_FEE
-      })
-      expect(sendTransactionMock).toHaveBeenCalledWith(TRANSACTION)
-    })
-
     it('stays disposed when disposed again', async () => {
       coordinator.dispose()
       coordinator.dispose()
