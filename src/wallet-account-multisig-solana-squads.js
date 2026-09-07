@@ -128,8 +128,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     this._signerAccount = signerAccount
 
     /**
-     * The coordinator every operation is signed and broadcast through. The account builds the
-     * instructions; nothing below this field knows how they reach the cluster.
+     * The coordinator the votes and the execute are signed and broadcast through: the one
+     * transaction other members sign too. The account builds the instructions; nothing below this
+     * field knows how they reach the cluster. A deploy or a proposal is the member's own
+     * transaction and goes straight to the signer account.
      *
      * @protected
      * @type {IMultisigCoordinator}
@@ -310,7 +312,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       })
     }
 
-    const { hash } = await this._coordinator.sendTransaction({ instructions: [instruction] })
+    const { hash } = await this._signerAccount.sendTransaction({ instructions: [instruction] })
 
     return { hash }
   }
@@ -803,7 +805,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     instructions.push(...extra)
 
     const rent = options.rent ?? await this._quoteProposalRent(transactionSize, members.length)
-    const { hash, fee } = await this._coordinator.sendTransaction({ instructions })
+    const { hash, fee } = await this._signerAccount.sendTransaction({ instructions })
     const executed = extra.length > 0
 
     return {

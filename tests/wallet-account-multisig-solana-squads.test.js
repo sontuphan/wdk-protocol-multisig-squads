@@ -400,7 +400,7 @@ async function configuringAccount ({
   })
 
   const sendTransaction = jest.fn(async () => ({ hash: DUMMY_CONFIG_HASH, fee: DUMMY_FEE }))
-  account._coordinator.sendTransaction = sendTransaction
+  account._signerAccount.sendTransaction = sendTransaction
 
   return { account, sendTransaction, rpc }
 }
@@ -655,7 +655,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
 
       const sendTransaction = jest.fn(async () => ({ hash: DUMMY_DEPLOY_HASH, fee: DUMMY_FEE }))
-      account._coordinator.sendTransaction = sendTransaction
+      account._signerAccount.sendTransaction = sendTransaction
 
       return { account, sendTransaction, rpc }
     }
@@ -876,7 +876,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
       const sendTransaction = jest.fn(async () => ({ hash: DUMMY_PROPOSE_HASH, fee: DUMMY_FEE }))
 
-      account._coordinator.sendTransaction = sendTransaction
+      account._signerAccount.sendTransaction = sendTransaction
 
       return { account, sendTransaction, rpc }
     }
@@ -2769,7 +2769,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
 
       const sendTransaction = jest.fn(async () => ({ hash: DUMMY_TRANSFER_HASH, fee: DUMMY_FEE }))
-      account._coordinator.sendTransaction = sendTransaction
+      account._signerAccount.sendTransaction = sendTransaction
 
       return { account, sendTransaction, rpc }
     }
@@ -2951,8 +2951,8 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(await account.getSignerAddress()).toBe(TEST_SIGNER)
     })
 
-    it('proposes through the coordinator', async () => {
-      const { account, coordinator, sent } = await accountWithCoordinator()
+    it('leaves a proposal to the signer account', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
 
       stubSolanaRpc({
         getAccountInfo: () => serveValue(
@@ -2961,13 +2961,17 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         getMinimumBalanceForRentExemption: ([size]) => (128n + BigInt(size)) * 6960n
       })
 
+      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_PROPOSE_HASH, fee: DUMMY_FEE }))
+
+      account._signerAccount.sendTransaction = sendTransaction
+
       const result = await account.propose({ to: OTHER_MEMBER, value: 1n })
 
-      expect(coordinator.sendTransaction).toHaveBeenCalledTimes(1)
-      // A proposal is the create instruction plus the proposal instruction, unsigned and
-      // unbroadcast: everything past this point belongs to the coordinator.
-      expect(sent[0].instructions).toHaveLength(2)
-      expect(result.transaction.hash).toBe(DUMMY_VOTE_HASH)
+      // A proposal is the proposer's own transaction: nobody else signs it, so there is nothing
+      // for a coordinator to collect.
+      expect(coordinator.sendTransaction).not.toHaveBeenCalled()
+      expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(2)
+      expect(result.transaction.hash).toBe(DUMMY_PROPOSE_HASH)
     })
 
     it('approves through the coordinator', async () => {

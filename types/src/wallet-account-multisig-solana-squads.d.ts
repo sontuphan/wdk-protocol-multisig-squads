@@ -74,8 +74,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     protected _signerAccount: WalletAccountSolana;
     /**
-     * The coordinator every operation is signed and broadcast through. The account builds the
-     * instructions; nothing below this field knows how they reach the cluster.
+     * The coordinator the votes and the execute are signed and broadcast through: the one
+     * transaction other members sign too. The account builds the instructions; nothing below this
+     * field knows how they reach the cluster. A deploy or a proposal is the member's own
+     * transaction and goes straight to the signer account.
      *
      * @protected
      * @type {IMultisigCoordinator}
