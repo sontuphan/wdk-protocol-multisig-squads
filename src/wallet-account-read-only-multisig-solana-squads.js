@@ -113,7 +113,7 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
  * charges, and the fee ceilings above which it refuses to submit.
  *
  * @typedef {Object} SolanaMultisigSquadsSigningConfig
- * @property {MultisigCoordinatorFactory} [coordinator] - Builds the coordinator the account signs and broadcasts through, from the member's own signer account (default: a `LocalSignerCoordinator` over that account, which signs and broadcasts at once).
+ * @property {MultisigCoordinatorFactory} [coordinator] - Builds the coordinator the account votes through, from the member's own signer account. Omit it and there is no coordinator: the account casts each vote in its own transaction.
  * @property {string} [rentPayer] - The account charged for the rent the multisig, transaction and proposal accounts lock up (default: the signer). It must sign the transaction by other means, which in practice makes it the fee payer of a sponsoring wallet.
  * @property {number | bigint} [createMaxFee] - The maximum fee amount for the create/deploy operation.
  * @property {number | bigint} [transferMaxFee] - The maximum fee amount for transfers.
@@ -273,6 +273,8 @@ const SEED = {
   spendingLimit: 'spending_limit',
   ephemeralSigner: 'ephemeral_signer'
 }
+
+export const PROPOSAL_DATA_MASK = { multisig: 8, proposal: 4, transaction: 2, now: 1, all: 15 }
 
 const DEFAULT = { vaultIndex: 0, memberCount: 1, authority: SYSTEM_PROGRAM_ADDRESS }
 
@@ -801,8 +803,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    */
   async isReadyToExecute (proposalId) {
     const index = this._toProposalIndex(proposalId)
-    const { multisig, proposal, transaction, now } =
-      await this._getMultisigProposalAndTransaction(index)
+    const { multisig, proposal, transaction, now } = await this._getProposal(index)
 
     if (!multisig.isCreated || !proposal.exists) {
       return false
@@ -946,7 +947,10 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    */
   async quoteExecuteProposal (proposalId) {
     const index = this._toProposalIndex(proposalId)
-    const { multisig, proposal } = await this._getMultisigAndProposal(index)
+    const { multisig, proposal } = await this._getProposal(
+      index,
+      PROPOSAL_DATA_MASK.multisig | PROPOSAL_DATA_MASK.proposal
+    )
 
     if (!proposal.exists) {
       throw new NoSuchElementError(
@@ -982,73 +986,78 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
   }
 
   /**
-   * Reads the multisig and one of its proposals in a single request.
+   * Reads a proposal's context in one request, the parts `mask` names.
    *
    * @protected
-   * @param {bigint} index - The proposal (transaction index) id.
-   * @returns {Promise<Pick<SquadsProposalContext, 'multisig' | 'proposal'>>} The decoded multisig and proposal accounts.
+   * @param {bigint} index - The proposal (transaction index) id. Read only for the parts that need it.
+   * @param {number} [mask] - The parts to read, as the bits `[multisig, proposal, transaction, now]` (default: all four).
+   * @returns {Promise<Partial<SquadsProposalContext>>} The parts asked for, and nothing else.
    * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+   * @throws {ProviderError} The provider must serve the cluster clock, when `now` is asked for.
    */
-  async _getMultisigAndProposal (index) {
+  async _getProposal (index, mask = PROPOSAL_DATA_MASK.all) {
     if (!this._rpc) {
       throw new ProviderRequiredError('The wallet must be connected to a provider to read the multisig and its proposals.')
     }
 
     const multisigPda = await this.getAddress()
-    const proposalPda = this._getProposalPda(multisigPda, index)
+    const parts = []
+
+    if (mask & PROPOSAL_DATA_MASK.multisig) {
+      parts.push({
+        name: 'multisig',
+        target: address(multisigPda),
+        decode: (value) => this._decodeMultisigAccount(multisigPda, value)
+      })
+    }
+
+    if (mask & PROPOSAL_DATA_MASK.proposal) {
+      const proposalPda = this._getProposalPda(multisigPda, index)
+
+      parts.push({
+        name: 'proposal',
+        target: proposalPda,
+        decode: (value) => this._decodeProposalAccount(proposalPda, value)
+      })
+    }
+
+    if (mask & PROPOSAL_DATA_MASK.transaction) {
+      const transactionPda = this._getTransactionPda(multisigPda, index)
+
+      parts.push({
+        name: 'transaction',
+        target: transactionPda,
+        decode: (value) => this._decodeTransactionAccount(transactionPda, value)
+      })
+    }
+
+    if (mask & PROPOSAL_DATA_MASK.now) {
+      parts.push({
+        name: 'now',
+        target: SYSVAR_CLOCK_ADDRESS,
+        decode: (value) => {
+          if (!value) {
+            throw new ProviderError(
+              `The clock sysvar ${SYSVAR_CLOCK_ADDRESS} could not be read.`,
+              { reason: ProviderErrorReason.INTERNAL_SERVER_ERROR }
+            )
+          }
+
+          return ACCOUNT.clock.decode(getBase64Encoder().encode(value.data[0])).unixTimestamp
+        }
+      })
+    }
 
     const { value } = await this._rpc
-      .getMultipleAccounts([address(multisigPda), proposalPda], {
+      .getMultipleAccounts(parts.map(({ target }) => target), {
         commitment: this._commitment,
         encoding: 'base64'
       })
       .send()
 
-    return {
-      multisig: this._decodeMultisigAccount(multisigPda, value[0]),
-      proposal: this._decodeProposalAccount(proposalPda, value[1])
-    }
-  }
-
-  /**
-   * Reads the multisig, a proposal, its backing transaction and the clock in a single request.
-   *
-   * @protected
-   * @param {bigint} index - The proposal (transaction index) id.
-   * @returns {Promise<SquadsProposalContext>} The decoded accounts and the cluster's current Unix timestamp.
-   * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-   * @throws {ProviderError} The provider must serve the cluster clock.
-   */
-  async _getMultisigProposalAndTransaction (index) {
-    if (!this._rpc) {
-      throw new ProviderRequiredError('The wallet must be connected to a provider to read the multisig and its proposals.')
-    }
-
-    const multisigPda = await this.getAddress()
-    const proposalPda = this._getProposalPda(multisigPda, index)
-    const transactionPda = this._getTransactionPda(multisigPda, index)
-
-    const { value } = await this._rpc
-      .getMultipleAccounts(
-        [address(multisigPda), proposalPda, transactionPda, SYSVAR_CLOCK_ADDRESS],
-        { commitment: this._commitment, encoding: 'base64' }
-      )
-      .send()
-
-    const [multisig, proposal, transaction, clock] = value
-
-    if (!clock) {
-      throw new ProviderError(`The clock sysvar ${SYSVAR_CLOCK_ADDRESS} could not be read.`, {
-        reason: ProviderErrorReason.INTERNAL_SERVER_ERROR
-      })
-    }
-
-    return {
-      multisig: this._decodeMultisigAccount(multisigPda, multisig),
-      proposal: this._decodeProposalAccount(proposalPda, proposal),
-      transaction: this._decodeTransactionAccount(transactionPda, transaction),
-      now: ACCOUNT.clock.decode(getBase64Encoder().encode(clock.data[0])).unixTimestamp
-    }
+    return Object.fromEntries(
+      parts.map(({ name, decode }, slot) => [name, decode(value[slot])])
+    )
   }
 
   /**

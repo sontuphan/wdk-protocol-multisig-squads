@@ -14,70 +14,15 @@
 
 'use strict'
 
-import { describe, it, expect, beforeEach, jest } from '@jest/globals'
+import { describe, it, expect, beforeEach } from '@jest/globals'
 
-import { InvalidSignerError, NotImplementedError } from '@tetherto/wdk-wallet'
+import { NotImplementedError } from '@tetherto/wdk-wallet'
 
-import {
-  IMultisigCoordinator,
-  LocalSignerCoordinator
-} from '@tetherto/wdk-protocol-multisig-squads'
-
-// The signer account is the coordinator's only dependency, and it reaches the cluster.
-const sendTransactionMock = jest.fn()
-
-const signerAccount = { sendTransaction: sendTransactionMock }
+import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
 
 const TEST_SIGNER = '3uXqWpwgqKVdiHAwF6Vmu4G4vdQzpR66xjPkz1G7zMKE'
 
 const TRANSACTION = { to: TEST_SIGNER, value: 1000000n }
-
-const DUMMY_HASH = 'deadbeef'
-const DUMMY_FEE = 5000n
-
-describe('LocalSignerCoordinator', () => {
-  let coordinator
-
-  beforeEach(() => {
-    sendTransactionMock.mockReset()
-
-    coordinator = new LocalSignerCoordinator(signerAccount)
-  })
-
-  describe('sendTransaction', () => {
-    it('hands the transaction to the signer account and returns what it reports', async () => {
-      sendTransactionMock.mockResolvedValue({ hash: DUMMY_HASH, fee: DUMMY_FEE })
-
-      const result = await coordinator.sendTransaction(TRANSACTION)
-
-      expect(sendTransactionMock).toHaveBeenCalledWith(TRANSACTION)
-      expect(result).toEqual({ hash: DUMMY_HASH, fee: DUMMY_FEE })
-    })
-
-    it('refuses to send once disposed', async () => {
-      coordinator.dispose()
-
-      // Nothing reaches the signer account: the coordinator no longer holds it.
-      await expect(coordinator.sendTransaction(TRANSACTION)).rejects.toThrow(InvalidSignerError)
-      await expect(coordinator.sendTransaction(TRANSACTION)).rejects.toThrow(
-        'The coordinator has been disposed.'
-      )
-      expect(sendTransactionMock).not.toHaveBeenCalled()
-    })
-  })
-
-  describe('dispose', () => {
-    it('stays disposed when disposed again', async () => {
-      coordinator.dispose()
-      coordinator.dispose()
-
-      // Unlike the signer account it wraps, a second disposal is not an error.
-      await expect(coordinator.sendTransaction(TRANSACTION)).rejects.toThrow(
-        'The coordinator has been disposed.'
-      )
-    })
-  })
-})
 
 describe('IMultisigCoordinator', () => {
   let coordinator
@@ -86,17 +31,15 @@ describe('IMultisigCoordinator', () => {
     coordinator = new IMultisigCoordinator()
   })
 
-  describe('sendTransaction', () => {
+  describe.each([
+    ['submitProposal', 'submitProposal(proposalId, proposal)', '3'],
+    ['getProposal', 'getProposal(proposalId)', '3'],
+    ['confirmProposal', 'confirmProposal(proposal)', TRANSACTION]
+  ])('%s', (method, signature, argument) => {
     it('is left to the implementation', async () => {
-      await expect(coordinator.sendTransaction(TRANSACTION)).rejects.toThrow(
-        new NotImplementedError('sendTransaction(tx)')
+      await expect(coordinator[method](argument)).rejects.toThrow(
+        new NotImplementedError(signature)
       )
-    })
-  })
-
-  describe('dispose', () => {
-    it('is left to the implementation', () => {
-      expect(() => coordinator.dispose()).toThrow(new NotImplementedError('dispose()'))
     })
   })
 })

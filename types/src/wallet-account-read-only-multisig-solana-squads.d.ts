@@ -62,7 +62,7 @@
  * charges, and the fee ceilings above which it refuses to submit.
  *
  * @typedef {Object} SolanaMultisigSquadsSigningConfig
- * @property {MultisigCoordinatorFactory} [coordinator] - Builds the coordinator the account signs and broadcasts through, from the member's own signer account (default: a `LocalSignerCoordinator` over that account, which signs and broadcasts at once).
+ * @property {MultisigCoordinatorFactory} [coordinator] - Builds the coordinator the account votes through, from the member's own signer account. Omit it and there is no coordinator: the account casts each vote in its own transaction.
  * @property {string} [rentPayer] - The account charged for the rent the multisig, transaction and proposal accounts lock up (default: the signer). It must sign the transaction by other means, which in practice makes it the fee payer of a sponsoring wallet.
  * @property {number | bigint} [createMaxFee] - The maximum fee amount for the create/deploy operation.
  * @property {number | bigint} [transferMaxFee] - The maximum fee amount for transfers.
@@ -177,6 +177,13 @@ export const SIGNATURE_BASE_FEE: bigint;
 export namespace SECRET_SIZE {
     let privateKey: number;
     let keyPair: number;
+}
+export namespace PROPOSAL_DATA_MASK {
+    let multisig: number;
+    let proposal: number;
+    let transaction: number;
+    let now: number;
+    let all: number;
 }
 /**
  * Read-only Solana Squads multisig wallet account implementation.
@@ -423,24 +430,16 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     protected _getMultisigAccount(): Promise<SquadsMultisigAccount>;
     /**
-     * Reads the multisig and one of its proposals in a single request.
+     * Reads a proposal's context in one request, the parts `mask` names.
      *
      * @protected
-     * @param {bigint} index - The proposal (transaction index) id.
-     * @returns {Promise<Pick<SquadsProposalContext, 'multisig' | 'proposal'>>} The decoded multisig and proposal accounts.
+     * @param {bigint} index - The proposal (transaction index) id. Read only for the parts that need it.
+     * @param {number} [mask] - The parts to read, as the bits `[multisig, proposal, transaction, now]` (default: all four).
+     * @returns {Promise<Partial<SquadsProposalContext>>} The parts asked for, and nothing else.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+     * @throws {ProviderError} The provider must serve the cluster clock, when `now` is asked for.
      */
-    protected _getMultisigAndProposal(index: bigint): Promise<Pick<SquadsProposalContext, "multisig" | "proposal">>;
-    /**
-     * Reads the multisig, a proposal, its backing transaction and the clock in a single request.
-     *
-     * @protected
-     * @param {bigint} index - The proposal (transaction index) id.
-     * @returns {Promise<SquadsProposalContext>} The decoded accounts and the cluster's current Unix timestamp.
-     * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     * @throws {ProviderError} The provider must serve the cluster clock.
-     */
-    protected _getMultisigProposalAndTransaction(index: bigint): Promise<SquadsProposalContext>;
+    protected _getProposal(index: bigint, mask?: number): Promise<Partial<SquadsProposalContext>>;
     /**
      * Reads the Squads program config account.
      *
@@ -720,7 +719,7 @@ export type SolanaMultisigSquadsReadOnlyConfig = {
  */
 export type SolanaMultisigSquadsSigningConfig = {
     /**
-     * - Builds the coordinator the account signs and broadcasts through, from the member's own signer account (default: a `LocalSignerCoordinator` over that account, which signs and broadcasts at once).
+     * - Builds the coordinator the account votes through, from the member's own signer account. Omit it and there is no coordinator: the account casts each vote in its own transaction.
      */
     coordinator?: MultisigCoordinatorFactory;
     /**

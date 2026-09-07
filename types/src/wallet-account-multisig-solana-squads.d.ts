@@ -74,15 +74,14 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     protected _signerAccount: WalletAccountSolana;
     /**
-     * The coordinator the votes and the execute are signed and broadcast through: the one
-     * transaction other members sign too. The account builds the instructions; nothing below this
-     * field knows how they reach the cluster. A deploy or a proposal is the member's own
-     * transaction and goes straight to the signer account.
+     * The coordinator the approvals are signed and collected through, built from the
+     * configuration's factory with the signer account this member votes as. Undefined when the
+     * configuration names none, and then every vote is the member's own transaction.
      *
      * @protected
-     * @type {IMultisigCoordinator}
+     * @type {IMultisigCoordinator | undefined}
      */
-    protected _coordinator: IMultisigCoordinator;
+    protected _coordinator: IMultisigCoordinator | undefined;
     /**
      * The derivation path's index of this account.
      *
@@ -166,7 +165,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
      * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing; the one error it can surface is a stored message whose address lookup tables can no longer be read, which no longer executes by any route. `vaultIndex` does not bear on a vote.
-     * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission.
+     * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission. With a coordinator, the approval joins the ones it is circulating and `confirmations` counts those too, so the count is what the transaction carries rather than what the cluster has recorded.
      * @throws {ValueError} The signer must not have approved the proposal already.
      */
     approveProposal(proposalId: number | bigint | string, { memo, autoExecute }?: SolanaMultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
@@ -174,7 +173,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * Rejects a pending transaction proposal.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
-     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. Only `memo` bears on a rejection, as the note recorded on chain with it: a rejected proposal executes nothing, so `autoExecute` is inert here whatever the votes say.
+     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. Only `memo` bears on a rejection, as the note recorded on chain with it: a rejected proposal executes nothing, so `autoExecute` is inert here whatever the votes say. A rejection is the member's own transaction, broadcast at once: it never reaches a coordinator, which only ever collects approvals.
      * @returns {Promise<SolanaMultisigProposalResult>} The rejection result.
      * @throws {ValueError} The signer must not have rejected the proposal already.
      */

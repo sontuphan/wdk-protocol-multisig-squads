@@ -21,60 +21,70 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
 /** @typedef {import('@tetherto/wdk-wallet-solana').WalletAccountSolana} WalletAccountSolana */
 
 /**
- * Builds the coordinator an account votes and proposes through, from the member's own signer
- * account. One configuration is shared by every account a manager derives, and each of those
- * signs with a different key, so the configuration carries this rather than a coordinator instance.
+ * Builds the coordinator an account votes through, from the member's own signer account. One
+ * configuration is shared by every account a manager derives, and each of those signs with a
+ * different key, so the configuration carries this rather than a coordinator instance.
  *
  * @typedef {(signerAccount: WalletAccountSolana) => IMultisigCoordinator} MultisigCoordinatorFactory
  */
 
 /**
- * Coordinator for getting a Squads transaction signed and broadcast, and the only place a
- * proposal's N+2 transactions can become two.
+ * Coordinator for collecting a proposal's approvals into one transaction, which is what turns the
+ * N+2 transactions a Squads proposal costs into the three of `docs/COORDINATOR.md`.
  *
- * The first of the two creates the proposal and is the proposer's own transaction, which no
- * coordinator sees: it has to land before any approval can name its address. The second is this
- * contract's whole job. It carries the members' `proposalApprove` instructions together with the
- * execute, which is possible because a coordinator may hold what it is given: several members each
- * call `sendTransaction` with their own approval, and one message is compiled once enough of them
- * have arrived. Those calls resolve late, with the hash and fee of the transaction that landed, so
- * the account's public results keep a non-nullable `hash`. Two is the floor, not the count: a
- * message over the 1232-byte limit or a threshold reached in stages splits the second transaction.
+ * Creating a proposal, rejecting it and executing it are each one member's own transaction and
+ * never reach a coordinator. Approvals do. Each member appends its own to the transaction
+ * `getProposal` hands back and has `confirmProposal` sign it; while the approvals in it are short
+ * of the threshold `submitProposal` keeps it circulating, and once they meet it the account
+ * broadcasts it. So a coordinator signs and holds, and never reaches the cluster itself.
  *
- * The account builds the unsigned vote and execute instructions and hands them here; the
- * coordinator owns everything from that point: which signatures the transaction needs, how they
- * are collected, and when it reaches the cluster. The default, `LocalSignerCoordinator`, signs with
- * the local member key and broadcasts at once, which is what the package did before coordinators
- * existed and leaves the bare N+2 shape untouched.
+ * `submitProposal` resolves late, with the hash and fee of the transaction that eventually carries
+ * the approvals it was given, which is what keeps the account's non-nullable `hash` honest. Three
+ * is the floor, not the count: a message over the 1232-byte limit, or a threshold reached in
+ * stages, splits the collecting transaction.
  *
- * Squads keeps its votes on chain, so this contract is about reaching the cluster and nothing else.
- * It deliberately has no proposal storage, no message sharing and no quoting: proposals and votes
- * are read from the chain by the read-only account, and the fee a transaction paid comes back from
- * `sendTransaction`. Nor does it own an identity: the account votes as the member it derived, and
- * `getSignerAddress()` answers from that account, so the two can never disagree.
- *
- * A coordinator disposes what it created. The signer account it is given is owned by the caller,
- * which zeroes that key itself.
+ * The contract deliberately has no proposal storage, no message sharing and no quoting: votes are
+ * on-chain instructions, so the read-only account reads them from the cluster, and all a
+ * coordinator holds is the transaction still being signed. Nor does it own an identity: the account
+ * votes as the member it derived, and `getSignerAddress()` answers from that account, so the two
+ * can never disagree.
  *
  * @interface
  */
 export class IMultisigCoordinator {
   /**
-   * Signs a transaction and broadcasts it, resolving once it has reached the cluster.
+   * Takes the partially signed transaction a proposal's votes are accumulating in, to keep
+   * circulating among the members while it is short of the threshold. Resolving late is the point:
+   * the promise settles when whoever completes the threshold broadcasts it, which is what keeps
+   * the account's `hash` non-nullable.
    *
-   * @param {SolanaTransaction} tx - The unsigned transaction. Its instructions may carry embedded signers, which the coordinator must honour.
-   * @returns {Promise<TransactionResult>} The transaction's signature and the fee it paid.
+   * @param {string} proposalId - The proposal (transaction index) id.
+   * @param {SolanaTransaction} proposal - The transaction as this member signed it, carrying every approval collected so far.
+   * @returns {Promise<TransactionResult>} The signature and fee of the transaction that eventually carries these approvals.
    */
-  async sendTransaction (tx) {
-    throw new NotImplementedError('sendTransaction(tx)')
+  async submitProposal (proposalId, proposal) {
+    throw new NotImplementedError('submitProposal(proposalId, proposal)')
   }
 
   /**
-   * Releases the coordinator's resources, erasing any key material it created.
+   * Returns the partially signed transaction the coordinator is circulating for a proposal, so
+   * that the next member can add its own vote to it rather than opening a second one.
    *
-   * @returns {void}
+   * @param {string} proposalId - The proposal (transaction index) id.
+   * @returns {Promise<SolanaTransaction | null>} The transaction, whose instructions carry the votes signed so far, or null when the coordinator is circulating none for that id.
    */
-  dispose () {
-    throw new NotImplementedError('dispose()')
+  async getProposal (proposalId) {
+    throw new NotImplementedError('getProposal(proposalId)')
+  }
+
+  /**
+   * Signs the member's approval. Signing is all it does: the account decides whether the result
+   * keeps circulating or goes to the cluster.
+   *
+   * @param {SolanaTransaction} proposal - The transaction to sign. Its instructions carry the approvals signed so far plus this member's, and the execution too when this vote reaches the threshold.
+   * @returns {Promise<SolanaTransaction>} The transaction with this member's signature added.
+   */
+  async confirmProposal (proposal) {
+    throw new NotImplementedError('confirmProposal(proposal)')
   }
 }

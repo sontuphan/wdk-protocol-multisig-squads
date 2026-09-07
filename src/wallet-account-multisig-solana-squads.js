@@ -21,6 +21,7 @@ import { AccountNotOwnerError, ThresholdNotMetError } from '@tetherto/wdk-wallet
 import { WalletAccountSolana } from '@tetherto/wdk-wallet-solana'
 
 import WalletAccountReadOnlyMultisigSolanaSquads, {
+  PROPOSAL_DATA_MASK,
   SECRET_SIZE,
   TRANSACTION_KIND
 } from './wallet-account-read-only-multisig-solana-squads.js'
@@ -40,8 +41,6 @@ import {
 } from './helpers/layouts.js'
 
 import { getProgramDerivedAddressSync } from './helpers/program-derived-address.js'
-
-import LocalSignerCoordinator from './coordinators/local-signer.js'
 
 /** @typedef {import('./coordinators/index.js').IMultisigCoordinator} IMultisigCoordinator */
 
@@ -128,17 +127,14 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     this._signerAccount = signerAccount
 
     /**
-     * The coordinator the votes and the execute are signed and broadcast through: the one
-     * transaction other members sign too. The account builds the instructions; nothing below this
-     * field knows how they reach the cluster. A deploy or a proposal is the member's own
-     * transaction and goes straight to the signer account.
+     * The coordinator the approvals are signed and collected through, built from the
+     * configuration's factory with the signer account this member votes as. Undefined when the
+     * configuration names none, and then every vote is the member's own transaction.
      *
      * @protected
-     * @type {IMultisigCoordinator}
+     * @type {IMultisigCoordinator | undefined}
      */
-    this._coordinator = config.coordinator
-      ? config.coordinator(signerAccount)
-      : new LocalSignerCoordinator(signerAccount)
+    this._coordinator = config.coordinator?.(signerAccount)
   }
 
   /**
@@ -372,22 +368,28 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing; the one error it can surface is a stored message whose address lookup tables can no longer be read, which no longer executes by any route. `vaultIndex` does not bear on a vote.
-   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission.
+   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission. With a coordinator, the approval joins the ones it is circulating and `confirmations` counts those too, so the count is what the transaction carries rather than what the cluster has recorded.
    * @throws {ValueError} The signer must not have approved the proposal already.
    */
   async approveProposal (proposalId, { memo, autoExecute } = {}) {
     const index = this._toProposalIndex(proposalId)
-    const { multisig, proposal, transaction } = autoExecute
-      ? await this._getMultisigProposalAndTransaction(index)
-      : await this._getMultisigAndProposal(index)
+    const { multisig, proposal, transaction } = await this._getProposal(
+      index,
+      autoExecute
+        ? PROPOSAL_DATA_MASK.all
+        : PROPOSAL_DATA_MASK.multisig | PROPOSAL_DATA_MASK.proposal
+    )
     const signerAddress = await this._requireVotableProposal(multisig, proposal, index)
 
     if (proposal.approved.includes(signerAddress)) {
       throw new ValueError(`The signer ${signerAddress} has already approved the proposal ${index}.`)
     }
 
-    const confirmations = proposal.approved.length + 1
+    const collected = await this._coordinator?.getProposal(index.toString())
+    const held = collected?.instructions ?? []
+    const confirmations = proposal.approved.length + held.length + 1
     const instructions = [
+      ...held,
       this._buildProposalVoteInstruction(
         INSTRUCTION.proposalApprove,
         multisig.address,
@@ -406,28 +408,41 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       instructions.push(execution)
     }
 
-    const { hash, fee } = await this._coordinator.sendTransaction({ instructions })
-
-    return {
+    const result = {
       proposalId: index.toString(),
       confirmations,
       threshold: multisig.threshold,
-      status: execution ? 'executed' : 'pending',
-      transaction: { hash, fee }
+      status: execution ? 'executed' : 'pending'
     }
+
+    if (!this._coordinator) {
+      const { hash, fee } = await this._signerAccount.sendTransaction({ instructions })
+
+      return { ...result, transaction: { hash, fee } }
+    }
+
+    const signed = await this._coordinator.confirmProposal({ instructions })
+    const { hash, fee } = confirmations < multisig.threshold
+      ? await this._coordinator.submitProposal(result.proposalId, signed)
+      : await this._signerAccount.sendTransaction(signed)
+
+    return { ...result, transaction: { hash, fee } }
   }
 
   /**
    * Rejects a pending transaction proposal.
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
-   * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. Only `memo` bears on a rejection, as the note recorded on chain with it: a rejected proposal executes nothing, so `autoExecute` is inert here whatever the votes say.
+   * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. Only `memo` bears on a rejection, as the note recorded on chain with it: a rejected proposal executes nothing, so `autoExecute` is inert here whatever the votes say. A rejection is the member's own transaction, broadcast at once: it never reaches a coordinator, which only ever collects approvals.
    * @returns {Promise<SolanaMultisigProposalResult>} The rejection result.
    * @throws {ValueError} The signer must not have rejected the proposal already.
    */
   async rejectProposal (proposalId, { memo } = {}) {
     const index = this._toProposalIndex(proposalId)
-    const { multisig, proposal } = await this._getMultisigAndProposal(index)
+    const { multisig, proposal } = await this._getProposal(
+      index,
+      PROPOSAL_DATA_MASK.multisig | PROPOSAL_DATA_MASK.proposal
+    )
     const signerAddress = await this._requireVotableProposal(multisig, proposal, index)
 
     if (proposal.rejected.includes(signerAddress)) {
@@ -442,7 +457,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       memo
     )
 
-    const { hash, fee } = await this._coordinator.sendTransaction({
+    const { hash, fee } = await this._signerAccount.sendTransaction({
       instructions: [instruction]
     })
 
@@ -466,8 +481,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    */
   async executeProposal (proposalId) {
     const index = this._toProposalIndex(proposalId)
-    const { multisig, proposal, transaction, now } =
-      await this._getMultisigProposalAndTransaction(index)
+    const { multisig, proposal, transaction, now } = await this._getProposal(index)
 
     if (!multisig.isCreated) {
       throw new NoSuchElementError(
@@ -515,7 +529,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       ? await this._buildConfigExecuteInstruction(multisig, proposal, transaction, signerAddress, index)
       : await this._buildVaultExecuteInstruction(multisig, proposal, transaction, signerAddress)
 
-    return this._coordinator.sendTransaction({ instructions: [instruction] })
+    return this._signerAccount.sendTransaction({ instructions: [instruction] })
   }
 
   /**
@@ -701,7 +715,6 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @returns {void} Nothing; the account cannot sign once disposed.
    */
   dispose () {
-    this._coordinator.dispose()
     this._signerAccount.dispose()
   }
 

@@ -62,7 +62,7 @@ account.dispose()
 - **Transfers**: Propose native SOL and SPL token transfers through the multisig vault
 - **Member Management**: Add, remove, or swap members and change the approval threshold
 - **Read-Only Support**: Inspect multisig state without a signing key
-- **Pluggable Coordinator**: Swap how transactions are signed and broadcast without touching the operations
+- **Pluggable Coordinator**: Collect the members' approvals into one transaction, or swap how they are signed, without touching the operations
 
 > [!NOTE]
 > Multisig message signing is not part of this module. It is an optional addon of the shared
@@ -115,10 +115,14 @@ approved and left stuck.
 
 ## Transactions and Coordinators
 
-Every write this package makes goes through one seam. The account builds the Squads instructions,
-and a **coordinator** signs them and puts them on the cluster. Omit the option and the account gets
-a `LocalSignerCoordinator`, which signs with the member key derived from your seed and broadcasts at
-once, the behaviour the package has always had.
+A proposal that needs N approvals costs N+2 transactions on Squads: one to create it, one per
+approval, one to execute. A **coordinator** is what turns that into three. The account builds the
+Squads instructions; the coordinator signs each approval it is handed and holds the transaction for
+the next member to add to, so one transaction carries them all once the threshold is reached. Only
+that one carries several signatures: creating a proposal, rejecting it and executing it are one
+member's own transaction each and never reach a coordinator. Omit the option and there is no
+coordinator at all: every vote is the member's own transaction, signed with the key derived from
+your seed and broadcast at once.
 
 ```javascript
 import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
@@ -127,16 +131,28 @@ class MyCoordinator extends IMultisigCoordinator {
   constructor (signerAccount) {
     super()
     this._signerAccount = signerAccount
+    this._held = new Map()
   }
 
-  // Sign `tx.instructions` however you like, then broadcast. Resolve once it has landed.
-  async sendTransaction (tx) {
-    return this._signerAccount.sendTransaction(tx)
+  // Approvals that do not fill the threshold yet. Keep the transaction for the next member, and
+  // resolve once whatever eventually carries them has landed: `hash` is never null.
+  async submitProposal (proposalId, proposal) {
+    this._held.set(proposalId, proposal)
+
+    return this._landed(proposalId)
   }
 
-  // Erase whatever key material you created. The signer account above belongs to the caller.
-  dispose () {
-    this._signerAccount = undefined
+  // The transaction you are collecting approvals in, or null when you hold none for this
+  // proposal. The next member's approval is appended to its instructions, so they pile up in one
+  // transaction rather than one each.
+  async getProposal (proposalId) {
+    return this._held.get(proposalId) ?? null
+  }
+
+  // Add this member's signature to the approvals in `proposal.instructions` and hand it back.
+  // Signing is all this does: the account circulates or broadcasts it, per the threshold.
+  async confirmProposal (proposal) {
+    return this._sign(proposal)
   }
 }
 
@@ -147,15 +163,25 @@ const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
 })
 ```
 
-`coordinator` takes a factory rather than an instance because one configuration is shared by every
-account the manager derives, and each of those signs with a different key. A coordinator moves
-transactions and does not own an identity: the account always votes as the member it derived.
+A coordinator handles approvals and nothing else. `confirmProposal` signs one; `getProposal` is what
+makes them accumulate, handing back the transaction you are holding so the next member's
+`approveProposal` can append its own approval to those instructions and count the ones it finds
+there towards the threshold. Short of the threshold, the signed transaction goes to
+`submitProposal`, which keeps it: broadcasting would waste a fee on a proposal that cannot execute
+yet. At the threshold, the account broadcasts it itself. Return null from `getProposal` and the
+member votes alone.
+
+`coordinator` is a signing option, since only a signing account votes, and it takes a factory rather
+than an instance because one configuration is shared by every account the manager derives, and each
+of those signs with a different key. A coordinator does not own an identity: the account always votes
+as the member it derived, and a coordinator holds no key of its own to erase, which is why the
+interface has nothing to dispose.
 
 > [!NOTE]
-> Squads keeps its votes on chain, one transaction per vote, so a coordinator here is about reaching
-> the cluster and nothing else: it stores no proposals and shares no messages. Proposals and votes
-> are read from the chain through the read-only account. A peer-to-peer coordinator that collects
-> member signatures before broadcasting fits this interface and is not part of this package yet.
+> Squads keeps its votes on chain, so a coordinator stores no proposals and shares no messages: all
+> it holds is the transaction still being signed, and every read comes from the chain through the
+> read-only account. A peer-to-peer coordinator that collects member approvals before one of them
+> broadcasts fits this interface and is not part of this package yet.
 
 ## Fees, rent, and who pays
 

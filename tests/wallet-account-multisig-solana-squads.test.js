@@ -27,7 +27,6 @@ import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 import WalletManagerMultisigSolanaSquads, {
   WalletAccountMultisigSolanaSquads,
   WalletAccountReadOnlyMultisigSolanaSquads,
-  LocalSignerCoordinator,
   PERMISSION,
   SQUADS_PROGRAM_ADDRESS
 } from '@tetherto/wdk-protocol-multisig-squads'
@@ -361,7 +360,7 @@ async function votingAccount ({
   })
   const sendTransaction = jest.fn(async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }))
 
-  account._coordinator.sendTransaction = sendTransaction
+  account._signerAccount.sendTransaction = sendTransaction
 
   return { account, sendTransaction, rpc }
 }
@@ -1296,7 +1295,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         })
         const sendTransaction = jest.fn(async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }))
 
-        account._coordinator.sendTransaction = sendTransaction
+        account._signerAccount.sendTransaction = sendTransaction
 
         return { account, sendTransaction, rpc }
       }
@@ -1411,7 +1410,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
           })
         })
 
-        account._coordinator.sendTransaction = jest.fn(
+        account._signerAccount.sendTransaction = jest.fn(
           async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE })
         )
 
@@ -2376,7 +2375,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
       const sendTransaction = jest.fn(async () => ({ hash: DUMMY_EXECUTE_HASH, fee: DUMMY_FEE }))
 
-      account._coordinator.sendTransaction = sendTransaction
+      account._signerAccount.sendTransaction = sendTransaction
 
       return { account, sendTransaction, rpc }
     }
@@ -2899,15 +2898,23 @@ describe('WalletAccountMultisigSolanaSquads', () => {
      */
     async function accountWithCoordinator () {
       const sent = []
+      const circulated = []
       let signerAccount = null
 
       const coordinator = {
-        sendTransaction: jest.fn(async (tx) => {
-          sent.push(tx)
+        submitProposal: jest.fn(async (proposalId, tx) => {
+          circulated.push([proposalId, tx])
 
           return { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
         }),
-        dispose: jest.fn()
+        // Circulating nothing yet. Two tests below cover the other case.
+        getProposal: jest.fn(async () => null),
+        // Signing is all it does: the transaction comes back marked, for the account to place.
+        confirmProposal: jest.fn(async (tx) => {
+          sent.push(tx)
+
+          return { ...tx, signedBy: 'coordinator' }
+        })
       }
 
       const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
@@ -2921,25 +2928,33 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
       const account = await wallet.getAccount(0)
 
-      return { account, coordinator, sent, get signerAccount () { return signerAccount } }
+      return {
+        account,
+        coordinator,
+        sent,
+        circulated,
+        get signerAccount () { return signerAccount }
+      }
     }
 
     it('builds the coordinator from the account it derived', async () => {
-      const { signerAccount } = await accountWithCoordinator()
+      const { account, coordinator } = await accountWithCoordinator()
 
-      // The factory takes the member's own signer account, so each derived account signs with
-      // its own key rather than sharing one coordinator across the manager's accounts.
-      expect(await signerAccount.getAddress()).toBe(TEST_SIGNER)
+      // Built from the member's own signer account, so each derived account votes with its own
+      // key rather than sharing one coordinator across the manager's accounts.
+      expect(account._coordinator).toBe(coordinator)
+      expect(await account._signerAccount.getAddress()).toBe(TEST_SIGNER)
     })
 
-    it('defaults to a coordinator over the local signer', async () => {
+    it('has no coordinator when the configuration names none', async () => {
       const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
         provider: TEST_RPC_URL,
         multisigPdaOrCreateKey: TEST_MULTISIG_PDA
       })
       const account = await wallet.getAccount(0)
 
-      expect(account._coordinator).toBeInstanceOf(LocalSignerCoordinator)
+      // Without one, a vote is the member's own transaction, as a proposal already is.
+      expect(account._coordinator).toBeUndefined()
       expect(await account.getSignerAddress()).toBe(TEST_SIGNER)
     })
 
@@ -2967,15 +2982,16 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const result = await account.propose({ to: OTHER_MEMBER, value: 1n })
 
-      // A proposal is the proposer's own transaction: nobody else signs it, so there is nothing
-      // for a coordinator to collect.
-      expect(coordinator.sendTransaction).not.toHaveBeenCalled()
+      // A proposal is the proposer's own transaction: nobody else signs it, so nothing about it
+      // reaches the coordinator, which learns of it from the first vote handed to it.
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+      expect(coordinator.submitProposal).not.toHaveBeenCalled()
       expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(2)
       expect(result.transaction.hash).toBe(DUMMY_PROPOSE_HASH)
     })
 
-    it('approves through the coordinator', async () => {
-      const { account, coordinator, sent } = await accountWithCoordinator()
+    it('holds an approval that does not reach the threshold', async () => {
+      const { account, coordinator, sent, circulated } = await accountWithCoordinator()
 
       stubSolanaRpc({
         getMultipleAccounts: () => serveValue([
@@ -2986,16 +3002,53 @@ describe('WalletAccountMultisigSolanaSquads', () => {
           proposalAccountValue({})
         ])
       })
+
+      const sendTransaction = jest.fn()
+
+      account._signerAccount.sendTransaction = sendTransaction
 
       const result = await account.approveProposal(3)
 
-      expect(coordinator.sendTransaction).toHaveBeenCalledTimes(1)
-      expect(sent[0].instructions).toHaveLength(1)
+      // One of the two approvals it needs: the coordinator signs it, then keeps it circulating
+      // and answers with where it eventually lands. Nothing reaches the cluster.
+      expect(coordinator.confirmProposal).toHaveBeenCalledTimes(1)
+      expect(circulated).toEqual([['3', { instructions: sent[0].instructions, signedBy: 'coordinator' }]])
+      expect(sendTransaction).not.toHaveBeenCalled()
       expect(result.transaction.hash).toBe(DUMMY_VOTE_HASH)
     })
 
-    it('rejects through the coordinator', async () => {
+    it('broadcasts the approval that reaches the threshold', async () => {
       const { account, coordinator, sent } = await accountWithCoordinator()
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({ approved: [OTHER_MEMBER] })
+        ])
+      })
+
+      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }))
+
+      account._signerAccount.sendTransaction = sendTransaction
+
+      const result = await account.approveProposal(3)
+
+      // The approval completes the threshold, so the account broadcasts what the coordinator signed.
+      expect(coordinator.confirmProposal).toHaveBeenCalledTimes(1)
+      expect(coordinator.submitProposal).not.toHaveBeenCalled()
+      expect(sendTransaction).toHaveBeenCalledWith({
+        instructions: sent[0].instructions,
+        signedBy: 'coordinator'
+      })
+      expect(result.transaction.hash).toBe(DUMMY_VOTE_HASH)
+    })
+
+    it('leaves a rejection to the signer account', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }))
 
       stubSolanaRpc({
         getMultipleAccounts: () => serveValue([
@@ -3007,21 +3060,101 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         ])
       })
 
+      account._signerAccount.sendTransaction = sendTransaction
+
       const result = await account.rejectProposal(3)
 
-      expect(coordinator.sendTransaction).toHaveBeenCalledTimes(1)
-      expect(sent[0].instructions).toHaveLength(1)
+      // A coordinator only ever collects approvals, so a rejection is the member's own
+      // single-instruction transaction, broadcast at once.
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+      expect(coordinator.submitProposal).not.toHaveBeenCalled()
+      expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(1)
       expect(result.transaction.hash).toBe(DUMMY_VOTE_HASH)
     })
 
-    it('disposes the coordinator and the key it derived', async () => {
+    it('adds its approval to the transaction the coordinator is circulating', async () => {
+      const { account, coordinator, sent } = await accountWithCoordinator()
+      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }))
+
+      // One member has already voted, and the coordinator is holding that vote unbroadcast.
+      const collected = { programAddress: SQUADS_PROGRAM_ADDRESS, accounts: [], data: [1] }
+
+      coordinator.getProposal.mockResolvedValue({ instructions: [collected] })
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      account._signerAccount.sendTransaction = sendTransaction
+
+      await account.approveProposal(3)
+
+      expect(coordinator.getProposal).toHaveBeenCalledWith('3')
+      // The approval it is circulating comes first, then this member's own: one transaction, two
+      // approvals, which is the threshold, so the account broadcasts it.
+      expect(sent[0].instructions).toHaveLength(2)
+      expect(sent[0].instructions[0]).toBe(collected)
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
+    })
+
+    it('sends its approval alone when the coordinator is circulating nothing', async () => {
+      const { account, coordinator, sent, circulated } = await accountWithCoordinator()
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      await account.approveProposal(3)
+
+      expect(coordinator.getProposal).toHaveBeenCalledWith('3')
+      expect(sent[0].instructions).toHaveLength(1)
+      expect(circulated).toHaveLength(1)
+    })
+
+    it('leaves the execution to the signer account', async () => {
       const { account, coordinator } = await accountWithCoordinator()
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue([{ address: TEST_SIGNER, mask: 7 }], { threshold: 1, transactionIndex: 7n }),
+          proposalAccountValue({ status: 3, approved: [TEST_SIGNER] }),
+          vaultTransactionAccountValue({}),
+          clockAccountValue(0n)
+        ])
+      })
+
+      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_EXECUTE_HASH, fee: DUMMY_FEE }))
+
+      account._signerAccount.sendTransaction = sendTransaction
+
+      const result = await account.executeProposal(3)
+
+      // An execution needs one signature, the executing member's own, so there is nothing for a
+      // coordinator to collect.
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+      expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(1)
+      expect(result.hash).toBe(DUMMY_EXECUTE_HASH)
+    })
+
+    it('erases the key it derived, whatever the coordinator is', async () => {
+      const { account } = await accountWithCoordinator()
 
       account.dispose()
 
-      // Both, because a coordinator that holds no key would otherwise leave the derived member
-      // key in memory, and one that holds its own must be told to erase it.
-      expect(coordinator.dispose).toHaveBeenCalledTimes(1)
+      // The account owns the member key and erases it. A coordinator holds no key of its own,
+      // which is why the contract has nothing to dispose.
       await expect(account.sign('hello')).rejects.toThrow('The wallet account has been disposed.')
     })
   })
