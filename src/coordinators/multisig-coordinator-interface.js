@@ -57,7 +57,6 @@ export class IMultisigCoordinator {
    *
    * @param {SolanaTransaction} tx - The unsigned transaction. Its instructions may carry embedded signers, which the coordinator must honour.
    * @returns {Promise<TransactionResult>} The transaction's signature and the fee it paid.
-   * @throws {NotImplementedError} An implementation must provide this method.
    */
   async sendTransaction (tx) {
     throw new NotImplementedError('sendTransaction(tx)')
@@ -67,7 +66,6 @@ export class IMultisigCoordinator {
    * Releases the coordinator's resources, erasing any key material it created.
    *
    * @returns {void}
-   * @throws {NotImplementedError} An implementation must provide this method.
    */
   dispose () {
     throw new NotImplementedError('dispose()')

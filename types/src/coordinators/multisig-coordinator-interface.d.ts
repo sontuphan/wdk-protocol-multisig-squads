@@ -31,14 +31,12 @@ export interface IMultisigCoordinator {
      *
      * @param {SolanaTransaction} tx - The unsigned transaction. Its instructions may carry embedded signers, which the coordinator must honour.
      * @returns {Promise<TransactionResult>} The transaction's signature and the fee it paid.
-     * @throws {NotImplementedError} An implementation must provide this method.
      */
     sendTransaction(tx: import("@tetherto/wdk-wallet-solana").SolanaTransaction): Promise<import("@tetherto/wdk-wallet").TransactionResult>;
     /**
      * Releases the coordinator's resources, erasing any key material it created.
      *
      * @returns {void}
-     * @throws {NotImplementedError} An implementation must provide this method.
      */
     dispose(): void;
 }
