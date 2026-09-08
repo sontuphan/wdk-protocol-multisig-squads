@@ -128,9 +128,11 @@ your seed and broadcast at once.
 import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
 
 class MyCoordinator extends IMultisigCoordinator {
-  constructor (signerAccount) {
-    super()
-    this._signerAccount = signerAccount
+  // The configuration is a `CoordinatorSigner`: `getAddress()` names the member and
+  // `signTransaction(tx)` signs as it. Widen it with whatever else you need, a service URL or a
+  // peer list; what you never get is the member's key.
+  constructor (config) {
+    super(config)
     this._held = new Map()
   }
 
@@ -152,14 +154,14 @@ class MyCoordinator extends IMultisigCoordinator {
   // Add this member's signature to the approvals in `proposal.instructions` and hand it back.
   // Signing is all this does: the account circulates or broadcasts it, per the threshold.
   async confirmProposal (proposal) {
-    return this._sign(proposal)
+    return this._config.signTransaction(proposal)
   }
 }
 
 const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
   provider: 'https://api.devnet.solana.com',
   multisigPdaOrCreateKey: '<existing multisig address>',
-  coordinator: (signerAccount) => new MyCoordinator(signerAccount)
+  coordinator: (config) => new MyCoordinator(config)
 })
 ```
 
@@ -173,9 +175,13 @@ member votes alone.
 
 `coordinator` is a signing option, since only a signing account votes, and it takes a factory rather
 than an instance because one configuration is shared by every account the manager derives, and each
-of those signs with a different key. A coordinator does not own an identity: the account always votes
-as the member it derived, and a coordinator holds no key of its own to erase, which is why the
-interface has nothing to dispose.
+of those signs with a different key. The factory is handed a `CoordinatorSigner`, `{ getAddress,
+signTransaction }` over that member's key, rather than the account holding it: a coordinator can
+name the member and sign as it, and can read neither the key nor anything else on the account. That
+object is the coordinator's configuration, so an implementation is free to widen it, which the base
+class is generic over. It
+owns no identity either, since the account always votes as the member it derived, and no key of its
+own to erase, which is why the interface has nothing to dispose.
 
 > [!NOTE]
 > Squads keeps its votes on chain, so a coordinator stores no proposals and shares no messages: all

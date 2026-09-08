@@ -2899,7 +2899,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     async function accountWithCoordinator () {
       const sent = []
       const circulated = []
-      let signerAccount = null
+      let coordinatorConfig = null
 
       const coordinator = {
         submitProposal: jest.fn(async (proposalId, tx) => {
@@ -2920,8 +2920,8 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
         provider: TEST_RPC_URL,
         multisigPdaOrCreateKey: TEST_MULTISIG_PDA,
-        coordinator: (account) => {
-          signerAccount = account
+        coordinator: (config) => {
+          coordinatorConfig = config
 
           return coordinator
         }
@@ -2933,17 +2933,21 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         coordinator,
         sent,
         circulated,
-        get signerAccount () { return signerAccount }
+        get coordinatorConfig () { return coordinatorConfig }
       }
     }
 
-    it('builds the coordinator from the account it derived', async () => {
-      const { account, coordinator } = await accountWithCoordinator()
+    it('configures the coordinator with a signer for the member it derived', async () => {
+      const { account, coordinator, coordinatorConfig } = await accountWithCoordinator()
 
-      // Built from the member's own signer account, so each derived account votes with its own
-      // key rather than sharing one coordinator across the manager's accounts.
+      // Each derived account votes with its own key, so the factory is called per account rather
+      // than one coordinator being shared across the manager's accounts.
       expect(account._coordinator).toBe(coordinator)
-      expect(await account._signerAccount.getAddress()).toBe(TEST_SIGNER)
+      expect(await coordinatorConfig.getAddress()).toBe(TEST_SIGNER)
+
+      // The configuration names the member and signs as it, and carries nothing else: a
+      // coordinator cannot read the key it signs with.
+      expect(Object.keys(coordinatorConfig)).toEqual(['getAddress', 'signTransaction'])
     })
 
     it('has no coordinator when the configuration names none', async () => {

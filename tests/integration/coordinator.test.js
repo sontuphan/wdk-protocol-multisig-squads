@@ -34,7 +34,7 @@ import {
 } from '@solana/transaction-messages'
 import { getBase64EncodedWireTransaction } from '@solana/transactions'
 
-import { WalletAccountReadOnlySolana } from '@tetherto/wdk-wallet-solana'
+import WalletManagerSolana, { WalletAccountReadOnlySolana } from '@tetherto/wdk-wallet-solana'
 
 import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
 
@@ -59,6 +59,29 @@ const TRANSFER_AMOUNT = LAMPORTS_PER_SOL / 10n
 // A signature the cluster has never seen, which a coordinator that only circulates answers with.
 const UNBROADCAST_HASH =
   '4YkT2NCT7cabPMuBNe9GiBmYWSqSChfgQpwZ5sDoDLYkP1yPmzHVfvKD6JgFPBhTruWJFVWvKZ1s6PyzD8MW1XSm'
+
+/**
+ * The keypair signers of the first `count` members the seed phrase derives, which stands in for
+ * what the members of a real collection would each sign with on their own machine.
+ *
+ * @param {number} count - How many members to derive.
+ * @returns {Promise<object[]>} The signers, in derivation order.
+ */
+async function memberSigners (count) {
+  const wallet = new WalletManagerSolana(SEED_PHRASE, {
+    provider: TEST_RPC_URL,
+    commitment: 'confirmed'
+  })
+  const signers = []
+
+  for (let index = 0; index < count; index++) {
+    const account = await wallet.getAccount(index)
+
+    signers.push(await createKeyPairSignerFromPrivateKeyBytes(account.keyPair.privateKey))
+  }
+
+  return signers
+}
 
 /** @param {string} target */
 function solanaAccount (target) {
@@ -90,26 +113,21 @@ function withMemberSigner (instructions, memberSigner) {
 }
 
 /**
- * A coordinator that signs and circulates, which is all the contract asks of one: `approve` adds
- * the voting member's signature to the instructions it is given, `submitProposal` keeps the
- * partially signed transaction for the next member, and no method reaches the cluster. One instance
- * is shared by every member, collecting their signers as the manager builds their accounts, which
- * is what a real collection service holds between them.
+ * A coordinator that signs and circulates, which is all the contract asks of one:
+ * `confirmProposal` adds the voting member's signature to the instructions it is given,
+ * `submitProposal` keeps the partially signed transaction for the next member, and no method
+ * reaches the cluster. One instance stands in for the service the members share, so it is given
+ * every member's keypair signer up front; the configuration each account hands it carries no key,
+ * which is the point of `CoordinatorSigner`.
  */
 class CollectingCoordinator extends IMultisigCoordinator {
-  constructor () {
-    super()
+  constructor (config, memberSigners) {
+    super(config)
 
-    this._signerAccounts = []
+    this._memberSigners = memberSigners
     this._held = new Map()
 
     this.circulated = []
-  }
-
-  register (signerAccount) {
-    this._signerAccounts.push(signerAccount)
-
-    return this
   }
 
   async submitProposal (proposalId, proposal) {
@@ -128,10 +146,8 @@ class CollectingCoordinator extends IMultisigCoordinator {
   async confirmProposal (proposal) {
     let instructions = proposal.instructions
 
-    for (const signerAccount of this._signerAccounts) {
-      const signer = await createKeyPairSignerFromPrivateKeyBytes(signerAccount.keyPair.privateKey)
-
-      instructions = withMemberSigner(instructions, signer)
+    for (const memberSigner of this._memberSigners) {
+      instructions = withMemberSigner(instructions, memberSigner)
     }
 
     return { instructions }
@@ -205,14 +221,19 @@ describe('coordinators', () => {
 
   describe('a coordinator that signs and circulates', () => {
     it('collects both votes into one transaction the last member broadcasts', async () => {
-      const coordinator = new CollectingCoordinator()
+      const signers = await memberSigners(2)
+      let coordinator = null
       const { accounts, multisigPda } = await deployMultisig({ members: 2, threshold: 2 })
       const { accounts: voters } = await createWallet({
         members: 2,
         config: {
           multisigPdaOrCreateKey: multisigPda,
           createKeySecret: undefined,
-          coordinator: (signerAccount) => coordinator.register(signerAccount)
+          coordinator: (config) => {
+            coordinator ??= new CollectingCoordinator(config, signers)
+
+            return coordinator
+          }
         }
       })
       const recipient = (await generateKeyPairSigner()).address
@@ -246,11 +267,11 @@ describe('coordinators', () => {
     })
 
     it('erases the derived key with the account, holding nothing of its own to dispose', async () => {
-      const coordinator = new CollectingCoordinator()
+      const signers = await memberSigners(1)
       const { accounts } = await deployMultisig({
         members: 1,
         threshold: 1,
-        config: { coordinator: (signerAccount) => coordinator.register(signerAccount) }
+        config: { coordinator: (config) => new CollectingCoordinator(config, signers) }
       })
 
       accounts[0].dispose()

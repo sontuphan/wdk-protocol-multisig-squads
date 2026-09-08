@@ -128,13 +128,17 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
     /**
      * The coordinator the approvals are signed and collected through, built from the
-     * configuration's factory with the signer account this member votes as. Undefined when the
-     * configuration names none, and then every vote is the member's own transaction.
+     * configuration's factory over a signer for this member's key rather than the account holding
+     * it. Undefined when the configuration names none, and then every vote is the member's own
+     * transaction.
      *
      * @protected
      * @type {IMultisigCoordinator | undefined}
      */
-    this._coordinator = config.coordinator?.(signerAccount)
+    this._coordinator = config.coordinator?.({
+      getAddress: () => signerAccount.getAddress(),
+      signTransaction: (tx) => signerAccount.signTransaction(tx)
+    })
   }
 
   /**

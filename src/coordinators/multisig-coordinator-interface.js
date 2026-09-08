@@ -18,14 +18,23 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
 
 /** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
-/** @typedef {import('@tetherto/wdk-wallet-solana').WalletAccountSolana} WalletAccountSolana */
+/** @typedef {import('@solana/transactions').Transaction} Transaction */
 
 /**
- * Builds the coordinator an account votes through, from the member's own signer account. One
+ * What a coordinator is given of the member it signs for: the address to name it by and a way to
+ * sign as it. Deliberately not the member's account, which would hand over the key as well.
+ *
+ * @typedef {Object} CoordinatorSigner
+ * @property {() => Promise<string>} getAddress - Returns the member's address.
+ * @property {(tx: SolanaTransaction) => Promise<Transaction>} signTransaction - Signs a transaction as the member, compiling it against a fresh blockhash with the member as fee payer. What comes back carries this member's signature and may still be short of the others'.
+ */
+
+/**
+ * Builds the coordinator an account votes through, from a signer over the member's own key. One
  * configuration is shared by every account a manager derives, and each of those signs with a
  * different key, so the configuration carries this rather than a coordinator instance.
  *
- * @typedef {(signerAccount: WalletAccountSolana) => IMultisigCoordinator} MultisigCoordinatorFactory
+ * @typedef {(config: CoordinatorSigner) => IMultisigCoordinator} MultisigCoordinatorFactory
  */
 
 /**
@@ -43,15 +52,37 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
  * is the floor, not the count: a message over the 1232-byte limit, or a threshold reached in
  * stages, splits the collecting transaction.
  *
+ * A coordinator is configured with a `CoordinatorSigner`, not with the member's account: it can
+ * name the member and sign as it, and cannot read the key it signs with.
+ *
  * The contract deliberately has no proposal storage, no message sharing and no quoting: votes are
  * on-chain instructions, so the read-only account reads them from the cluster, and all a
  * coordinator holds is the transaction still being signed. Nor does it own an identity: the account
  * votes as the member it derived, and `getSignerAddress()` answers from that account, so the two
  * can never disagree.
  *
- * @interface
+ * Implementations extend this class, which holds the configuration and leaves every method to
+ * them. The configuration is the member's signer, widened by whatever else an implementation needs:
+ * a service URL, a peer list, a key of its own.
+ *
+ * @template {CoordinatorSigner} [TCoordinatorConfig=CoordinatorSigner]
  */
 export class IMultisigCoordinator {
+  /**
+   * Creates a coordinator over its configuration.
+   *
+   * @param {TCoordinatorConfig} config - The coordinator's configuration. It carries the member's signer, which names the member and signs as it without exposing its key.
+   */
+  constructor (config) {
+    /**
+     * The coordinator's configuration.
+     *
+     * @protected
+     * @type {TCoordinatorConfig}
+     */
+    this._config = config
+  }
+
   /**
    * Takes the partially signed transaction a proposal's votes are accumulating in, to keep
    * circulating among the members while it is short of the threshold. Resolving late is the point:
