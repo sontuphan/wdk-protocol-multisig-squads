@@ -147,13 +147,14 @@ class MyCoordinator extends IMultisigCoordinator {
 
   // The transaction you are collecting approvals in, or null when you hold none for this
   // proposal. The next member's approval is appended to its instructions, so they pile up in one
-  // transaction rather than one each.
+  // transaction rather than one each. Approvals are all it may carry: see below.
   async getProposal (proposalId) {
     return this._held.get(proposalId) ?? null
   }
 
   // Put this member's signature on the message and hand it back. How it travels is up to you: a
-  // signer on the approval that names the member, or a `NoopSigner` slot you fill later.
+  // signer on the approval that names the member, or a `NoopSigner` slot you fill later. This is
+  // also where you refuse one you should not sign: throw if a member appears twice.
   async confirmProposal (proposal) {
     return this._sign(proposal)
   }
@@ -172,6 +173,21 @@ and count the ones it finds there towards the threshold; return null and that me
 Short of the threshold the message goes to `submitProposal`, which keeps it, since broadcasting
 would waste a fee on a proposal that cannot execute yet. At the threshold the account broadcasts it
 through the member's own signer account, which signs as fee payer.
+
+> [!IMPORTANT]
+> Every instruction in the message `getProposal` returns must be one member's approval of that
+> proposal, and nothing else. The account counts what it finds there towards the threshold without
+> inspecting it, so a rejection, an execution or padding of any kind is malformed and counts as
+> that many approvals: enough of it and a proposal is broadcast, or auto-executed, on approvals it
+> does not have. The message `submitProposal` was handed is already of that shape, so returning
+> what you were given satisfies this without checking; if you batch anything else, keep it out of
+> what `getProposal` hands back. At most one of those approvals may be any one member's, and
+> `confirmProposal` is where a second one is caught: it is the only method handed the complete
+> list, the member's own approval included, and the account's own guard cannot help because it
+> reads the cluster, which has not recorded an approval that is still circulating. Refuse by
+> throwing `ValueError`, which this package re-exports and which is what the account itself raises
+> when the cluster shows the same member has already approved, so both halves of the condition
+> surface the same way.
 
 `confirmProposal` is where the other members' signatures come from, and the contract takes no view
 on how you carry them: a signer on the instruction that names the member travels with the message,

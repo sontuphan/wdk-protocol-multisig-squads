@@ -100,8 +100,17 @@ export class IMultisigCoordinator {
    * Returns the message being circulated for a proposal, so the next member can add its approval
    * to it rather than opening a transaction of its own.
    *
+   * Every instruction in it must be one member's approval of that proposal, and nothing else:
+   * the account appends its own and counts what it finds towards the threshold without inspecting
+   * it, so a rejection, an execution or padding of any kind is malformed and counts as that many
+   * approvals. The message `submitProposal` was handed is already of that shape, so an
+   * implementation that returns what it was given, however it carries the signatures, satisfies
+   * this without checking. One that batches anything else keeps it out of what this hands back.
+   * At most one of those approvals may be any one member's; `confirmProposal` is where a second
+   * one is caught, since it is the account's own append that creates it.
+   *
    * @param {string} proposalId - The proposal (transaction index) id.
-   * @returns {Promise<TransactionMessage | null>} The message, carrying the approvals collected so far, or null when nothing is circulating for that id.
+   * @returns {Promise<TransactionMessage | null>} The message, carrying the approvals collected so far and nothing else, or null when nothing is circulating for that id.
    */
   async getProposal (proposalId) {
     throw new NotImplementedError('getProposal(proposalId)')
@@ -111,7 +120,16 @@ export class IMultisigCoordinator {
    * Signs the member's approval. Signing is all it does: the account decides whether the result
    * keeps circulating or goes to the cluster.
    *
-   * @param {TransactionMessage} proposal - The message to sign, carrying the approvals collected so far plus this member's, and the execution too when this one reaches the threshold.
+   * This is the only method handed the complete list, the member's own approval included, so it is
+   * where an implementation refuses one it should not sign. Two approvals from one member is the
+   * case to refuse: the account's own guard reads the cluster, which has not recorded an approval
+   * that is still circulating, so a member that votes twice before the batch lands appends a
+   * second one and the account cannot see it. Squads rejects the second, and the whole batch with
+   * it. Refuse by throwing `ValueError`, which this package re-exports and which is what the
+   * account itself raises when the cluster shows the same member has already approved, so both
+   * halves of the condition surface the same way. It reaches the caller unchanged.
+   *
+   * @param {TransactionMessage} proposal - The message to sign, carrying the approvals collected so far plus this member's, and the execution too when this one reaches the threshold. At most one approval per member, which is the precondition this method is the last place to check.
    * @returns {Promise<TransactionMessage>} The message with this member's signature accounted for, however the implementation carries it.
    */
   async confirmProposal (proposal) {
