@@ -18,6 +18,16 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals'
 
 import { getBase58Decoder, getBase58Encoder, getBase64Decoder } from '@solana/codecs'
 
+import { pipe } from '@solana/functional'
+import { AccountRole } from '@solana/instructions'
+import {
+  appendTransactionMessageInstructions,
+  createTransactionMessage,
+  setTransactionMessageFeePayer,
+  setTransactionMessageLifetimeUsingBlockhash
+} from '@solana/transaction-messages'
+import { compileTransaction, isFullySignedTransaction } from '@solana/transactions'
+
 import { AssertionError, MaximumFeeExceededError, NoSuchElementError, UnsupportedOperationError, ValueError } from '@tetherto/wdk-wallet'
 
 import { AccountNotOwnerError, ThresholdNotMetError } from '@tetherto/wdk-wallet/multisig'
@@ -402,6 +412,74 @@ async function configuringAccount ({
   account._signerAccount.sendTransaction = sendTransaction
 
   return { account, sendTransaction, rpc }
+}
+
+// The eight-byte Anchor discriminators a compiled bundle is read by. Hardcoded here so a unit
+// test needs no SDK; the integration suite builds its bundles with `@sqds/multisig` instead, so a
+// drift between these and the protocol's fails there.
+const APPROVE_DISCRIMINATOR = [144, 37, 164, 136, 188, 216, 42, 248]
+const VAULT_EXECUTE_DISCRIMINATOR = [194, 8, 161, 87, 153, 164, 25, 171]
+
+// What the account charges a bundle it broadcasts: the base fee per signature slot.
+const SIGNATURE_FEE = 5000n
+
+const BUNDLE_BLOCKHASH = {
+  blockhash: 'GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi',
+  lastValidBlockHeight: 999n
+}
+
+/**
+ * A `proposalApprove` as the account builds it, so a bundle carrying one decodes the way the
+ * account expects: the multisig read-only, the member as a writable signer, the proposal writable.
+ *
+ * @param {string} member - The approving member.
+ * @param {string} [proposalPda] - The proposal it approves (default: the one at index 3).
+ * @returns {Object} The instruction.
+ */
+function approvalOf (member, proposalPda = TEST_PROPOSAL_PDA_3) {
+  return {
+    programAddress: SQUADS_PROGRAM_ADDRESS,
+    accounts: [
+      { address: TEST_MULTISIG_PDA, role: AccountRole.READONLY },
+      { address: member, role: AccountRole.WRITABLE_SIGNER },
+      { address: proposalPda, role: AccountRole.WRITABLE }
+    ],
+    data: new Uint8Array(APPROVE_DISCRIMINATOR)
+  }
+}
+
+/**
+ * A `vaultTransactionExecute`, which is what makes a bundle report `'executed'`.
+ *
+ * @returns {Object} The instruction.
+ */
+function executionOf () {
+  return {
+    programAddress: SQUADS_PROGRAM_ADDRESS,
+    accounts: [
+      { address: TEST_MULTISIG_PDA, role: AccountRole.READONLY },
+      { address: TEST_PROPOSAL_PDA_3, role: AccountRole.WRITABLE },
+      { address: TEST_VAULT_PDA, role: AccountRole.READONLY }
+    ],
+    data: new Uint8Array(VAULT_EXECUTE_DISCRIMINATOR)
+  }
+}
+
+/**
+ * Compiles a bundle the way a coordinator has to: every approval it means to collect is in it
+ * before the first signature, and so are the fee payer and the lifetime.
+ *
+ * @param {Object[]} instructions - What the bundle carries.
+ * @param {string} [feePayer] - The account charged for it (default: the derived member).
+ * @returns {Object} The compiled, unsigned transaction.
+ */
+function bundleOf (instructions, feePayer = TEST_SIGNER) {
+  return compileTransaction(pipe(
+    createTransactionMessage({ version: 0 }),
+    (m) => setTransactionMessageFeePayer(feePayer, m),
+    (m) => setTransactionMessageLifetimeUsingBlockhash(BUNDLE_BLOCKHASH, m),
+    (m) => appendTransactionMessageInstructions(instructions, m)
+  ))
 }
 
 /**
@@ -2907,13 +2985,14 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
           return { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
         }),
-        // Circulating nothing yet. Two tests below cover the other case.
+        // Holding nothing yet. The bundle tests below hand it one.
         getProposal: jest.fn(async () => null),
-        // Signing is all it does: the transaction comes back marked, for the account to place.
+        // Signing is all it does, and it really signs: the bundle is compiled, so the signer the
+        // account handed it puts this member's signature in its slot.
         confirmProposal: jest.fn(async (tx) => {
           sent.push(tx)
 
-          return { ...tx, signedBy: 'coordinator' }
+          return await coordinatorConfig.partiallySignTransaction(tx)
         })
       }
 
@@ -3010,8 +3089,13 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(result.transaction.hash).toBe(DUMMY_PROPOSE_HASH)
     })
 
-    it('holds an approval that does not reach the threshold', async () => {
+    it('circulates a bundle its signature does not complete', async () => {
       const { account, coordinator, sent, circulated } = await accountWithCoordinator()
+
+      // Two approvers, so two slots: this member's and one it cannot fill.
+      coordinator.getProposal.mockResolvedValue(
+        bundleOf([approvalOf(TEST_SIGNER), approvalOf(OTHER_MEMBER)])
+      )
 
       stubSolanaRpc({
         getMultipleAccounts: () => serveValue([
@@ -3028,51 +3112,113 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       account._signerAccount.sendTransaction = sendTransaction
 
       const result = await account.approveProposal(3)
+      const [[proposalId, held]] = circulated
 
-      // One of the two approvals it needs: the coordinator signs the message, then keeps it
-      // circulating and answers with where it eventually lands. Nothing reaches the cluster.
-      expect(coordinator.confirmProposal).toHaveBeenCalledTimes(1)
-      expect(circulated).toEqual([['3', { ...sent[0], signedBy: 'coordinator' }]])
+      // The account signed its own slot and handed the bundle back, since a transaction with an
+      // empty slot cannot be sent. Nothing reached the cluster, and the result is whatever the
+      // coordinator answered with, which it resolves once the bundle eventually lands.
+      expect(coordinator.getProposal).toHaveBeenCalledWith('3')
+      expect(coordinator.confirmProposal).toHaveBeenCalledWith(sent[0])
+      expect(proposalId).toBe('3')
+      expect(isFullySignedTransaction(held)).toBe(false)
+      expect(held.signatures[TEST_SIGNER]).toHaveLength(64)
+      expect(held.signatures[OTHER_MEMBER]).toBeNull()
+      expect(held.messageBytes).toEqual(sent[0].messageBytes)
       expect(sendTransaction).not.toHaveBeenCalled()
-      expect(result.confirmations).toBe(1)
-      expect(result.transaction.hash).toBe(DUMMY_VOTE_HASH)
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 2,
+        threshold: 2,
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
+      })
     })
 
-    it('broadcasts the approval that reaches the threshold', async () => {
-      const { account, coordinator, sent } = await accountWithCoordinator()
+    it('sends the bundle its signature completes, as the bytes it already is', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
 
-      stubSolanaRpc({
+      // One approver, which is this member, so its signature is the only one missing. The
+      // threshold is two: what decides the route is the bundle being signed, not the count.
+      coordinator.getProposal.mockResolvedValue(bundleOf([approvalOf(TEST_SIGNER)]))
+
+      const rpc = stubSolanaRpc({
         getMultipleAccounts: () => serveValue([
           multisigAccountValue(
             [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
             { threshold: 2, transactionIndex: 7n }
           ),
-          proposalAccountValue({ approved: [OTHER_MEMBER] })
-        ])
+          proposalAccountValue({})
+        ]),
+        sendTransaction: () => DUMMY_VOTE_HASH
       })
 
-      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }))
+      const sendTransaction = jest.fn()
 
       account._signerAccount.sendTransaction = sendTransaction
 
       const result = await account.approveProposal(3)
+      const [[wire, options]] = rpcRequests(rpc, 'sendTransaction')
 
-      // The approval completes the threshold, so the account broadcasts the message the
-      // coordinator signed rather than handing it over: a coordinator never reaches the cluster.
-      expect(coordinator.confirmProposal).toHaveBeenCalledTimes(1)
+      // The signer account is not involved: it would compile a message of its own and void every
+      // signature the bundle carries, so the account sends the wire bytes straight out.
       expect(coordinator.submitProposal).not.toHaveBeenCalled()
-      expect(sendTransaction).toHaveBeenCalledWith({ instructions: sent[0].instructions })
-      expect(result.confirmations).toBe(2)
-      expect(result.transaction.hash).toBe(DUMMY_VOTE_HASH)
+      expect(sendTransaction).not.toHaveBeenCalled()
+      // `preflightCommitment` is the client's default rather than anything the account sets,
+      // which is how `@tetherto/wdk-wallet-solana` sends too.
+      expect(options).toEqual({ encoding: 'base64', preflightCommitment: 'confirmed' })
+      expect(typeof wire).toBe('string')
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 1,
+        threshold: 2,
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: SIGNATURE_FEE }
+      })
     })
 
-    it('appends its approval to the message the coordinator is circulating', async () => {
-      const { account, coordinator, sent } = await accountWithCoordinator()
+    it('reads the approvals and the execution out of the bundle it is handed', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
 
-      // One member has already voted, and its approval is circulating unbroadcast.
-      const collected = { programAddress: SQUADS_PROGRAM_ADDRESS, accounts: [], data: [1] }
+      // What a durable nonce's advance or a compute budget would be, an approval of a different
+      // proposal, this member's own approval, and an execution riding along.
+      coordinator.getProposal.mockResolvedValue(bundleOf([
+        { programAddress: SYSTEM_PROGRAM, accounts: [], data: new Uint8Array([4]) },
+        approvalOf(TEST_SIGNER, TEST_MULTISIG_PDA),
+        approvalOf(TEST_SIGNER),
+        executionOf()
+      ]))
 
-      coordinator.getProposal.mockResolvedValue({ version: 0, instructions: [collected] })
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 1, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ]),
+        sendTransaction: () => DUMMY_EXECUTE_HASH
+      })
+
+      const result = await account.approveProposal(3)
+
+      // Only the approval naming this proposal counts, and `status` follows the execution the
+      // bundle actually carries rather than anything the coordinator claimed.
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 1,
+        threshold: 1,
+        status: 'executed',
+        transaction: { hash: DUMMY_EXECUTE_HASH, fee: SIGNATURE_FEE }
+      })
+      expect(coordinator.submitProposal).not.toHaveBeenCalled()
+    })
+
+    it('refuses a bundle that does not carry its own approval', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // The member is a signer of these bytes, as their fee payer, but it is not approving in
+      // them. Signing would put its signature on a transaction it is not voting in.
+      coordinator.getProposal.mockResolvedValue(bundleOf([approvalOf(OTHER_MEMBER)]))
 
       stubSolanaRpc({
         getMultipleAccounts: () => serveValue([
@@ -3084,19 +3230,13 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         ])
       })
 
-      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }))
-
-      account._signerAccount.sendTransaction = sendTransaction
-
-      const result = await account.approveProposal(3)
-
-      // The circulating approval comes first, then this member's own: one message, two approvals,
-      // which is the threshold, so the account broadcasts it.
-      expect(coordinator.getProposal).toHaveBeenCalledWith('3')
-      expect(sent[0].instructions).toHaveLength(2)
-      expect(sent[0].instructions[0]).toBe(collected)
-      expect(result.confirmations).toBe(2)
-      expect(sendTransaction).toHaveBeenCalledTimes(1)
+      await expect(account.approveProposal(3)).rejects.toThrow(
+        new ValueError(
+          `The bundle the coordinator holds for the proposal 3 does not carry an approval by the signer ${TEST_SIGNER}.`
+        )
+      )
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+      expect(coordinator.submitProposal).not.toHaveBeenCalled()
     })
 
     it('leaves a rejection to the signer account', async () => {
