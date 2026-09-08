@@ -372,7 +372,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing; the one error it can surface is a stored message whose address lookup tables can no longer be read, which no longer executes by any route. `vaultIndex` does not bear on a vote.
-   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission. With a coordinator, the approval joins the ones it is circulating and `confirmations` counts those too, so the count is what the transaction carries rather than what the cluster has recorded.
+   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission. With a coordinator, the approval is appended to the message it is circulating and `confirmations` counts the approvals in that message too, so the count is what the transaction carries rather than what the cluster has recorded.
    * @throws {ValueError} The signer must not have approved the proposal already.
    */
   async approveProposal (proposalId, { memo, autoExecute } = {}) {
@@ -389,11 +389,11 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       throw new ValueError(`The signer ${signerAddress} has already approved the proposal ${index}.`)
     }
 
-    const collected = await this._coordinator?.getProposal(index.toString())
-    const held = collected?.instructions ?? []
-    const confirmations = proposal.approved.length + held.length + 1
+    const circulating = await this._coordinator?.getProposal(index.toString())
+    const collected = circulating?.instructions ?? []
+    const confirmations = proposal.approved.length + collected.length + 1
     const instructions = [
-      ...held,
+      ...collected,
       this._buildProposalVoteInstruction(
         INSTRUCTION.proposalApprove,
         multisig.address,
@@ -425,10 +425,10 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       return { ...result, transaction: { hash, fee } }
     }
 
-    const signed = await this._coordinator.confirmProposal({ instructions })
+    const signed = await this._coordinator.confirmProposal({ version: 0, instructions })
     const { hash, fee } = confirmations < multisig.threshold
       ? await this._coordinator.submitProposal(result.proposalId, signed)
-      : await this._signerAccount.sendTransaction(signed)
+      : await this._signerAccount.sendTransaction({ instructions: signed.instructions })
 
     return { ...result, transaction: { hash, fee } }
   }

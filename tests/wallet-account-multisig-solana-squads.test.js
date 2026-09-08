@@ -63,6 +63,7 @@ const DUMMY_EXECUTE_HASH = 'c0ffee'
 const DUMMY_TRANSFER_HASH = 'feedface'
 const DUMMY_FEE = 5000n
 
+
 // What proposalApprove and proposalReject both pass: the multisig read-only, the voting member
 // as a writable signer paying the rent, and the proposal writable.
 const VOTE_ACCOUNTS = [
@@ -3013,11 +3014,12 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const result = await account.approveProposal(3)
 
-      // One of the two approvals it needs: the coordinator signs it, then keeps it circulating
-      // and answers with where it eventually lands. Nothing reaches the cluster.
+      // One of the two approvals it needs: the coordinator signs the message, then keeps it
+      // circulating and answers with where it eventually lands. Nothing reaches the cluster.
       expect(coordinator.confirmProposal).toHaveBeenCalledTimes(1)
-      expect(circulated).toEqual([['3', { instructions: sent[0].instructions, signedBy: 'coordinator' }]])
+      expect(circulated).toEqual([['3', { ...sent[0], signedBy: 'coordinator' }]])
       expect(sendTransaction).not.toHaveBeenCalled()
+      expect(result.confirmations).toBe(1)
       expect(result.transaction.hash).toBe(DUMMY_VOTE_HASH)
     })
 
@@ -3040,14 +3042,46 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const result = await account.approveProposal(3)
 
-      // The approval completes the threshold, so the account broadcasts what the coordinator signed.
+      // The approval completes the threshold, so the account broadcasts the message the
+      // coordinator signed rather than handing it over: a coordinator never reaches the cluster.
       expect(coordinator.confirmProposal).toHaveBeenCalledTimes(1)
       expect(coordinator.submitProposal).not.toHaveBeenCalled()
-      expect(sendTransaction).toHaveBeenCalledWith({
-        instructions: sent[0].instructions,
-        signedBy: 'coordinator'
-      })
+      expect(sendTransaction).toHaveBeenCalledWith({ instructions: sent[0].instructions })
+      expect(result.confirmations).toBe(2)
       expect(result.transaction.hash).toBe(DUMMY_VOTE_HASH)
+    })
+
+    it('appends its approval to the message the coordinator is circulating', async () => {
+      const { account, coordinator, sent } = await accountWithCoordinator()
+
+      // One member has already voted, and its approval is circulating unbroadcast.
+      const collected = { programAddress: SQUADS_PROGRAM_ADDRESS, accounts: [], data: [1] }
+
+      coordinator.getProposal.mockResolvedValue({ version: 0, instructions: [collected] })
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }))
+
+      account._signerAccount.sendTransaction = sendTransaction
+
+      const result = await account.approveProposal(3)
+
+      // The circulating approval comes first, then this member's own: one message, two approvals,
+      // which is the threshold, so the account broadcasts it.
+      expect(coordinator.getProposal).toHaveBeenCalledWith('3')
+      expect(sent[0].instructions).toHaveLength(2)
+      expect(sent[0].instructions[0]).toBe(collected)
+      expect(result.confirmations).toBe(2)
+      expect(sendTransaction).toHaveBeenCalledTimes(1)
     })
 
     it('leaves a rejection to the signer account', async () => {
@@ -3074,57 +3108,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(coordinator.submitProposal).not.toHaveBeenCalled()
       expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(1)
       expect(result.transaction.hash).toBe(DUMMY_VOTE_HASH)
-    })
-
-    it('adds its approval to the transaction the coordinator is circulating', async () => {
-      const { account, coordinator, sent } = await accountWithCoordinator()
-      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }))
-
-      // One member has already voted, and the coordinator is holding that vote unbroadcast.
-      const collected = { programAddress: SQUADS_PROGRAM_ADDRESS, accounts: [], data: [1] }
-
-      coordinator.getProposal.mockResolvedValue({ instructions: [collected] })
-
-      stubSolanaRpc({
-        getMultipleAccounts: () => serveValue([
-          multisigAccountValue(
-            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
-            { threshold: 2, transactionIndex: 7n }
-          ),
-          proposalAccountValue({})
-        ])
-      })
-
-      account._signerAccount.sendTransaction = sendTransaction
-
-      await account.approveProposal(3)
-
-      expect(coordinator.getProposal).toHaveBeenCalledWith('3')
-      // The approval it is circulating comes first, then this member's own: one transaction, two
-      // approvals, which is the threshold, so the account broadcasts it.
-      expect(sent[0].instructions).toHaveLength(2)
-      expect(sent[0].instructions[0]).toBe(collected)
-      expect(sendTransaction).toHaveBeenCalledTimes(1)
-    })
-
-    it('sends its approval alone when the coordinator is circulating nothing', async () => {
-      const { account, coordinator, sent, circulated } = await accountWithCoordinator()
-
-      stubSolanaRpc({
-        getMultipleAccounts: () => serveValue([
-          multisigAccountValue(
-            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
-            { threshold: 2, transactionIndex: 7n }
-          ),
-          proposalAccountValue({})
-        ])
-      })
-
-      await account.approveProposal(3)
-
-      expect(coordinator.getProposal).toHaveBeenCalledWith('3')
-      expect(sent[0].instructions).toHaveLength(1)
-      expect(circulated).toHaveLength(1)
     })
 
     it('leaves the execution to the signer account', async () => {

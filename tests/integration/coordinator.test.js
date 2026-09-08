@@ -16,30 +16,15 @@
 
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals'
 
-import { getBase64Decoder } from '@solana/codecs'
-import { pipe } from '@solana/functional'
 import { createSolanaRpc } from '@solana/rpc'
-import {
-  createKeyPairSignerFromPrivateKeyBytes,
-  generateKeyPairSigner,
-  setTransactionMessageFeePayerSigner,
-  signTransactionMessageWithSigners
-} from '@solana/signers'
-import {
-  appendTransactionMessageInstructions,
-  compileTransactionMessage,
-  createTransactionMessage,
-  getCompiledTransactionMessageEncoder,
-  setTransactionMessageLifetimeUsingBlockhash
-} from '@solana/transaction-messages'
-import { getBase64EncodedWireTransaction } from '@solana/transactions'
+import { createKeyPairSignerFromPrivateKeyBytes, generateKeyPairSigner } from '@solana/signers'
 
 import WalletManagerSolana, { WalletAccountReadOnlySolana } from '@tetherto/wdk-wallet-solana'
 
 import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
 
-import { LAMPORTS_PER_SOL, airdrop, confirmTransaction } from './helpers/chain.js'
-import { createWallet, deployMultisig, sorted } from './helpers/multisig.js'
+import { LAMPORTS_PER_SOL, confirmTransaction } from './helpers/chain.js'
+import { deployMultisig, sorted } from './helpers/multisig.js'
 import { TEST_RPC_URL, startSolanaTestValidator } from './helpers/validator.js'
 
 jest.setTimeout(180_000)
@@ -56,13 +41,40 @@ const PROPOSAL_RENT = 5143440n
 
 const TRANSFER_AMOUNT = LAMPORTS_PER_SOL / 10n
 
+// The note the proposal has the vault write, and the instruction that writes it: the memo program
+// takes the text as its data and needs no accounts, so a proposal carrying it costs the vault
+// nothing but the execution's fee.
+const MEMO_TEXT = 'two of three, collected off chain'
+const MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'
+const MEMO_INSTRUCTION = {
+  programAddress: MEMO_PROGRAM,
+  accounts: [],
+  data: new TextEncoder().encode(MEMO_TEXT)
+}
+
 // A signature the cluster has never seen, which a coordinator that only circulates answers with.
 const UNBROADCAST_HASH =
   '4YkT2NCT7cabPMuBNe9GiBmYWSqSChfgQpwZ5sDoDLYkP1yPmzHVfvKD6JgFPBhTruWJFVWvKZ1s6PyzD8MW1XSm'
 
 /**
+ * Reads the memo a landed transaction wrote, from the log the memo program prints.
+ *
+ * @param {object} rpc - The Solana RPC client.
+ * @param {string} hash - The transaction's signature.
+ * @returns {Promise<string | null>} The memo, or null when the transaction logged none.
+ */
+async function memoOf (rpc, hash) {
+  const { meta } = await rpc
+    .getTransaction(hash, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+    .send()
+  const logged = meta.logMessages.find((line) => line.includes('Program log: Memo'))
+
+  return logged ? logged.slice(logged.indexOf('"') + 1, logged.lastIndexOf('"')) : null
+}
+
+/**
  * The keypair signers of the first `count` members the seed phrase derives, which stands in for
- * what the members of a real collection would each sign with on their own machine.
+ * what each member of a real collection would sign with on its own machine.
  *
  * @param {number} count - How many members to derive.
  * @returns {Promise<object[]>} The signers, in derivation order.
@@ -83,19 +95,11 @@ async function memberSigners (count) {
   return signers
 }
 
-/** @param {string} target */
-function solanaAccount (target) {
-  return new WalletAccountReadOnlySolana(target, {
-    provider: TEST_RPC_URL,
-    commitment: 'confirmed'
-  })
-}
-
 /**
- * Attaches a signer to the accounts an instruction list already names as the member, which is how
- * a coordinator signs an approval it is handed.
+ * Attaches a signer to the accounts an instruction already names as the member, which is how a
+ * signature travels on a message that is not compiled yet.
  *
- * @param {object[]} instructions - The instructions the account built.
+ * @param {object[]} instructions - The instructions the message carries.
  * @param {object} memberSigner - The member's signer.
  * @returns {object[]} The instructions, with the member's signer embedded.
  */
@@ -112,45 +116,53 @@ function withMemberSigner (instructions, memberSigner) {
   }))
 }
 
+/** @param {string} target */
+function solanaAccount (target) {
+  return new WalletAccountReadOnlySolana(target, {
+    provider: TEST_RPC_URL,
+    commitment: 'confirmed'
+  })
+}
+
 /**
- * A coordinator that signs and circulates, which is all the contract asks of one:
- * `confirmProposal` adds the voting member's signature to the instructions it is given,
- * `submitProposal` keeps the partially signed transaction for the next member, and no method
- * reaches the cluster. One instance stands in for the service the members share, so it is given
- * every member's keypair signer up front; the configuration each account hands it carries no key,
- * which is the point of `CoordinatorSigner`.
+ * The pseudo coordinator layer: `confirmProposal` puts this member's signature on the message by
+ * embedding its signer in the instruction that names it, `submitProposal` keeps the message for
+ * the next member and `getProposal` hands it back. Nothing here reaches the cluster.
+ *
+ * One instance per member, since the configuration it is built with names one member. What the
+ * members share is the collection passed between the instances, which is the service a real
+ * coordinator would talk to. The member that broadcasts must leave its own signature to its
+ * account, which signs as fee payer, so only the ones that circulate embed a signer.
  */
-class CollectingCoordinator extends IMultisigCoordinator {
-  constructor (config, memberSigners) {
+class PseudoCoordinator extends IMultisigCoordinator {
+  constructor (config, { circulating, memberSigner = null }) {
     super(config)
 
-    this._memberSigners = memberSigners
-    this._held = new Map()
-
-    this.circulated = []
+    this._circulating = circulating
+    this._memberSigner = memberSigner
   }
 
   async submitProposal (proposalId, proposal) {
-    this._held.set(proposalId, proposal)
-    this.circulated.push([proposalId, proposal])
+    this._circulating.set(proposalId, proposal)
 
     // A real one resolves when whoever completes the threshold broadcasts. This one answers at
-    // once with a signature the cluster has never seen, so the test can inspect the collection.
+    // once with a signature the cluster has never seen, so the test can read what it circulates.
     return { hash: UNBROADCAST_HASH, fee: SIGNATURE_FEE }
   }
 
   async getProposal (proposalId) {
-    return this._held.get(proposalId) ?? null
+    return this._circulating.get(proposalId) ?? null
   }
 
   async confirmProposal (proposal) {
-    let instructions = proposal.instructions
-
-    for (const memberSigner of this._memberSigners) {
-      instructions = withMemberSigner(instructions, memberSigner)
+    if (!this._memberSigner) {
+      return proposal
     }
 
-    return { instructions }
+    return {
+      ...proposal,
+      instructions: withMemberSigner(proposal.instructions, this._memberSigner)
+    }
   }
 }
 
@@ -219,59 +231,85 @@ describe('coordinators', () => {
     })
   })
 
-  describe('a coordinator that signs and circulates', () => {
-    it('collects both votes into one transaction the last member broadcasts', async () => {
-      const signers = await memberSigners(2)
-      let coordinator = null
-      const { accounts, multisigPda } = await deployMultisig({ members: 2, threshold: 2 })
-      const { accounts: voters } = await createWallet({
-        members: 2,
+  describe('two of three members voting through a coordinator', () => {
+    it('circulates the first approval and lets the second append and broadcast', async () => {
+      // One coordinator per member over the collection they share. The first member circulates,
+      // so its signature travels on the message; the second broadcasts, so its account signs.
+      const [firstSigner] = await memberSigners(1)
+      const circulating = new Map()
+      const coordinators = []
+      const { accounts, signers } = await deployMultisig({
+        members: 3,
+        threshold: 2,
         config: {
-          multisigPdaOrCreateKey: multisigPda,
-          createKeySecret: undefined,
           coordinator: (config) => {
-            coordinator ??= new CollectingCoordinator(config, signers)
+            const coordinator = new PseudoCoordinator(config, {
+              circulating,
+              memberSigner: coordinators.length === 0 ? firstSigner : null
+            })
+
+            coordinators.push(coordinator)
 
             return coordinator
           }
         }
       })
-      const recipient = (await generateKeyPairSigner()).address
 
-      await airdrop(rpc, await accounts[0].getVaultAddress(0), LAMPORTS_PER_SOL)
-
-      const proposal = await voters[0].propose({ to: recipient, value: TRANSFER_AMOUNT })
+      // 1. The first member proposes a memo for the vault to run. Its own transaction: a
+      // coordinator never sees one.
+      const proposal = await accounts[0].propose({ instructions: [MEMO_INSTRUCTION] })
 
       await confirmTransaction(rpc, proposal.transaction.hash)
 
-      const first = await voters[0].approveProposal(proposal.proposalId)
+      expect(proposal.confirmations).toBe(0)
+      expect(circulating.size).toBe(0)
 
-      // One of two: signed and circulating, with nothing on the cluster to show for it.
+      // 2. The first member votes. One of the two approvals it needs is short of the threshold,
+      // so the message is signed and kept rather than broadcast.
+      const first = await accounts[0].approveProposal(proposal.proposalId)
+      const held = circulating.get(proposal.proposalId)
+
       expect(first.transaction.hash).toBe(UNBROADCAST_HASH)
-      expect(coordinator.circulated).toHaveLength(1)
-      expect(coordinator.circulated[0][1].instructions).toHaveLength(1)
+      expect(first.confirmations).toBe(1)
+      expect(held.instructions).toHaveLength(1)
       expect((await accounts[0].getProposal(proposal.proposalId)).approved).toEqual([])
 
-      // The second vote is where this contract stops working: the account broadcasts what the
-      // coordinator signed, and the broadcasting member's key is embedded in its own vote as well
-      // as being the fee payer, which `@solana/kit` refuses:
-      //
-      //   SolanaError: Multiple distinct signers were identified for address ...
-      //
-      // A member that signs its own vote can only circulate it; the one that broadcasts must leave
-      // its signature to the account. So signing belongs on the circulating path, not on `approve`.
-      await expect(voters[1].approveProposal(proposal.proposalId)).rejects.toThrow(
-        /Multiple distinct signers/
-      )
-      expect((await accounts[0].getProposal(proposal.proposalId)).approved).toEqual([])
+      // 3. The second member appends its approval to that message, which meets the threshold, so
+      // its account broadcasts the pair and then executes.
+      const second = await accounts[1].approveProposal(proposal.proposalId)
+
+      await confirmTransaction(rpc, second.transaction.hash)
+
+      expect(second.transaction.hash).not.toBe(UNBROADCAST_HASH)
+      expect(second.confirmations).toBe(2)
+      // Two approvals in one transaction, with two signatures: the first member's, which
+      // travelled on the message, and the second member's as fee payer.
+      expect(second.transaction.fee).toBe(2n * SIGNATURE_FEE)
+      expect(circulating.get(proposal.proposalId)).toBe(held)
+
+      const approved = await accounts[0].getProposal(proposal.proposalId)
+
+      expect(approved.statusName).toBe('Approved')
+      expect(sorted(approved.approved)).toEqual(sorted([signers[0], signers[1]]))
+      expect(approved.approved).not.toContain(signers[2])
+
+      const execution = await accounts[1].executeProposal(proposal.proposalId)
+
+      await confirmTransaction(rpc, execution.hash)
+
+      expect((await accounts[0].getProposal(proposal.proposalId)).statusName).toBe('Executed')
+      expect(await memoOf(rpc, execution.hash)).toBe(MEMO_TEXT)
     })
+  })
 
-    it('erases the derived key with the account, holding nothing of its own to dispose', async () => {
-      const signers = await memberSigners(1)
+  describe('either way', () => {
+    it('erases the derived key with the account, holding nothing of its own', async () => {
       const { accounts } = await deployMultisig({
         members: 1,
         threshold: 1,
-        config: { coordinator: (config) => new CollectingCoordinator(config, signers) }
+        config: {
+          coordinator: (config) => new PseudoCoordinator(config, { circulating: new Map() })
+        }
       })
 
       accounts[0].dispose()

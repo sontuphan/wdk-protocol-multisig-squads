@@ -19,6 +19,7 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
 /** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@solana/transactions').Transaction} Transaction */
+/** @typedef {import('@solana/transaction-messages').BaseTransactionMessage} TransactionMessage */
 
 /**
  * What a coordinator is given of the member it signs for: the address to name it by and a way to
@@ -46,6 +47,11 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
  * `getProposal` hands back and has `confirmProposal` sign it; while the approvals in it are short
  * of the threshold `submitProposal` keeps it circulating, and once they meet it the account
  * broadcasts it. So a coordinator signs and holds, and never reaches the cluster itself.
+ *
+ * What travels is a transaction message, not a transaction: uncompiled, so the next member's
+ * approval can still be appended, and each signature rides along as a signer on the instruction
+ * that names its member. The member that broadcasts leaves its own signature to its account, which
+ * signs as fee payer.
  *
  * `submitProposal` resolves late, with the hash and fee of the transaction that eventually carries
  * the approvals it was given, which is what keeps the account's non-nullable `hash` honest. Three
@@ -84,13 +90,14 @@ export class IMultisigCoordinator {
   }
 
   /**
-   * Takes the partially signed transaction a proposal's votes are accumulating in, to keep
-   * circulating among the members while it is short of the threshold. Resolving late is the point:
-   * the promise settles when whoever completes the threshold broadcasts it, which is what keeps
-   * the account's `hash` non-nullable.
+   * Takes the partially signed transaction a proposal's approvals are accumulating in, to keep
+   * circulating among the members while it is short of the threshold. Circulating is all it does:
+   * a coordinator never puts a transaction on the cluster, which is the account's job. Resolving
+   * late is the point: the promise settles when whoever completes the threshold broadcasts it,
+   * which is what keeps the account's `hash` non-nullable.
    *
    * @param {string} proposalId - The proposal (transaction index) id.
-   * @param {SolanaTransaction} proposal - The transaction as this member signed it, carrying every approval collected so far.
+   * @param {TransactionMessage} proposal - The message as this member left it, carrying every approval collected so far and the signers they travel with.
    * @returns {Promise<TransactionResult>} The signature and fee of the transaction that eventually carries these approvals.
    */
   async submitProposal (proposalId, proposal) {
@@ -102,7 +109,7 @@ export class IMultisigCoordinator {
    * that the next member can add its own vote to it rather than opening a second one.
    *
    * @param {string} proposalId - The proposal (transaction index) id.
-   * @returns {Promise<SolanaTransaction | null>} The transaction, whose instructions carry the votes signed so far, or null when the coordinator is circulating none for that id.
+   * @returns {Promise<TransactionMessage | null>} The message being circulated, whose instructions carry the approvals collected so far, or null when the coordinator is circulating nothing for that id.
    */
   async getProposal (proposalId) {
     throw new NotImplementedError('getProposal(proposalId)')
@@ -112,8 +119,8 @@ export class IMultisigCoordinator {
    * Signs the member's approval. Signing is all it does: the account decides whether the result
    * keeps circulating or goes to the cluster.
    *
-   * @param {SolanaTransaction} proposal - The transaction to sign. Its instructions carry the approvals signed so far plus this member's, and the execution too when this vote reaches the threshold.
-   * @returns {Promise<SolanaTransaction>} The transaction with this member's signature added.
+   * @param {TransactionMessage} proposal - The message to sign, whose instructions carry the approvals collected so far plus this member's, and the execution too when this approval reaches the threshold.
+   * @returns {Promise<TransactionMessage>} The message with this member's signature on it, which travels as a signer on the instruction that names the member: a message is not compiled yet, so the next approval can still be added to it.
    */
   async confirmProposal (proposal) {
     throw new NotImplementedError('confirmProposal(proposal)')

@@ -35,8 +35,6 @@ import {
   TOKEN_PROGRAM_ADDRESS
 } from '@solana-program/token'
 
-import { NotImplementedError } from '@tetherto/wdk-wallet'
-
 import WalletManagerMultisigSolanaSquads, {
   SQUADS_PROGRAM_ADDRESS
 } from '@tetherto/wdk-protocol-multisig-squads'

@@ -189,6 +189,12 @@ own to erase, which is why the interface has nothing to dispose.
 > read-only account. A peer-to-peer coordinator that collects member approvals before one of them
 > broadcasts fits this interface and is not part of this package yet.
 
+> [!TIP]
+> What a coordinator holds is a `TransactionMessage`, which is not compiled yet: that is what lets
+> the next member's approval be appended to it, with each signature travelling as a signer on the
+> instruction that names its member. `CoordinatorSigner.signTransaction` compiles what it signs, so
+> its result cannot take another approval; use it when you do not need to batch.
+
 ## Fees, rent, and who pays
 
 Three payers, and one call can involve all three:
