@@ -30,7 +30,9 @@ import { getBase64Encoder } from '@solana/codecs'
 import { AccountRole } from '@solana/instructions'
 import { SYSTEM_PROGRAM_ADDRESS } from '@solana-program/system'
 import { ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS } from '@solana-program/address-lookup-table'
+import { createKeyPairFromPrivateKeyBytes } from '@solana/keys'
 import { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes } from '@solana/signers'
+import { partiallySignTransaction } from '@solana/transactions'
 
 import {
   ACCOUNT,
@@ -137,7 +139,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     this._coordinator = config.coordinator?.({
       getAddress: () => signerAccount.getAddress(),
-      signTransaction: (tx) => signerAccount.signTransaction(tx)
+      partiallySignTransaction: async (tx) => partiallySignTransaction(
+        [await createKeyPairFromPrivateKeyBytes(signerAccount.keyPair.privateKey)], tx
+      )
     })
   }
 

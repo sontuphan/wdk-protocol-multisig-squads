@@ -63,7 +63,6 @@ const DUMMY_EXECUTE_HASH = 'c0ffee'
 const DUMMY_TRANSFER_HASH = 'feedface'
 const DUMMY_FEE = 5000n
 
-
 // What proposalApprove and proposalReject both pass: the multisig read-only, the voting member
 // as a writable signer paying the rent, and the proposal writable.
 const VOTE_ACCOUNTS = [
@@ -2946,9 +2945,25 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(account._coordinator).toBe(coordinator)
       expect(await coordinatorConfig.getAddress()).toBe(TEST_SIGNER)
 
-      // The configuration names the member and signs as it, and carries nothing else: a
+      // The configuration names the member and adds its signature, and carries nothing else: a
       // coordinator cannot read the key it signs with.
-      expect(Object.keys(coordinatorConfig)).toEqual(['getAddress', 'signTransaction'])
+      expect(Object.keys(coordinatorConfig)).toEqual(['getAddress', 'partiallySignTransaction'])
+    })
+
+    it('adds the member signature a coordinator asks for, and nothing else', async () => {
+      const { coordinatorConfig } = await accountWithCoordinator()
+      const compiled = {
+        messageBytes: new Uint8Array([1, 2, 3]),
+        signatures: { [TEST_SIGNER]: null }
+      }
+
+      const signed = await coordinatorConfig.partiallySignTransaction(compiled)
+
+      // The member's slot is filled and the message is untouched, so signatures collected from
+      // several members merge rather than replacing each other.
+      expect(signed.messageBytes).toBe(compiled.messageBytes)
+      expect(signed.signatures[TEST_SIGNER]).toBeInstanceOf(Uint8Array)
+      expect(signed.signatures[TEST_SIGNER]).toHaveLength(64)
     })
 
     it('has no coordinator when the configuration names none', async () => {

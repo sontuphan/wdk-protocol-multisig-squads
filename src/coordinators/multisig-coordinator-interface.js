@@ -17,17 +17,18 @@
 import { NotImplementedError } from '@tetherto/wdk-wallet'
 
 /** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
-/** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@solana/transactions').Transaction} Transaction */
 /** @typedef {import('@solana/transaction-messages').BaseTransactionMessage} TransactionMessage */
 
 /**
  * What a coordinator is given of the member it signs for: the address to name it by and a way to
- * sign as it. Deliberately not the member's account, which would hand over the key as well.
+ * add its signature to a transaction. Deliberately not the member's account, which would hand over
+ * the key as well, and deliberately partial: a coordinator collects signatures, so it must be able
+ * to add one without disturbing the others or compiling anything.
  *
  * @typedef {Object} CoordinatorSigner
  * @property {() => Promise<string>} getAddress - Returns the member's address.
- * @property {(tx: SolanaTransaction) => Promise<Transaction>} signTransaction - Signs a transaction as the member, compiling it against a fresh blockhash with the member as fee payer. What comes back carries this member's signature and may still be short of the others'.
+ * @property {(tx: Transaction) => Promise<Transaction>} partiallySignTransaction - Adds this member's signature to a compiled transaction and changes nothing else, so signatures collected from several members merge in any order. The key itself stays in the account.
  */
 
 /**
@@ -49,9 +50,10 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
  * broadcasts it. So a coordinator signs and holds, and never reaches the cluster itself.
  *
  * What travels is a transaction message, not a transaction: uncompiled, so the next member's
- * approval can still be appended, and each signature rides along as a signer on the instruction
- * that names its member. The member that broadcasts leaves its own signature to its account, which
- * signs as fee payer.
+ * approval can still be appended to it, and how each member's signature comes to be on it is the
+ * implementation's business. `@solana/kit` offers the pieces: a signer on the instruction that
+ * names the member, a `NoopSigner` to mark a slot for a signature collected later, partial
+ * signatures merged over the compiled bytes. This contract takes no view on which.
  *
  * `submitProposal` resolves late, with the hash and fee of the transaction that eventually carries
  * the approvals it was given, which is what keeps the account's non-nullable `hash` honest. Three
@@ -97,7 +99,7 @@ export class IMultisigCoordinator {
    * which is what keeps the account's `hash` non-nullable.
    *
    * @param {string} proposalId - The proposal (transaction index) id.
-   * @param {TransactionMessage} proposal - The message as this member left it, carrying every approval collected so far and the signers they travel with.
+   * @param {TransactionMessage} proposal - The message as this member left it, carrying every approval collected so far.
    * @returns {Promise<TransactionResult>} The signature and fee of the transaction that eventually carries these approvals.
    */
   async submitProposal (proposalId, proposal) {
@@ -120,7 +122,7 @@ export class IMultisigCoordinator {
    * keeps circulating or goes to the cluster.
    *
    * @param {TransactionMessage} proposal - The message to sign, whose instructions carry the approvals collected so far plus this member's, and the execution too when this approval reaches the threshold.
-   * @returns {Promise<TransactionMessage>} The message with this member's signature on it, which travels as a signer on the instruction that names the member: a message is not compiled yet, so the next approval can still be added to it.
+   * @returns {Promise<TransactionMessage>} The message with this member's signature accounted for, however the implementation carries it.
    */
   async confirmProposal (proposal) {
     throw new NotImplementedError('confirmProposal(proposal)')

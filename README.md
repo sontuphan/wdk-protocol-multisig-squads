@@ -129,8 +129,9 @@ import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
 
 class MyCoordinator extends IMultisigCoordinator {
   // The configuration is a `CoordinatorSigner`: `getAddress()` names the member and
-  // `signTransaction(tx)` signs as it. Widen it with whatever else you need, a service URL or a
-  // peer list; what you never get is the member's key.
+  // `partiallySignTransaction(tx)` adds its signature to a compiled transaction, leaving the
+  // others alone. Widen it with whatever else you need, a service URL or a peer list; what you
+  // never get is the member's key.
   constructor (config) {
     super(config)
     this._held = new Map()
@@ -151,10 +152,10 @@ class MyCoordinator extends IMultisigCoordinator {
     return this._held.get(proposalId) ?? null
   }
 
-  // Add this member's signature to the approvals in `proposal.instructions` and hand it back.
-  // Signing is all this does: the account circulates or broadcasts it, per the threshold.
+  // Put this member's signature on the message and hand it back. How it travels is up to you: a
+  // signer on the approval that names the member, or a `NoopSigner` slot you fill later.
   async confirmProposal (proposal) {
-    return this._config.signTransaction(proposal)
+    return this._sign(proposal)
   }
 }
 
@@ -165,21 +166,26 @@ const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
 })
 ```
 
-A coordinator handles approvals and nothing else. `confirmProposal` signs one; `getProposal` is what
-makes them accumulate, handing back the transaction you are holding so the next member's
-`approveProposal` can append its own approval to those instructions and count the ones it finds
-there towards the threshold. Short of the threshold, the signed transaction goes to
-`submitProposal`, which keeps it: broadcasting would waste a fee on a proposal that cannot execute
-yet. At the threshold, the account broadcasts it itself. Return null from `getProposal` and the
-member votes alone.
+A coordinator handles approvals and nothing else. `getProposal` is what makes them accumulate,
+handing back the message you are holding so the next member's `approveProposal` can append its own
+approval and count the ones it finds there towards the threshold. Short of the threshold, that
+message goes to `submitProposal`, which keeps it: broadcasting would waste a fee on a proposal that
+cannot execute yet. Return null and the member votes alone.
+
+At the threshold the account broadcasts the message through the member's own signer account, which
+signs as fee payer. `confirmProposal` is where the other members' signatures come from, and the
+contract takes no view on how you carry them: a signer on the instruction that names the member
+travels with the message, while a `NoopSigner` marks the slot for a signature you collect over the
+compiled bytes, which is what a service holding no member keys would do.
 
 `coordinator` is a signing option, since only a signing account votes, and it takes a factory rather
 than an instance because one configuration is shared by every account the manager derives, and each
 of those signs with a different key. The factory is handed a `CoordinatorSigner`, `{ getAddress,
-signTransaction }` over that member's key, rather than the account holding it: a coordinator can
-name the member and sign as it, and can read neither the key nor anything else on the account. That
-object is the coordinator's configuration, so an implementation is free to widen it, which the base
-class is generic over. It
+partiallySignTransaction }` over that member's key, rather than the account holding it: a
+coordinator can name the member and add its signature to a transaction, and can read neither the key
+nor anything else on the account. Partial is the point, since a coordinator collects signatures from
+several members and they have to merge. That object is the coordinator's configuration, so an
+implementation is free to widen it, which the base class is generic over. It
 owns no identity either, since the account always votes as the member it derived, and no key of its
 own to erase, which is why the interface has nothing to dispose.
 
@@ -190,10 +196,11 @@ own to erase, which is why the interface has nothing to dispose.
 > broadcasts fits this interface and is not part of this package yet.
 
 > [!TIP]
-> What a coordinator holds is a `TransactionMessage`, which is not compiled yet: that is what lets
-> the next member's approval be appended to it, with each signature travelling as a signer on the
-> instruction that names its member. `CoordinatorSigner.signTransaction` compiles what it signs, so
-> its result cannot take another approval; use it when you do not need to batch.
+> A `TransactionMessage` is not compiled, which is what lets the next approval be appended to it,
+> and is also why no signature can exist on it yet: there are no bytes to sign. One rule applies
+> whichever way you carry them: the member that broadcasts must not appear as a signer on the
+> message, since its account signs as fee payer and `@solana/kit` refuses two distinct signers for
+> one address.
 
 ## Fees, rent, and who pays
 
