@@ -16,6 +16,7 @@ export type SolanaMultisigProposal = import("./src/wallet-account-read-only-mult
 export type SolanaMultisigProposalResult = import("./src/wallet-account-multisig-solana-squads.js").SolanaMultisigProposalResult;
 export type SolanaMultisigTransactionOptions = import("./src/wallet-account-multisig-solana-squads.js").SolanaMultisigTransactionOptions;
 export type SolanaMultisigAddOwnerOptions = import("./src/wallet-account-multisig-solana-squads.js").SolanaMultisigAddOwnerOptions;
+export type CoordinatorSigner = import("./src/coordinators/index.js").CoordinatorSigner;
 export type MultisigCoordinatorFactory = import("./src/coordinators/index.js").MultisigCoordinatorFactory;
 export type SquadsMember = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsMember;
 export type SquadsMultisigAccount = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsMultisigAccount;

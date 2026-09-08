@@ -1,51 +1,73 @@
+/** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
+/** @typedef {import('@solana/transactions').Transaction} Transaction */
 /**
  * What a coordinator is given of the member it signs for: the address to name it by and a way to
  * add its signature to a transaction. Deliberately not the member's account, which would hand over
  * the key as well, and deliberately partial: a coordinator collects signatures, so it must be able
  * to add one without disturbing the others or compiling anything.
+ *
+ * These two are the whole of what a member contributes to a batch. The bundle is the coordinator's:
+ * it decides who signs, builds their approvals, fixes the fee payer and the lifetime, and compiles.
+ * A member only fills its own slot.
+ *
+ * @typedef {Object} CoordinatorSigner
+ * @property {() => Promise<string>} getAddress - Returns the member's address.
+ * @property {(tx: Transaction) => Promise<Transaction>} partiallySignTransaction - Adds this member's signature to a compiled transaction and changes nothing else, so signatures collected from several members merge in any order. The key itself stays in the account.
  */
-export type CoordinatorSigner = {
-    /**
-     * - Returns the member's address.
-     */
-    getAddress: () => Promise<string>;
-    /**
-     * - Adds this member's signature to a compiled transaction and changes nothing else, so signatures collected from several members merge in any order. The key itself stays in the account.
-     */
-    partiallySignTransaction: (tx: import("@solana/transactions").Transaction) => Promise<import("@solana/transactions").Transaction>;
-};
+/**
+ * A proposal's approvals as a coordinator holds them: one compiled transaction, and nothing beside
+ * it.
+ *
+ * Compiled is the point. A signature covers the message bytes, so the bytes have to exist before
+ * anyone can sign and must not change afterwards: the approvers, the fee payer and the lifetime are
+ * all fixed when the coordinator compiles, and a member that is not a signer of those bytes has no
+ * slot and cannot be added to one later. That is why a coordinator has to know who will sign before
+ * it builds, and why a durable nonce rather than a blockhash is what keeps the bytes valid across a
+ * collection window longer than 60 to 90 seconds.
+ *
+ * Nothing travels alongside it because nothing needs to. A compiled instruction names its program
+ * by an index into the message's static accounts and leads with the same eight-byte discriminator
+ * an uncompiled one does, and a signer can never come from an address lookup table, so every
+ * approving member is a static account too. The account reads the approvals it carries, which
+ * member each belongs to, and whether an execution rides along, out of the bytes themselves.
+ *
+ */
 /**
  * Builds the coordinator an account votes through, from a signer over the member's own key. One
  * configuration is shared by every account a manager derives, and each of those signs with a
  * different key, so the configuration carries this rather than a coordinator instance.
+ *
+ * @typedef {(config: CoordinatorSigner) => IMultisigCoordinator} MultisigCoordinatorFactory
  */
-export type MultisigCoordinatorFactory = (config: CoordinatorSigner) => IMultisigCoordinator;
 /**
  * Coordinator for collecting a proposal's approvals into one transaction, which is what turns the
  * N+2 transactions a Squads proposal costs into three.
  *
  * Creating a proposal, rejecting it and executing it are each one member's own transaction and
- * never reach a coordinator. Approvals do: each member appends its own to the message
- * `getProposal` hands back and has `confirmProposal` sign it, then `submitProposal` keeps it
- * circulating while the approvals in it are short of the threshold. The account that meets the
- * threshold broadcasts, so a coordinator signs and holds and never reaches the cluster itself.
+ * never reach a coordinator. Approvals do, and a coordinator owns them end to end: it decides which
+ * members will approve, builds all of their approval instructions and the execution if one rides
+ * along, fixes the fee payer and the lifetime, and compiles. `getProposal` hands that transaction
+ * to a member, `confirmProposal` puts the member's signature in its slot, and `submitProposal`
+ * keeps it while slots are still empty. The member that fills the last one broadcasts, so a
+ * coordinator signs and holds and never reaches the cluster itself.
  *
- * What travels is a message, not a transaction: uncompiled, so the next approval can still be
- * appended, which also means no signature exists on it yet. How one comes to be there is the
- * implementation's business, and `@solana/kit` offers the pieces: a signer on the instruction that
- * names the member, or a `NoopSigner` marking a slot for a signature collected over the compiled
- * bytes later, which is what `CoordinatorSigner.partiallySignTransaction` is for.
+ * What travels is a compiled transaction, which is what makes the signatures collectable: they
+ * cover the message bytes, so the bytes must exist before the first signature and must not change
+ * after it. An account never appends to a bundle, never counts what is in one, and never rebuilds
+ * one: any of those would void every signature already gathered.
  *
  * `submitProposal` resolves late, with the hash and fee of the transaction that eventually carries
  * the approvals it was given, which is what keeps the account's non-nullable `hash` honest.
  *
- * It has no proposal storage, no message sharing and no quoting: approvals are on-chain
- * instructions, so the read-only account reads them from the cluster. Nor does it own an identity:
- * the account votes as the member it derived.
+ * It has no proposal storage and no quoting: approvals are on-chain instructions, so the read-only
+ * account reads them from the cluster. Nor does it own an identity: the account votes as the member
+ * it derived.
  *
  * Implementations extend this class, which holds the configuration and leaves every method to
  * them. The configuration is the member's signer, widened by whatever else an implementation needs:
  * a service URL, a transport, a key of its own.
+ *
+ * @template {CoordinatorSigner} [TCoordinatorConfig=CoordinatorSigner]
  */
 export class IMultisigCoordinator<TCoordinatorConfig extends CoordinatorSigner = CoordinatorSigner> {
     /**
@@ -62,46 +84,72 @@ export class IMultisigCoordinator<TCoordinatorConfig extends CoordinatorSigner =
      */
     protected _config: TCoordinatorConfig;
     /**
-     * Takes the message a proposal's approvals accumulate in, to keep circulating while they are
-     * short of the threshold. Circulating is all it does: reaching the cluster is the account's job.
+     * Takes the bundle back with this member's signature in it, to keep circulating while any slot is
+     * still empty. Circulating is all it does: reaching the cluster is the account's job.
      *
      * @param {string} proposalId - The proposal (transaction index) id.
-     * @param {TransactionMessage} proposal - The message as this member left it, carrying every approval collected so far.
+     * @param {Transaction} proposal - The bundle as this member left it, carrying every signature collected so far.
      * @returns {Promise<TransactionResult>} The signature and fee of the transaction that eventually carries these approvals, which is why it resolves late.
      */
-    submitProposal(proposalId: string, proposal: import("@solana/transaction-messages").BaseTransactionMessage): Promise<import("@tetherto/wdk-wallet").TransactionResult>;
+    submitProposal(proposalId: string, proposal: Transaction): Promise<TransactionResult>;
     /**
-     * Returns the message being circulated for a proposal, so the next member can add its approval
-     * to it rather than opening a transaction of its own.
+     * Returns the compiled bundle being circulated for a proposal, so this member can sign its slot
+     * in it rather than opening a transaction of its own.
      *
-     * Every instruction in it must be one member's approval of that proposal, and nothing else:
-     * the account appends its own and counts what it finds towards the threshold without inspecting
-     * it, so a rejection, an execution or padding of any kind is malformed and counts as that many
-     * approvals. The message `submitProposal` was handed is already of that shape, so an
-     * implementation that returns what it was given, however it carries the signatures, satisfies
-     * this without checking. One that batches anything else keeps it out of what this hands back.
-     * At most one of those approvals may be any one member's; `confirmProposal` is where a second
-     * one is caught, since it is the account's own append that creates it.
+     * It must carry this member's own `proposalApprove` for this proposal: the account reads the
+     * approvals out of the bytes and refuses to sign a bundle it is not one of, since a signature
+     * covers the whole transaction and there is no narrowing it.
+     *
+     * Null is the answer whenever this member has no bundle to sign: none was built for that
+     * proposal, this member is not one of its approvers, or the bundle it was in can no longer land.
+     * The account then votes exactly as it would with no coordinator configured, in its own
+     * transaction, so a coordinator that declines is never worse than not having one.
      *
      * @param {string} proposalId - The proposal (transaction index) id.
-     * @returns {Promise<TransactionMessage | null>} The message, carrying the approvals collected so far and nothing else, or null when nothing is circulating for that id.
+     * @returns {Promise<Transaction | null>} The compiled bundle, or null to leave this member to vote alone.
      */
-    getProposal(proposalId: string): Promise<import("@solana/transaction-messages").BaseTransactionMessage | null>;
+    getProposal(proposalId: string): Promise<Transaction | null>;
     /**
-     * Signs the member's approval. Signing is all it does: the account decides whether the result
-     * keeps circulating or goes to the cluster.
+     * Puts this member's signature in its slot in the bundle. Signing is all it does: the account
+     * decides whether the result keeps circulating or goes to the cluster.
      *
-     * This is the only method handed the complete list, the member's own approval included, so it is
-     * where an implementation refuses one it should not sign. Two approvals from one member is the
-     * case to refuse: the account's own guard reads the cluster, which has not recorded an approval
-     * that is still circulating, so a member that votes twice before the batch lands appends a
-     * second one and the account cannot see it. Squads rejects the second, and the whole batch with
-     * it. Refuse by throwing `ValueError`, which this package re-exports and which is what the
-     * account itself raises when the cluster shows the same member has already approved, so both
-     * halves of the condition surface the same way. It reaches the caller unchanged.
+     * The bundle is compiled, so there are bytes to sign and this is real signing, over the whole
+     * message rather than over one instruction. `CoordinatorSigner.partiallySignTransaction` does
+     * exactly it and disturbs no other slot, so signatures merge in any order and signing twice is
+     * idempotent. An implementation that will not sign refuses by throwing, which reaches the caller
+     * of `approveProposal` unchanged; `ValueError`, which this package re-exports, is what the
+     * account itself raises when it turns a vote down.
      *
-     * @param {TransactionMessage} proposal - The message to sign, carrying the approvals collected so far plus this member's, and the execution too when this one reaches the threshold. At most one approval per member, which is the precondition this method is the last place to check.
-     * @returns {Promise<TransactionMessage>} The message with this member's signature accounted for, however the implementation carries it.
+     * @param {Transaction} proposal - The bundle to sign, carrying every signature collected so far.
+     * @returns {Promise<Transaction>} The bundle with this member's signature in it.
      */
-    confirmProposal(proposal: import("@solana/transaction-messages").BaseTransactionMessage): Promise<import("@solana/transaction-messages").BaseTransactionMessage>;
+    confirmProposal(proposal: Transaction): Promise<Transaction>;
 }
+export type TransactionResult = import("@tetherto/wdk-wallet").TransactionResult;
+export type Transaction = import("@solana/transactions").Transaction;
+/**
+ * What a coordinator is given of the member it signs for: the address to name it by and a way to
+ * add its signature to a transaction. Deliberately not the member's account, which would hand over
+ * the key as well, and deliberately partial: a coordinator collects signatures, so it must be able
+ * to add one without disturbing the others or compiling anything.
+ *
+ * These two are the whole of what a member contributes to a batch. The bundle is the coordinator's:
+ * it decides who signs, builds their approvals, fixes the fee payer and the lifetime, and compiles.
+ * A member only fills its own slot.
+ */
+export type CoordinatorSigner = {
+    /**
+     * - Returns the member's address.
+     */
+    getAddress: () => Promise<string>;
+    /**
+     * - Adds this member's signature to a compiled transaction and changes nothing else, so signatures collected from several members merge in any order. The key itself stays in the account.
+     */
+    partiallySignTransaction: (tx: Transaction) => Promise<Transaction>;
+};
+/**
+ * Builds the coordinator an account votes through, from a signer over the member's own key. One
+ * configuration is shared by every account a manager derives, and each of those signs with a
+ * different key, so the configuration carries this rather than a coordinator instance.
+ */
+export type MultisigCoordinatorFactory = (config: CoordinatorSigner) => IMultisigCoordinator;

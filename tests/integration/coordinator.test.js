@@ -297,7 +297,6 @@ describe('coordinators', () => {
       expect(approved.approved).not.toContain(signers[2])
 
       const execution = await accounts[1].executeProposal(proposal.proposalId)
-
       await confirmTransaction(rpc, execution.hash)
 
       expect((await accounts[0].getProposal(proposal.proposalId)).statusName).toBe('Executed')

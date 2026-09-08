@@ -87,7 +87,12 @@ import {
 /** @typedef {{ [K in SquadsInstructionName]: AnyEncoder }} SquadsInstructionEncoders */
 /** @typedef {{ [K in SquadsAccountName]: AnyDecoder } & { multisigHeader: FixedSizeAnyDecoder }} SquadsAccountDecoders */
 
-const INSTRUCTION_DISCRIMINATOR = {
+/**
+ * The discriminators the Squads instructions this package builds and reads lead with.
+ *
+ * @type {{ [K in SquadsInstructionName]: Uint8Array }}
+ */
+export const INSTRUCTION_DISCRIMINATOR = {
   multisigCreateV2: Uint8Array.from([50, 221, 199, 93, 40, 245, 139, 233]),
   vaultTransactionCreate: Uint8Array.from([48, 250, 78, 168, 208, 226, 218, 211]),
   vaultTransactionExecute: Uint8Array.from([194, 8, 161, 87, 153, 164, 25, 171]),

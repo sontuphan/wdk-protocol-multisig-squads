@@ -1,3 +1,25 @@
+/** @typedef {import('@solana/codecs').Codec<any>} AnyCodec */
+/** @typedef {import('@solana/codecs').Encoder<any>} AnyEncoder */
+/** @typedef {import('@solana/codecs').Decoder<any>} AnyDecoder */
+/** @typedef {import('@solana/codecs').FixedSizeDecoder<any>} FixedSizeAnyDecoder */
+/** @typedef {import('@solana/codecs').Encoder<ConfigAction>} ConfigActionEncoder */
+/** @typedef {import('@solana/codecs').Encoder<ConfigAction[]>} ConfigActionsEncoder */
+/**
+ * A configuration action, as `CONFIG_ACTION_ENCODER` takes it: a `__kind` tag naming the variant
+ * and that variant's fields beside it.
+ *
+ * @typedef {{ __kind: string } & Record<string, any>} ConfigAction
+ */
+/** @typedef {'multisigCreateV2' | 'vaultTransactionCreate' | 'vaultTransactionExecute' | 'configTransactionCreate' | 'configTransactionExecute' | 'proposalCreate' | 'proposalApprove' | 'proposalReject'} SquadsInstructionName */
+/** @typedef {'multisig' | 'multisigHeader' | 'proposal' | 'vaultTransaction' | 'configTransaction' | 'programConfig' | 'clock' | 'lookupTableAddresses'} SquadsAccountName */
+/** @typedef {{ [K in SquadsInstructionName]: AnyEncoder }} SquadsInstructionEncoders */
+/** @typedef {{ [K in SquadsAccountName]: AnyDecoder } & { multisigHeader: FixedSizeAnyDecoder }} SquadsAccountDecoders */
+/**
+ * The discriminators the Squads instructions this package builds and reads lead with.
+ *
+ * @type {{ [K in SquadsInstructionName]: Uint8Array }}
+ */
+export const INSTRUCTION_DISCRIMINATOR: { [K in SquadsInstructionName]: Uint8Array; };
 /**
  * The discriminators the Squads accounts this package reads lead with.
  *

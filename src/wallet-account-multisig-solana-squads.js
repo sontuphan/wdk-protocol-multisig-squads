@@ -23,6 +23,7 @@ import { WalletAccountSolana } from '@tetherto/wdk-wallet-solana'
 import WalletAccountReadOnlyMultisigSolanaSquads, {
   PROPOSAL_DATA_MASK,
   SECRET_SIZE,
+  SIGNATURE_BASE_FEE,
   TRANSACTION_KIND
 } from './wallet-account-read-only-multisig-solana-squads.js'
 import { address, getAddressEncoder } from '@solana/addresses'
@@ -32,13 +33,15 @@ import { SYSTEM_PROGRAM_ADDRESS } from '@solana-program/system'
 import { ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS } from '@solana-program/address-lookup-table'
 import { createKeyPairFromPrivateKeyBytes } from '@solana/keys'
 import { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes } from '@solana/signers'
-import { partiallySignTransaction } from '@solana/transactions'
+import { getCompiledTransactionMessageDecoder } from '@solana/transaction-messages'
+import { getBase64EncodedWireTransaction, isFullySignedTransaction, partiallySignTransaction } from '@solana/transactions'
 
 import {
   ACCOUNT,
   CONFIG_ACTION,
   CONFIG_ACTIONS_ENCODER,
   INSTRUCTION,
+  INSTRUCTION_DISCRIMINATOR,
   PROPOSAL_STATUS
 } from './helpers/layouts.js'
 
@@ -375,9 +378,9 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * Approves a pending transaction proposal.
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
-   * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing; the one error it can surface is a stored message whose address lookup tables can no longer be read, which no longer executes by any route. `vaultIndex` does not bear on a vote.
-   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission. With a coordinator, the approval is appended to the message it is circulating and `confirmations` counts the approvals in that message too, so the count is what the transaction carries rather than what the cluster has recorded.
-   * @throws {ValueError} The signer must not have approved the proposal already.
+   * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing; the one error it can surface is a stored message whose address lookup tables can no longer be read, which no longer executes by any route. `vaultIndex` does not bear on a vote. A coordinator holding a bundle for this proposal takes over all three: it built the approvals, so this call contributes a signature rather than an instruction, and `memo` and `autoExecute` are the coordinator's to have decided when it compiled.
+   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission. Through a coordinator, `confirmations` is the bundle's own count, which is what the proposal will hold once the bundle lands rather than what the cluster has recorded, and `status` is `'executed'` only once the bundle both executes and has been broadcast.
+   * @throws {ValueError} The signer must not have approved the proposal already, and a coordinator's bundle must carry this signer's own approval of this proposal.
    */
   async approveProposal (proposalId, { memo, autoExecute } = {}) {
     const index = this._toProposalIndex(proposalId)
@@ -393,11 +396,34 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       throw new ValueError(`The signer ${signerAddress} has already approved the proposal ${index}.`)
     }
 
-    const circulating = await this._coordinator?.getProposal(index.toString())
-    const collected = circulating?.instructions ?? []
-    const confirmations = proposal.approved.length + collected.length + 1
+    const bundle = await this._coordinator?.getProposal(index.toString())
+
+    if (bundle) {
+      const { approvers, executes } = this._decodeBundle(bundle, multisig.address, proposal.address)
+
+      if (!approvers.includes(signerAddress)) {
+        throw new ValueError(
+          `The bundle the coordinator holds for the proposal ${index} does not carry an approval by the signer ${signerAddress}.`
+        )
+      }
+
+      const signed = await this._coordinator.confirmProposal(bundle)
+      const complete = isFullySignedTransaction(signed)
+      const { hash, fee } = complete
+        ? await this._sendSignedTransaction(signed)
+        : await this._coordinator.submitProposal(index.toString(), signed)
+
+      return {
+        proposalId: index.toString(),
+        confirmations: approvers.length,
+        threshold: multisig.threshold,
+        status: complete && executes ? 'executed' : 'pending',
+        transaction: { hash, fee }
+      }
+    }
+
+    const confirmations = proposal.approved.length + 1
     const instructions = [
-      ...collected,
       this._buildProposalVoteInstruction(
         INSTRUCTION.proposalApprove,
         multisig.address,
@@ -416,25 +442,55 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       instructions.push(execution)
     }
 
-    const result = {
+    const { hash, fee } = await this._signerAccount.sendTransaction({ instructions })
+
+    return {
       proposalId: index.toString(),
       confirmations,
       threshold: multisig.threshold,
-      status: execution ? 'executed' : 'pending'
+      status: execution ? 'executed' : 'pending',
+      transaction: { hash, fee }
     }
+  }
 
-    if (!this._coordinator) {
-      const { hash, fee } = await this._signerAccount.sendTransaction({ instructions })
+  /** @private */
+  _decodeBundle (bundle, multisigAddress, proposalAddress) {
+    const { instructions, staticAccounts } = getCompiledTransactionMessageDecoder()
+      .decode(bundle.messageBytes)
 
-      return { ...result, transaction: { hash, fee } }
+    const named = (instruction, slot) => staticAccounts[instruction.accountIndices?.[slot]]
+    const isSquads = (instruction) =>
+      staticAccounts[instruction.programAddressIndex] === this._programId
+    const leads = (instruction, discriminator) =>
+      instruction.data?.length >= discriminator.length &&
+      discriminator.every((byte, offset) => instruction.data[offset] === byte)
+
+    const approvals = instructions.filter((instruction) =>
+      isSquads(instruction) &&
+      leads(instruction, INSTRUCTION_DISCRIMINATOR.proposalApprove) &&
+      named(instruction, 0) === multisigAddress &&
+      named(instruction, 2) === proposalAddress
+    )
+
+    return {
+      approvers: approvals.map((instruction) => named(instruction, 1)),
+      executes: instructions.some((instruction) =>
+        isSquads(instruction) &&
+        named(instruction, 0) === multisigAddress && (
+          leads(instruction, INSTRUCTION_DISCRIMINATOR.vaultTransactionExecute) ||
+          leads(instruction, INSTRUCTION_DISCRIMINATOR.configTransactionExecute)
+        )
+      )
     }
+  }
 
-    const signed = await this._coordinator.confirmProposal({ version: 0, instructions })
-    const { hash, fee } = confirmations < multisig.threshold
-      ? await this._coordinator.submitProposal(result.proposalId, signed)
-      : await this._signerAccount.sendTransaction({ instructions: signed.instructions })
+  /** @private */
+  async _sendSignedTransaction (signed) {
+    const hash = await this._rpc
+      .sendTransaction(getBase64EncodedWireTransaction(signed), { encoding: 'base64' })
+      .send()
 
-    return { ...result, transaction: { hash, fee } }
+    return { hash, fee: SIGNATURE_BASE_FEE * BigInt(Object.keys(signed.signatures).length) }
   }
 
   /**

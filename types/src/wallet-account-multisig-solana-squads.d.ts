@@ -165,11 +165,15 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * Approves a pending transaction proposal.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
-     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing; the one error it can surface is a stored message whose address lookup tables can no longer be read, which no longer executes by any route. `vaultIndex` does not bear on a vote.
-     * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission. With a coordinator, the approval joins the ones it is circulating and `confirmations` counts those too, so the count is what the transaction carries rather than what the cluster has recorded.
-     * @throws {ValueError} The signer must not have approved the proposal already.
+     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing; the one error it can surface is a stored message whose address lookup tables can no longer be read, which no longer executes by any route. `vaultIndex` does not bear on a vote. A coordinator holding a bundle for this proposal takes over all three: it built the approvals, so this call contributes a signature rather than an instruction, and `memo` and `autoExecute` are the coordinator's to have decided when it compiled.
+     * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission. Through a coordinator, `confirmations` is the bundle's own count, which is what the proposal will hold once the bundle lands rather than what the cluster has recorded, and `status` is `'executed'` only once the bundle both executes and has been broadcast.
+     * @throws {ValueError} The signer must not have approved the proposal already, and a coordinator's bundle must carry this signer's own approval of this proposal.
      */
     approveProposal(proposalId: number | bigint | string, { memo, autoExecute }?: SolanaMultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
+    /** @private */
+    private _decodeBundle;
+    /** @private */
+    private _sendSignedTransaction;
     /**
      * Rejects a pending transaction proposal.
      *
