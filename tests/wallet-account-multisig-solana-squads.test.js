@@ -435,8 +435,8 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     expect(await account.getAddress()).toBe(TEST_MULTISIG_PDA)
   })
 
-  // Pins REVIEW.logic.md L18: the base class's address field holds the multisig, never the
-  // signer's address, so the two cannot be confused.
+  // The base class's address field holds the multisig, never the signer's address, so the two
+  // cannot be confused.
   it('holds the multisig address in the base class, not the signer', async () => {
     expect(account._address).toBe(TEST_MULTISIG_PDA)
     expect(await account.getAddress()).toBe(TEST_MULTISIG_PDA)

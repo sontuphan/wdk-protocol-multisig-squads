@@ -117,8 +117,8 @@ approved and left stuck.
 
 A proposal that needs N approvals costs N+2 transactions on Squads: one to create it, one per
 approval, one to execute. A **coordinator** is what turns that into three. The account builds the
-Squads instructions; the coordinator signs each approval it is handed and holds the transaction for
-the next member to add to, so one transaction carries them all once the threshold is reached. Only
+Squads instructions; the coordinator signs each approval it is handed and holds the message for the
+next member to add to, so one transaction carries them all once the threshold is reached. Only
 that one carries several signatures: creating a proposal, rejecting it and executing it are one
 member's own transaction each and never reach a coordinator. Omit the option and there is no
 coordinator at all: every vote is the member's own transaction, signed with the key derived from
@@ -168,32 +168,29 @@ const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
 
 A coordinator handles approvals and nothing else. `getProposal` is what makes them accumulate,
 handing back the message you are holding so the next member's `approveProposal` can append its own
-approval and count the ones it finds there towards the threshold. Short of the threshold, that
-message goes to `submitProposal`, which keeps it: broadcasting would waste a fee on a proposal that
-cannot execute yet. Return null and the member votes alone.
+and count the ones it finds there towards the threshold; return null and that member votes alone.
+Short of the threshold the message goes to `submitProposal`, which keeps it, since broadcasting
+would waste a fee on a proposal that cannot execute yet. At the threshold the account broadcasts it
+through the member's own signer account, which signs as fee payer.
 
-At the threshold the account broadcasts the message through the member's own signer account, which
-signs as fee payer. `confirmProposal` is where the other members' signatures come from, and the
-contract takes no view on how you carry them: a signer on the instruction that names the member
-travels with the message, while a `NoopSigner` marks the slot for a signature you collect over the
-compiled bytes, which is what a service holding no member keys would do.
+`confirmProposal` is where the other members' signatures come from, and the contract takes no view
+on how you carry them: a signer on the instruction that names the member travels with the message,
+while a `NoopSigner` marks that member as a signer without signing, for a signature you collect over
+the compiled bytes later. Either way the marker goes on the approval of a member that has already
+voted, since that is the only instruction of theirs in the message.
 
-`coordinator` is a signing option, since only a signing account votes, and it takes a factory rather
-than an instance because one configuration is shared by every account the manager derives, and each
-of those signs with a different key. The factory is handed a `CoordinatorSigner`, `{ getAddress,
-partiallySignTransaction }` over that member's key, rather than the account holding it: a
-coordinator can name the member and add its signature to a transaction, and can read neither the key
-nor anything else on the account. Partial is the point, since a coordinator collects signatures from
-several members and they have to merge. That object is the coordinator's configuration, so an
-implementation is free to widen it, which the base class is generic over. It
-owns no identity either, since the account always votes as the member it derived, and no key of its
-own to erase, which is why the interface has nothing to dispose.
+`coordinator` takes a factory rather than an instance because one configuration is shared by every
+account the manager derives, and each signs with a different key. The factory is handed a
+`CoordinatorSigner`, `{ getAddress, partiallySignTransaction }` over that member's key rather than
+the account holding it, so a coordinator can name the member and add its signature and can read
+neither the key nor anything else. That object is its configuration, which an implementation is
+free to widen, a service URL or a transport; the base class is generic over it. And since a
+coordinator holds no key and no identity of its own, there is nothing for it to dispose.
 
 > [!NOTE]
 > Squads keeps its votes on chain, so a coordinator stores no proposals and shares no messages: all
-> it holds is the transaction still being signed, and every read comes from the chain through the
-> read-only account. A peer-to-peer coordinator that collects member approvals before one of them
-> broadcasts fits this interface and is not part of this package yet.
+> it holds is the message still being signed, and every read comes from the chain through the
+> read-only account.
 
 > [!TIP]
 > A `TransactionMessage` is not compiled, which is what lets the next approval be appended to it,
@@ -206,12 +203,11 @@ own to erase, which is why the interface has nothing to dispose.
 
 Three payers, and one call can involve all three:
 
-- **The fee payer** signs the transaction and pays the Solana network fee. It is whatever the
-  coordinator provides: the member itself by default, or a paymaster when the coordinator is built
-  over a sponsoring wallet such as `@tetherto/wdk-wallet-solana-gasless`.
+- **The fee payer** signs the transaction and pays the Solana network fee. It is the member whose
+  account broadcasts, since that is where every transaction is sent from.
 - **The rent payer** funds the accounts Squads creates. Set it with the `rentPayer` config
-  option; it defaults to the signer. It has to sign the transaction by other means, which in
-  practice makes it the fee payer of a sponsoring wallet.
+  option; it defaults to the signer. It has to sign the transaction by other means, which nothing
+  in this package currently provides.
 - **The vault** funds whatever the proposed transaction itself does, a recipient's associated
   token account included. No member ever pays for the payload.
 
@@ -228,12 +224,10 @@ The `transaction.fee` a propose-family call reports is the network fee plus that
 no rent collector, so rent stays locked for the life of the accounts rather than being
 reclaimable on close.
 
-> [!WARNING]
-> That sum holds only while the coordinator charges in lamports. A paymaster that bills in a fee
-> token, which is what a coordinator built over `@tetherto/wdk-wallet-solana-gasless` does, has its
-> token charge added to a lamport rent figure, and the reported `fee` is then two currencies in one
-> number: the coordinator's own result carries the token charge, and what remains is the rent, in
-> lamports. Read the two from there rather than from `fee`.
+> [!NOTE]
+> An approval that a coordinator is still circulating has not been paid for yet: the `fee` it
+> reports is whatever the coordinator answered with, and the transaction that eventually carries it
+> pays once for the batch.
 
 ## Squads Protocol Version
 
