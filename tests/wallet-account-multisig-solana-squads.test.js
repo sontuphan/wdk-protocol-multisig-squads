@@ -3308,6 +3308,34 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       )
     })
 
+    it('counts the approvals the cluster holds alongside the bundle', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // Another member voted alone before the coordinator was involved, which is what a null
+      // `getProposal` tells a member to do, so its approval is on chain and not in the bundle.
+      coordinator.getProposal.mockResolvedValue(bundleOf([approvalOf(TEST_SIGNER)]))
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue([
+            { address: TEST_SIGNER, mask: 7 },
+            { address: OTHER_MEMBER, mask: 7 },
+            { address: THIRD_MEMBER, mask: 7 }
+          ], { threshold: 2, transactionIndex: 7n }),
+          proposalAccountValue({ approved: [OTHER_MEMBER] })
+        ]),
+        getFeeForMessage: () => serveValue(BUNDLE_FEE),
+        sendTransaction: () => DUMMY_VOTE_HASH
+      })
+
+      const result = await account.approveProposal(3)
+
+      // One on chain plus one in the bundle is the two the threshold wants, so the number the
+      // caller compares against `threshold` has to say so.
+      expect(result.confirmations).toBe(2)
+      expect(result.confirmations >= result.threshold).toBe(true)
+    })
+
     it('falls back to the base fee when the cluster cannot price the bundle', async () => {
       const { account, coordinator } = await accountWithCoordinator()
 
