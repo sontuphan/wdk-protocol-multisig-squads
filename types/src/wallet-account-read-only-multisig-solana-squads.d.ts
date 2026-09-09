@@ -430,16 +430,26 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     protected _getMultisigAccount(): Promise<SquadsMultisigAccount>;
     /**
+     * Reads a proposal's whole context in one request.
+     *
+     * @overload
+     * @param {bigint} index - The proposal (transaction index) id.
+     * @returns {Promise<SquadsProposalContext>} The multisig, the proposal, its transaction and the cluster clock.
+     * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+     * @throws {ProviderError} The provider must serve the cluster clock.
+     */
+    protected _getProposal(index: bigint): Promise<SquadsProposalContext>;
+    /**
      * Reads a proposal's context in one request, the parts `mask` names.
      *
-     * @protected
+     * @overload
      * @param {bigint} index - The proposal (transaction index) id. Read only for the parts that need it.
-     * @param {number} [mask] - The parts to read, as the bits `[multisig, proposal, transaction, now]` (default: all four).
+     * @param {number} mask - The parts to read, as the bits `[multisig, proposal, transaction, now]`.
      * @returns {Promise<Partial<SquadsProposalContext>>} The parts asked for, and nothing else.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
      * @throws {ProviderError} The provider must serve the cluster clock, when `now` is asked for.
      */
-    protected _getProposal(index: bigint, mask?: number): Promise<Partial<SquadsProposalContext>>;
+    protected _getProposal(index: bigint, mask: number): Promise<Partial<SquadsProposalContext>>;
     /**
      * Reads the Squads program config account.
      *

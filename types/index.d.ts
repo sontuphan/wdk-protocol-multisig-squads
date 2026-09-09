@@ -29,7 +29,7 @@ export type SquadsConfigAction = import("./src/wallet-account-read-only-multisig
 export type SquadsTransactionAccount = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsTransactionAccount;
 export type SquadsProgramConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsProgramConfig;
 export type SquadsProposalContext = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsProposalContext;
-export { default as WalletAccountReadOnlyMultisigSolanaSquads, SQUADS_PROGRAM_ADDRESS, TRANSACTION_KIND } from "./src/wallet-account-read-only-multisig-solana-squads.js";
+export { default as WalletAccountReadOnlyMultisigSolanaSquads, PROPOSAL_DATA_MASK, SQUADS_PROGRAM_ADDRESS, TRANSACTION_KIND } from "./src/wallet-account-read-only-multisig-solana-squads.js";
 export { IMultisigCoordinator } from "./src/coordinators/index.js";
 export { AccountNotOwnerError, ThresholdNotMetError } from "@tetherto/wdk-wallet/multisig";
 export { AssertionError, InvalidTokenError, MaximumFeeExceededError, NoSuchElementError, NotImplementedError, ProviderError, ProviderErrorReason, ProviderRequiredError, UnsupportedOperationError, ValueError, WdkError } from "@tetherto/wdk-wallet";
