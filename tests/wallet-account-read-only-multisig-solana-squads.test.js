@@ -999,7 +999,6 @@ describe('WalletAccountReadOnlyMultisigSolanaSquads', () => {
         proposalAccountValue({ approved: [MEMBER_A, MEMBER_B] })
       ])
 
-      // Every field `SolanaMultisigProposal` carries, so nothing is asserted by omission.
       expect(await account.getProposals([1])).toEqual({
         1: {
           proposalId: '1',

@@ -27,7 +27,7 @@ import {
   setTransactionMessageFeePayer,
   setTransactionMessageLifetimeUsingBlockhash
 } from '@solana/transaction-messages'
-import { compileTransaction, isFullySignedTransaction } from '@solana/transactions'
+import { compileTransaction, getBase64EncodedWireTransaction, isFullySignedTransaction } from '@solana/transactions'
 
 import { AssertionError, MaximumFeeExceededError, NoSuchElementError, UnsupportedOperationError, ValueError } from '@tetherto/wdk-wallet'
 
@@ -539,8 +539,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     expect(await account.getAddress()).toBe(TEST_MULTISIG_PDA)
   })
 
-  // The base class's address field holds the multisig, never the signer's address, so the two
-  // cannot be confused.
   it('holds the multisig address in the base class, not the signer', async () => {
     expect(account._address).toBe(TEST_MULTISIG_PDA)
     expect(await account.getAddress()).toBe(TEST_MULTISIG_PDA)
@@ -3011,10 +3009,8 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
           return { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
         }),
-        // Holding nothing yet. The bundle tests below hand it one.
         getProposal: jest.fn(async () => null),
-        // Signing is all it does, and it really signs: the bundle is compiled, so the signer the
-        // account handed it puts this member's signature in its slot.
+        // It really signs: the bundle is compiled, so there are bytes for the config to sign.
         confirmProposal: jest.fn(async (tx) => {
           sent.push(tx)
 
@@ -3045,13 +3041,9 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     it('configures the coordinator with a signer for the member it derived', async () => {
       const { account, coordinator, coordinatorConfig } = await accountWithCoordinator()
 
-      // Each derived account votes with its own key, so the factory is called per account rather
-      // than one coordinator being shared across the manager's accounts.
       expect(account._coordinator).toBe(coordinator)
       expect(await coordinatorConfig.getAddress()).toBe(TEST_SIGNER)
 
-      // The configuration names the member and adds its signature, and carries nothing else: a
-      // coordinator cannot read the key it signs with.
       expect(Object.keys(coordinatorConfig)).toEqual(['getAddress', 'partiallySignTransaction'])
     })
 
@@ -3064,8 +3056,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const signed = await coordinatorConfig.partiallySignTransaction(compiled)
 
-      // The member's slot is filled and the message is untouched, so signatures collected from
-      // several members merge rather than replacing each other.
       expect(signed.messageBytes).toBe(compiled.messageBytes)
       expect(signed.signatures[TEST_SIGNER]).toBeInstanceOf(Uint8Array)
       expect(signed.signatures[TEST_SIGNER]).toHaveLength(64)
@@ -3078,14 +3068,11 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
       const account = await wallet.getAccount(0)
 
-      // Without one, a vote is the member's own transaction, as a proposal already is.
       expect(account._coordinator).toBeUndefined()
       expect(await account.getSignerAddress()).toBe(TEST_SIGNER)
     })
 
     it('votes as the member it derived, whatever the coordinator is', async () => {
-      // The coordinator moves transactions; it is not an identity. `sign()` and `getSignerAddress()`
-      // therefore cannot disagree about which member this account is.
       const { account } = await accountWithCoordinator()
 
       expect(await account.getSignerAddress()).toBe(TEST_SIGNER)
@@ -3107,23 +3094,27 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const result = await account.propose({ to: OTHER_MEMBER, value: 1n })
 
-      // A proposal is the proposer's own transaction: nobody else signs it, so nothing about it
-      // reaches the coordinator, which learns of it from the first vote handed to it.
       expect(coordinator.confirmProposal).not.toHaveBeenCalled()
       expect(coordinator.submitProposal).not.toHaveBeenCalled()
       expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(2)
-      expect(result.transaction.hash).toBe(DUMMY_PROPOSE_HASH)
+      expect(result).toEqual({
+        proposalId: '5',
+        confirmations: 0,
+        threshold: 2,
+        status: 'pending',
+        // DUMMY_FEE + rent for a 221 B vault transaction and a 166 B proposal.
+        transaction: { hash: DUMMY_PROPOSE_HASH, fee: 4480280n }
+      })
     })
 
     it('circulates a bundle its signature does not complete', async () => {
       const { account, coordinator, sent, circulated } = await accountWithCoordinator()
 
-      // Two approvers, so two slots: this member's and one it cannot fill.
       coordinator.getProposal.mockResolvedValue(
         bundleOf([approvalOf(TEST_SIGNER), approvalOf(OTHER_MEMBER)])
       )
 
-      stubSolanaRpc({
+      const rpc = stubSolanaRpc({
         getMultipleAccounts: () => serveValue([
           multisigAccountValue(
             [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
@@ -3133,16 +3124,9 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         ])
       })
 
-      const sendTransaction = jest.fn()
-
-      account._signerAccount.sendTransaction = sendTransaction
-
       const result = await account.approveProposal(3)
       const [[proposalId, held]] = circulated
 
-      // The account signed its own slot and handed the bundle back, since a transaction with an
-      // empty slot cannot be sent. Nothing reached the cluster, and the result is whatever the
-      // coordinator answered with, which it resolves once the bundle eventually lands.
       expect(coordinator.getProposal).toHaveBeenCalledWith('3')
       expect(coordinator.confirmProposal).toHaveBeenCalledWith(sent[0])
       expect(proposalId).toBe('3')
@@ -3150,7 +3134,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(held.signatures[TEST_SIGNER]).toHaveLength(64)
       expect(held.signatures[OTHER_MEMBER]).toBeNull()
       expect(held.messageBytes).toEqual(sent[0].messageBytes)
-      expect(sendTransaction).not.toHaveBeenCalled()
+      expect(rpcRequests(rpc, 'sendTransaction')).toEqual([])
       expect(result).toEqual({
         proposalId: '3',
         confirmations: 2,
@@ -3161,11 +3145,12 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     })
 
     it('sends the bundle its signature completes, as the bytes it already is', async () => {
-      const { account, coordinator } = await accountWithCoordinator()
+      const { account, coordinator, coordinatorConfig, sent } = await accountWithCoordinator()
 
-      // One approver, which is this member, so its signature is the only one missing. The
-      // threshold is two: what decides the route is the bundle being signed, not the count.
-      coordinator.getProposal.mockResolvedValue(bundleOf([approvalOf(TEST_SIGNER)]))
+      // The threshold is two: what decides the route is the bundle being signed, not the count.
+      const bundle = bundleOf([approvalOf(TEST_SIGNER)])
+
+      coordinator.getProposal.mockResolvedValue(bundle)
 
       const rpc = stubSolanaRpc({
         getMultipleAccounts: () => serveValue([
@@ -3179,21 +3164,21 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         sendTransaction: () => DUMMY_VOTE_HASH
       })
 
-      const sendTransaction = jest.fn()
-
-      account._signerAccount.sendTransaction = sendTransaction
-
       const result = await account.approveProposal(3)
       const [[wire, options]] = rpcRequests(rpc, 'sendTransaction')
 
-      // The signer account is not involved: it would compile a message of its own and void every
-      // signature the bundle carries, so the account sends the wire bytes straight out.
+      // A recompile would change the bytes, so the comparison below is what rules it out.
       expect(coordinator.submitProposal).not.toHaveBeenCalled()
-      expect(sendTransaction).not.toHaveBeenCalled()
+      expect(rpcRequests(rpc, 'sendTransaction')).toHaveLength(1)
       // `preflightCommitment` is the client's default rather than anything the account sets,
       // which is how `@tetherto/wdk-wallet-solana` sends too.
       expect(options).toEqual({ encoding: 'base64', preflightCommitment: 'confirmed' })
-      expect(typeof wire).toBe('string')
+      // The bytes are the bundle's own, with this member's slot filled and nothing else touched:
+      // signing is deterministic, so re-signing what the coordinator was handed reproduces them.
+      expect(wire).toBe(getBase64EncodedWireTransaction(
+        await coordinatorConfig.partiallySignTransaction(sent[0])
+      ))
+      expect(sent[0].messageBytes).toEqual(bundle.messageBytes)
       expect(result).toEqual({
         proposalId: '3',
         confirmations: 1,
@@ -3229,8 +3214,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const result = await account.approveProposal(3)
 
-      // Only the approval naming this proposal counts, and `status` follows the execution the
-      // bundle actually carries rather than anything the coordinator claimed.
       expect(result).toEqual({
         proposalId: '3',
         confirmations: 1,
@@ -3271,8 +3254,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const result = await account.approveProposal(3)
 
-      // An index past the static accounts is resolved through the table rather than read as
-      // undefined, so the approval is found and this member is not refused its own bundle.
       expect(result).toEqual({
         proposalId: '3',
         confirmations: 1,
@@ -3332,7 +3313,13 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       // One on chain plus one in the bundle is the two the threshold wants, so the number the
       // caller compares against `threshold` has to say so.
-      expect(result.confirmations).toBe(2)
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 2,
+        threshold: 2,
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: BUNDLE_FEE }
+      })
       expect(result.confirmations >= result.threshold).toBe(true)
     })
 
@@ -3357,15 +3344,20 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const result = await account.approveProposal(3)
 
-      expect(result.transaction.fee).toBe(SIGNATURE_FEE)
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 1,
+        threshold: 2,
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: SIGNATURE_FEE }
+      })
     })
 
     it('refuses a bundle that carries one member twice', async () => {
       const { account, coordinator } = await accountWithCoordinator()
 
-      // Two approvals by the same member. Squads rejects the second, and a Solana transaction is
-      // atomic, so the batch reverts and every approval in it is lost. It also needs only the one
-      // signature, so nothing else would stop the account broadcasting it.
+      // Squads rejects the second, and a Solana transaction is atomic, so the batch reverts. It
+      // needs only the one signature, so nothing else would stop the account broadcasting it.
       coordinator.getProposal.mockResolvedValue(
         bundleOf([approvalOf(TEST_SIGNER), approvalOf(TEST_SIGNER)])
       )
@@ -3433,12 +3425,16 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const result = await account.rejectProposal(3)
 
-      // A coordinator only ever collects approvals, so a rejection is the member's own
-      // single-instruction transaction, broadcast at once.
       expect(coordinator.confirmProposal).not.toHaveBeenCalled()
       expect(coordinator.submitProposal).not.toHaveBeenCalled()
       expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(1)
-      expect(result.transaction.hash).toBe(DUMMY_VOTE_HASH)
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 0,
+        threshold: 2,
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
+      })
     })
 
     it('leaves the execution to the signer account', async () => {
@@ -3459,11 +3455,9 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const result = await account.executeProposal(3)
 
-      // An execution needs one signature, the executing member's own, so there is nothing for a
-      // coordinator to collect.
       expect(coordinator.confirmProposal).not.toHaveBeenCalled()
       expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(1)
-      expect(result.hash).toBe(DUMMY_EXECUTE_HASH)
+      expect(result).toEqual({ hash: DUMMY_EXECUTE_HASH, fee: DUMMY_FEE })
     })
 
     it('erases the key it derived, whatever the coordinator is', async () => {
@@ -3471,8 +3465,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       account.dispose()
 
-      // The account owns the member key and erases it. A coordinator holds no key of its own,
-      // which is why the contract has nothing to dispose.
       await expect(account.sign('hello')).rejects.toThrow('The wallet account has been disposed.')
     })
   })

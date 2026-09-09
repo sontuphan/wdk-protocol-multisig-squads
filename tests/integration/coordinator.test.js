@@ -148,20 +148,11 @@ function deferred () {
 }
 
 /**
- * A coordinator that moves bundles as bytes.
+ * A coordinator for the suite to drive. Its transport holds the wire encoding rather than the
+ * object, so no live closure survives a hand-off and each member signs bytes it decoded.
  *
- * Its transport holds the wire encoding of a compiled transaction, not the object, so nothing a
- * live JavaScript closure could carry survives a hand-off: each member decodes the bundle, fills
- * its own slot with a real signature over the message bytes, and re-encodes. That is what a
- * coordinator between machines would do, and it works only because the bundle is compiled.
- *
- * The configuration is a `CoordinatorSigner` widened with the transport and the promises
- * `submitProposal` resolves late through, which is what the base class is generic over.
- *
- * `submitProposal` cannot learn on its own that the bundle landed: nothing in the contract tells a
- * coordinator the outcome of a broadcast the account performed, so a real one watches the cluster.
- * Here the test settles it, which is the one thing below that a production implementation would
- * have to do for itself.
+ * The one thing the harness does that a real implementation would have to do for itself is settle
+ * `submitProposal`: nothing in the contract reports the outcome of the account's broadcast.
  */
 class PseudoCoordinator extends IMultisigCoordinator {
   async getProposal (proposalId) {
@@ -231,8 +222,6 @@ describe('coordinators', () => {
       const execution = await accounts[1].executeProposal(proposal.proposalId)
       await confirmTransaction(rpc, execution.hash)
 
-      // Every one of the four is the member's own transaction, signed once and broadcast at once,
-      // which is the N+2 shape a coordinator exists to collapse.
       expect(proposal).toEqual({
         proposalId: '1',
         confirmations: 0,
@@ -303,8 +292,7 @@ describe('coordinators', () => {
     it('collects two approvals into one transaction and resolves the first vote with its hash', async () => {
       const proposalId = await propose()
 
-      // The coordinator settles who will approve, builds both approvals and compiles, all before
-      // anyone signs. The member that fills the last slot broadcasts, so it is the fee payer too.
+      // Compiled before anyone signs, with the last member to vote as the fee payer.
       transport.set(proposalId, getTransactionEncoder().encode(await compileBundle(rpc, {
         multisigPda,
         feePayer: signers[1],
@@ -320,15 +308,11 @@ describe('coordinators', () => {
 
       expect(await accounts[0].getProposal(proposalId)).toMatchObject({ approved: [] })
 
-      // The second member decodes what the first left, signs the remaining slot, and finds the
-      // bundle complete, so its account sends the bytes as they are.
       const second = await accounts[1].approveProposal(proposalId)
 
       await confirmTransaction(rpc, second.transaction.hash)
       landed.get(proposalId).settle({ ...second.transaction })
 
-      // Both members report the same two approvals, read out of the bundle rather than asserted,
-      // and the first member's deferred result names the transaction that carried its vote.
       expect(second).toEqual({
         proposalId,
         confirmations: 2,
@@ -344,7 +328,6 @@ describe('coordinators', () => {
         transaction: { hash: second.transaction.hash, fee: 2n * SIGNATURE_FEE }
       })
 
-      // One transaction, two signatures, and the threshold met on chain.
       const approved = await accounts[0].getProposal(proposalId)
 
       expect(approved.statusName).toBe('Approved')
@@ -411,8 +394,6 @@ describe('coordinators', () => {
     it('leaves a member to vote alone when the coordinator holds no bundle for it', async () => {
       const proposalId = await propose()
 
-      // Nothing in the transport, so `getProposal` answers null and the account votes exactly as
-      // it would with no coordinator configured.
       expect(transport.has(proposalId)).toBe(false)
 
       const alone = await accounts[0].approveProposal(proposalId)
@@ -435,7 +416,6 @@ describe('coordinators', () => {
 
       await confirmTransaction(rpc, rejection.transaction.hash)
 
-      // One member's own transaction, one signature, and nothing was circulated for it.
       expect(rejection.transaction.fee).toBe(SIGNATURE_FEE)
       expect(transport.has(proposalId)).toBe(false)
       expect((await accounts[0].getProposal(proposalId)).rejected).toEqual([signers[0]])
