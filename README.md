@@ -62,7 +62,7 @@ account.dispose()
 - **Transfers**: Propose native SOL and SPL token transfers through the multisig vault
 - **Member Management**: Add, remove, or swap members and change the approval threshold
 - **Read-Only Support**: Inspect multisig state without a signing key
-- **Pluggable Coordinator**: Collect the members' approvals into one transaction, or swap how they are signed, without touching the operations
+- **Pluggable Coordinator**: An open `IMultisigCoordinator` seam, so approvals can be collected however you choose without touching the operations
 
 > [!NOTE]
 > Multisig message signing is not part of this module. It is an optional addon of the shared
@@ -116,48 +116,18 @@ approved and left stuck.
 ## Transactions and Coordinators
 
 A proposal that needs N approvals costs N+2 transactions on Squads: one to create it, one per
-approval, one to execute. A **coordinator** is what turns that into three. It decides which members
-will approve, builds all of their approval instructions and the execution if one rides along, fixes
-the fee payer and the lifetime, and compiles that into one transaction. Each member then signs its
-own slot in it, and whoever fills the last slot broadcasts. Only that one transaction carries
-several signatures: creating a proposal, rejecting it and executing it are one member's own
-transaction each and never reach a coordinator. Omit the option and there is no coordinator at all:
-every vote is the member's own transaction, signed with the key derived from your seed and broadcast
-at once.
+approval, one to execute. `IMultisigCoordinator` is the seam for collapsing the middle N into one,
+and this package does not implement it: extend the class, plug it in through the `coordinator`
+option, and collect approvals however you like. Omit the option and there is no coordinator at all:
+every vote is the member's own transaction, broadcast at once. Creating a proposal, rejecting it and
+executing it never reach a coordinator either way.
 
 ```javascript
 import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
 
-class MyCoordinator extends IMultisigCoordinator {
-  // The configuration is a `CoordinatorSigner`: `getAddress()` names the member and
-  // `partiallySignTransaction(tx)` puts its signature in that member's slot of a compiled
-  // transaction, leaving the others alone. Widen it with whatever else you need, a service URL
-  // or a peer list; what you never get is the member's key.
-  constructor (config) {
-    super(config)
-    this._held = new Map()
-  }
-
-  // The compiled bundle this member should sign, or null to leave it to vote alone. It must
-  // carry this member's own approval: the account reads the approvals out of the bytes.
-  async getProposal (proposalId) {
-    return this._held.get(proposalId) ?? null
-  }
-
-  // Put this member's signature in its slot. The bundle is compiled, so this is real signing,
-  // and `partiallySignTransaction` disturbs no other slot.
-  async confirmProposal (transaction) {
-    return this._config.partiallySignTransaction(transaction)
-  }
-
-  // A bundle with slots still empty. Keep it for the next member, and resolve once whatever
-  // eventually carries it has landed: `hash` is never null.
-  async submitProposal (proposalId, transaction) {
-    this._held.set(proposalId, transaction)
-
-    return this._landed(proposalId)
-  }
-}
+// Override `getProposal`, `confirmProposal` and `submitProposal`. The interface documents what
+// each is handed and what it must return; anything left alone raises `NotImplementedError`.
+class MyCoordinator extends IMultisigCoordinator { /* ... */ }
 
 const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
   provider: 'https://api.devnet.solana.com',
@@ -166,60 +136,37 @@ const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
 })
 ```
 
-A coordinator handles approvals and nothing else. `getProposal` decides whether this member has a
-bundle to sign; return null and it votes alone, in its own transaction, exactly as it would with no
-coordinator configured, so declining is never worse than not being there. Given a bundle, the
-account reads it, calls `confirmProposal` to have the member's slot filled, then looks at the
-result: any slot still empty and it goes to `submitProposal` to keep circulating, since broadcasting
-an incomplete transaction only wastes a fee. Fully signed and the account sends the bytes as they
-are.
-
-Nothing travels alongside the transaction, because nothing needs to. A compiled instruction leads
-with the same eight-byte discriminator an uncompiled one does and names its accounts by index, so
-the account reads the bundle itself: how many approvals of this proposal it carries, which member
-each belongs to, and whether an execution rides along. It uses that for `confirmations` and
-`status`, and it refuses to sign a bundle that does not carry this member's own approval, since a
-signature covers the whole transaction and there is no narrowing it.
-
-Compressing the bundle with address lookup tables is fine, and is how you fit more approvals under
-the 1232-byte limit. Those indices run past the message's static accounts into the borrowed
-addresses, so the account reads the tables to resolve them, which costs one request and fails
-loudly if a table has gone.
-
-> [!IMPORTANT]
-> The bundle is compiled, and that is what makes the signatures collectable: a signature covers the
-> message bytes, so the bytes have to exist before anyone can sign and must not change afterwards.
-> Three consequences, all yours rather than the account's. You must know which members will approve
-> **before** you compile, because a member that is not a signer of those bytes has no slot and
-> cannot be given one later. You must choose the fee payer then too. And a blockhash lasts 60 to 90
-> seconds, so any collection window longer than that needs a durable nonce instead, whose
-> `AdvanceNonceAccount` instruction `@solana/kit` puts at the head of the bundle for you.
->
-> The account never appends to a bundle and never recompiles one: either would void every signature
-> already gathered. It reads the bundle, signs one slot, and then either passes it back to you or
-> sends it.
-
-Pre-building an approval for a member that has not agreed is safe: an unsigned slot is not a vote.
-That member declines by never signing, and the bundle simply never becomes submittable. The cost is
-that a bundle is all-or-nothing, so one member that never signs means building and collecting again.
-
 `coordinator` takes a factory rather than an instance because one configuration is shared by every
 account the manager derives, and each signs with a different key. The factory is handed a
 `CoordinatorSigner`, `{ getAddress, partiallySignTransaction }` over that member's key rather than
-the account holding it. Those two are the whole of what a member contributes: name it, and fill its
-slot. That object is its configuration, which an implementation is free to widen, a service URL or a
-transport; the base class is generic over it. And since a coordinator holds no key and no identity
-of its own, there is nothing for it to dispose.
+the account holding it: name the member, and fill its slot. That is the whole of what a member
+contributes. Widen that object with anything else your implementation needs, and parameterise the
+class over it, `@extends {IMultisigCoordinator<MyConfig>}`.
 
-> [!NOTE]
-> Squads keeps its votes on chain, so a coordinator stores no proposals: all it holds is the bundle
-> still being signed, and every read comes from the chain through the read-only account.
+What the account does with what you return, which is the part you can rely on:
+
+- `getProposal` answering null leaves the member voting alone, exactly as with no coordinator
+  configured, so declining is never worse than being absent.
+- Given a transaction, the account calls `confirmProposal`, then sends it if every slot is now
+  filled and hands it to `submitProposal` if any is still empty.
+- It reads the transaction for `confirmations`, counting the approvals of this proposal it carries
+  plus any the cluster already holds, and for `status`, which follows an execution riding along.
+- It refuses two shapes: one carrying no approval by this member, and one carrying any member's
+  twice, since Squads rejects the duplicate and takes the whole batch with it.
+- It never appends to the transaction and never recompiles it, so signatures already collected
+  stay valid. Address lookup tables are fine; the account reads them to resolve borrowed indices.
+
+> [!IMPORTANT]
+> The transaction must be compiled. A signature covers the message bytes, so those bytes have to
+> exist before anyone signs and must not change afterwards, which fixes the approver set, the fee
+> payer and the lifetime at the moment you compile. Everything beyond that is yours: how members
+> reach each other, what keeps the bytes valid while they do, and when to give up on a batch.
 
 > [!WARNING]
-> A signature covers the whole transaction, never one instruction, so a member that signs a bundle
-> authorises everything in it: every instruction, the fee payer and the lifetime. `partiallySignTransaction`
-> cannot narrow that, because Solana has no per-instruction signing. A coordinator is therefore as
-> trusted as the code that supplies the seed.
+> A signature covers the whole transaction, never one instruction, so a member that signs
+> authorises everything in it: every instruction, the fee payer and the lifetime.
+> `partiallySignTransaction` cannot narrow that, because Solana has no per-instruction signing. A
+> coordinator is therefore as trusted as the code that supplies the seed.
 
 ## Fees, rent, and who pays
 
