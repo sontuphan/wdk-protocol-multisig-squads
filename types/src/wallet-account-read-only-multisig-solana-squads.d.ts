@@ -62,7 +62,7 @@
  * charges, and the fee ceilings above which it refuses to submit.
  *
  * @typedef {Object} SolanaMultisigSquadsSigningConfig
- * @property {MultisigCoordinatorFactory} [coordinator] - Builds the coordinator the account votes through, from a `CoordinatorSigner` over the member's key. Omit it and the account casts each vote in its own transaction.
+ * @property {MultisigCoordinatorFactory} [coordinator] - Builds the coordinator the account votes through, from a `CoordinatorSigner` over the member's key. Omit it and each vote is the member's own transaction.
  * @property {string} [rentPayer] - The account charged for the rent the multisig, transaction and proposal accounts lock up (default: the signer). It must sign the transaction by other means, which in practice makes it the fee payer of a sponsoring wallet.
  * @property {number | bigint} [createMaxFee] - The maximum fee amount for the create/deploy operation.
  * @property {number | bigint} [transferMaxFee] - The maximum fee amount for transfers.
@@ -719,7 +719,7 @@ export type SolanaMultisigSquadsReadOnlyConfig = {
  */
 export type SolanaMultisigSquadsSigningConfig = {
     /**
-     * - Builds the coordinator the account votes through, from a `CoordinatorSigner` over the member's key. Omit it and the account casts each vote in its own transaction.
+     * - Builds the coordinator the account votes through, from a `CoordinatorSigner` over the member's key. Omit it and each vote is the member's own transaction.
      */
     coordinator?: MultisigCoordinatorFactory;
     /**
