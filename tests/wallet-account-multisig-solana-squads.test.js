@@ -3302,6 +3302,35 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       )
     })
 
+    it('refuses a bundle that carries one member twice', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // Two approvals by the same member. Squads rejects the second, and a Solana transaction is
+      // atomic, so the batch reverts and every approval in it is lost. It also needs only the one
+      // signature, so nothing else would stop the account broadcasting it.
+      coordinator.getProposal.mockResolvedValue(
+        bundleOf([approvalOf(TEST_SIGNER), approvalOf(TEST_SIGNER)])
+      )
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      await expect(account.approveProposal(3)).rejects.toThrow(
+        new ValueError(
+          `The bundle the coordinator holds for the proposal 3 carries more than one approval by the member ${TEST_SIGNER}, which Squads rejects, so it can never land.`
+        )
+      )
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+      expect(coordinator.submitProposal).not.toHaveBeenCalled()
+    })
+
     it('refuses a bundle that does not carry its own approval', async () => {
       const { account, coordinator } = await accountWithCoordinator()
 

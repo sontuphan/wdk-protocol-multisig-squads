@@ -378,7 +378,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing. `vaultIndex` does not bear on a vote. A coordinator holding a bundle for this proposal has decided all three already, so none of them applies.
    * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when the execution ran in the same transaction, in which case `transaction` is that execution rather than a bare submission. Through a coordinator, `confirmations` counts the approvals the bundle carries rather than those the cluster has recorded.
-   * @throws {ValueError} The signer must not have approved the proposal already, and a coordinator's bundle must carry this signer's own approval of this proposal.
+   * @throws {ValueError} The signer must not have approved the proposal already, and a coordinator's bundle must carry this signer's own approval of this proposal and no member's twice.
    */
   async approveProposal (proposalId, { memo, autoExecute } = {}) {
     const index = this._toProposalIndex(proposalId)
@@ -399,6 +399,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     if (bundle) {
       const { approvers, executes } =
         await this._decodeBundle(bundle, multisig.address, proposal.address)
+      const twice = approvers.find((member, at) => approvers.indexOf(member) !== at)
+
+      if (twice) {
+        throw new ValueError(
+          `The bundle the coordinator holds for the proposal ${index} carries more than one approval by the member ${twice}, which Squads rejects, so it can never land.`
+        )
+      }
 
       if (!approvers.includes(signerAddress)) {
         throw new ValueError(
