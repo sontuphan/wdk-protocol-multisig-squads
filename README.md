@@ -174,13 +174,17 @@ result: any slot still empty and it goes to `submitProposal` to keep circulating
 an incomplete transaction only wastes a fee. Fully signed and the account sends the bytes as they
 are.
 
-Nothing travels alongside the transaction, because nothing needs to. A compiled instruction names
-its program by an index into the message's static accounts and leads with the same eight-byte
-discriminator an uncompiled one does, and a signer can never come from an address lookup table, so
-every approving member is a static account too. So the account reads the bundle: how many approvals
-of this proposal it carries, which member each belongs to, and whether an execution rides along. It
-uses that for `confirmations` and `status`, and it refuses to sign a bundle that does not carry this
-member's own approval, since a signature covers the whole transaction and there is no narrowing it.
+Nothing travels alongside the transaction, because nothing needs to. A compiled instruction leads
+with the same eight-byte discriminator an uncompiled one does and names its accounts by index, so
+the account reads the bundle itself: how many approvals of this proposal it carries, which member
+each belongs to, and whether an execution rides along. It uses that for `confirmations` and
+`status`, and it refuses to sign a bundle that does not carry this member's own approval, since a
+signature covers the whole transaction and there is no narrowing it.
+
+Compressing the bundle with address lookup tables is fine, and is how you fit more approvals under
+the 1232-byte limit. Those indices run past the message's static accounts into the borrowed
+addresses, so the account reads the tables to resolve them, which costs one request and fails
+loudly if a table has gone.
 
 > [!IMPORTANT]
 > The bundle is compiled, and that is what makes the signatures collectable: a signature covers the

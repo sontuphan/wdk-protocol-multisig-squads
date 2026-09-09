@@ -22,6 +22,7 @@ import { pipe } from '@solana/functional'
 import { AccountRole } from '@solana/instructions'
 import {
   appendTransactionMessageInstructions,
+  compressTransactionMessageUsingAddressLookupTables,
   createTransactionMessage,
   setTransactionMessageFeePayer,
   setTransactionMessageLifetimeUsingBlockhash
@@ -32,7 +33,7 @@ import { AssertionError, MaximumFeeExceededError, NoSuchElementError, Unsupporte
 
 import { AccountNotOwnerError, ThresholdNotMetError } from '@tetherto/wdk-wallet/multisig'
 
-import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
+import { lookupTableAccount, rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 
 import WalletManagerMultisigSolanaSquads, {
   WalletAccountMultisigSolanaSquads,
@@ -423,6 +424,10 @@ const VAULT_EXECUTE_DISCRIMINATOR = [194, 8, 161, 87, 153, 164, 25, 171]
 // What the account charges a bundle it broadcasts: the base fee per signature slot.
 const SIGNATURE_FEE = 5000n
 
+// The lookup table a compressing coordinator borrows the multisig and proposal from.
+const ADDRESS_LOOKUP_TABLE_PROGRAM = 'AddressLookupTab1e1111111111111111111111111'
+const TEST_LOOKUP_TABLE = 'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr'
+
 const BUNDLE_BLOCKHASH = {
   blockhash: 'GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi',
   lastValidBlockHeight: 999n
@@ -479,6 +484,24 @@ function bundleOf (instructions, feePayer = TEST_SIGNER) {
     (m) => setTransactionMessageFeePayer(feePayer, m),
     (m) => setTransactionMessageLifetimeUsingBlockhash(BUNDLE_BLOCKHASH, m),
     (m) => appendTransactionMessageInstructions(instructions, m)
+  ))
+}
+
+/**
+ * The same bundle with the given addresses moved into a lookup table, which is what a coordinator
+ * does to fit more approvals under the 1232-byte transaction limit.
+ *
+ * @param {Object[]} instructions - What the bundle carries.
+ * @param {string[]} borrowed - The addresses the table holds, in table order.
+ * @returns {Object} The compiled, unsigned transaction.
+ */
+function compressedBundleOf (instructions, borrowed) {
+  return compileTransaction(pipe(
+    createTransactionMessage({ version: 0 }),
+    (m) => setTransactionMessageFeePayer(TEST_SIGNER, m),
+    (m) => setTransactionMessageLifetimeUsingBlockhash(BUNDLE_BLOCKHASH, m),
+    (m) => appendTransactionMessageInstructions(instructions, m),
+    (m) => compressTransactionMessageUsingAddressLookupTables(m, { [TEST_LOOKUP_TABLE]: borrowed })
   ))
 }
 
@@ -1493,7 +1516,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         )
 
         await expect(account.approveProposal(3, { autoExecute: true }))
-          .rejects.toThrow(/no longer be executed/)
+          .rejects.toThrow(/does not exist, so the transaction.s accounts cannot be resolved/)
         // The same approval without the flag never reads the table, so it goes through.
         await expect(account.approveProposal(3)).resolves.toMatchObject({ status: 'pending' })
       })
@@ -3211,6 +3234,72 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         transaction: { hash: DUMMY_EXECUTE_HASH, fee: SIGNATURE_FEE }
       })
       expect(coordinator.submitProposal).not.toHaveBeenCalled()
+    })
+
+    it('resolves a bundle compressed with an address lookup table', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // The multisig and the proposal are borrowed from the table, so neither is a static account
+      // any more. Only the member has to stay static, because a signer cannot be borrowed.
+      const borrowed = [TEST_PROPOSAL_PDA_3, TEST_MULTISIG_PDA]
+
+      coordinator.getProposal.mockResolvedValue(
+        compressedBundleOf([approvalOf(TEST_SIGNER)], borrowed)
+      )
+
+      stubSolanaRpc({
+        getMultipleAccounts: ([addresses]) => addresses.includes(TEST_LOOKUP_TABLE)
+          ? serveValue([lookupTableAccount(
+            ADDRESS_LOOKUP_TABLE_PROGRAM,
+            borrowed.map((entry) => getBase58Encoder().encode(entry))
+          )])
+          : serveValue([
+            multisigAccountValue(
+              [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+              { threshold: 2, transactionIndex: 7n }
+            ),
+            proposalAccountValue({})
+          ]),
+        sendTransaction: () => DUMMY_VOTE_HASH
+      })
+
+      const result = await account.approveProposal(3)
+
+      // An index past the static accounts is resolved through the table rather than read as
+      // undefined, so the approval is found and this member is not refused its own bundle.
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 1,
+        threshold: 2,
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: SIGNATURE_FEE }
+      })
+    })
+
+    it('refuses a bundle whose lookup table cannot be read', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      coordinator.getProposal.mockResolvedValue(
+        compressedBundleOf([approvalOf(TEST_SIGNER)], [TEST_PROPOSAL_PDA_3, TEST_MULTISIG_PDA])
+      )
+
+      stubSolanaRpc({
+        getMultipleAccounts: ([addresses]) => addresses.includes(TEST_LOOKUP_TABLE)
+          ? serveValue([null])
+          : serveValue([
+            multisigAccountValue(
+              [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+              { threshold: 2, transactionIndex: 7n }
+            ),
+            proposalAccountValue({})
+          ])
+      })
+
+      await expect(account.approveProposal(3)).rejects.toThrow(
+        new NoSuchElementError(
+          `The address lookup table ${TEST_LOOKUP_TABLE} does not exist, so the transaction's accounts cannot be resolved.`
+        )
+      )
     })
 
     it('refuses a bundle that does not carry its own approval', async () => {

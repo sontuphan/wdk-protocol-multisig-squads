@@ -397,7 +397,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     const bundle = await this._coordinator?.getProposal(index.toString())
 
     if (bundle) {
-      const { approvers, executes } = this._decodeBundle(bundle, multisig.address, proposal.address)
+      const { approvers, executes } =
+        await this._decodeBundle(bundle, multisig.address, proposal.address)
 
       if (!approvers.includes(signerAddress)) {
         throw new ValueError(
@@ -452,13 +453,39 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /** @private */
-  _decodeBundle (bundle, multisigAddress, proposalAddress) {
-    const { instructions, staticAccounts } = getCompiledTransactionMessageDecoder()
-      .decode(bundle.messageBytes)
+  async _decodeBundle (bundle, multisigAddress, proposalAddress) {
+    const { instructions, staticAccounts, addressTableLookups } =
+      getCompiledTransactionMessageDecoder().decode(bundle.messageBytes)
+    const lookups = addressTableLookups ?? []
+    const accounts = [...staticAccounts]
 
-    const named = (instruction, slot) => staticAccounts[instruction.accountIndices?.[slot]]
+    if (lookups.length) {
+      const tables = await this._getLookupTableAddresses(
+        lookups.map(({ lookupTableAddress }) => ({ accountKey: lookupTableAddress }))
+      )
+      const borrowed = (indexesOf) => lookups.flatMap((lookup) => {
+        const addresses = tables.get(lookup.lookupTableAddress)
+
+        return indexesOf(lookup).map((i) => {
+          if (!addresses[i]) {
+            throw new NoSuchElementError(
+              `The address lookup table ${lookup.lookupTableAddress} holds no address at index ${i}, so the transaction's accounts cannot be resolved.`
+            )
+          }
+
+          return addresses[i]
+        })
+      })
+
+      const writable = borrowed((lookup) => lookup.writableIndexes)
+      const readonly = borrowed((lookup) => lookup.readonlyIndexes)
+
+      accounts.push(...writable, ...readonly)
+    }
+
+    const named = (instruction, slot) => accounts[instruction.accountIndices?.[slot]]
     const isSquads = (instruction) =>
-      staticAccounts[instruction.programAddressIndex] === this._programId
+      accounts[instruction.programAddressIndex] === this._programId
     const leads = (instruction, discriminator) =>
       instruction.data?.length >= discriminator.length &&
       discriminator.every((byte, offset) => instruction.data[offset] === byte)
@@ -1146,7 +1173,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     value.forEach((account, i) => {
       if (!account || account.owner !== ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS) {
         throw new NoSuchElementError(
-          `The address lookup table ${keys[i]} does not exist, so the proposal can no longer be executed.`
+          `The address lookup table ${keys[i]} does not exist, so the transaction's accounts cannot be resolved.`
         )
       }
 

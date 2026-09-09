@@ -897,7 +897,7 @@ describe('wire format', () => {
       stubSolanaRpc({ getMultipleAccounts: () => multipleAccounts([null]) })
 
       await expect(account._resolveExecutionAccounts(decoded, vault))
-        .rejects.toThrow(/no longer be executed/)
+        .rejects.toThrow(/does not exist, so the transaction.s accounts cannot be resolved/)
     })
 
     it('refuses an account at the lookup table address that is not a lookup table', async () => {
