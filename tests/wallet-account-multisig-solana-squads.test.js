@@ -421,8 +421,11 @@ async function configuringAccount ({
 const APPROVE_DISCRIMINATOR = [144, 37, 164, 136, 188, 216, 42, 248]
 const VAULT_EXECUTE_DISCRIMINATOR = [194, 8, 161, 87, 153, 164, 25, 171]
 
-// What the account charges a bundle it broadcasts: the base fee per signature slot.
+// What the account charges a bundle it broadcasts, when the cluster cannot price the message: the
+// base fee per signature slot. `BUNDLE_FEE` is what a cluster that can price it answers, and is
+// deliberately not a multiple of the base fee so a computed number cannot pass for a quoted one.
 const SIGNATURE_FEE = 5000n
+const BUNDLE_FEE = 17_320n
 
 // The lookup table a compressing coordinator borrows the multisig and proposal from.
 const ADDRESS_LOOKUP_TABLE_PROGRAM = 'AddressLookupTab1e1111111111111111111111111'
@@ -3172,6 +3175,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
           ),
           proposalAccountValue({})
         ]),
+        getFeeForMessage: () => serveValue(BUNDLE_FEE),
         sendTransaction: () => DUMMY_VOTE_HASH
       })
 
@@ -3195,7 +3199,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         confirmations: 1,
         threshold: 2,
         status: 'pending',
-        transaction: { hash: DUMMY_VOTE_HASH, fee: SIGNATURE_FEE }
+        transaction: { hash: DUMMY_VOTE_HASH, fee: BUNDLE_FEE }
       })
     })
 
@@ -3219,6 +3223,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
           ),
           proposalAccountValue({})
         ]),
+        getFeeForMessage: () => serveValue(BUNDLE_FEE),
         sendTransaction: () => DUMMY_EXECUTE_HASH
       })
 
@@ -3231,7 +3236,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         confirmations: 1,
         threshold: 1,
         status: 'executed',
-        transaction: { hash: DUMMY_EXECUTE_HASH, fee: SIGNATURE_FEE }
+        transaction: { hash: DUMMY_EXECUTE_HASH, fee: BUNDLE_FEE }
       })
       expect(coordinator.submitProposal).not.toHaveBeenCalled()
     })
@@ -3260,6 +3265,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
             ),
             proposalAccountValue({})
           ]),
+        getFeeForMessage: () => serveValue(BUNDLE_FEE),
         sendTransaction: () => DUMMY_VOTE_HASH
       })
 
@@ -3272,7 +3278,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         confirmations: 1,
         threshold: 2,
         status: 'pending',
-        transaction: { hash: DUMMY_VOTE_HASH, fee: SIGNATURE_FEE }
+        transaction: { hash: DUMMY_VOTE_HASH, fee: BUNDLE_FEE }
       })
     })
 
@@ -3300,6 +3306,30 @@ describe('WalletAccountMultisigSolanaSquads', () => {
           `The address lookup table ${TEST_LOOKUP_TABLE} does not exist, so the transaction's accounts cannot be resolved.`
         )
       )
+    })
+
+    it('falls back to the base fee when the cluster cannot price the bundle', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      coordinator.getProposal.mockResolvedValue(bundleOf([approvalOf(TEST_SIGNER)]))
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ]),
+        // What a node answers for a message it cannot find a blockhash for, which is the durable
+        // nonce case the whole bundle design leans on.
+        getFeeForMessage: () => serveValue(null),
+        sendTransaction: () => DUMMY_VOTE_HASH
+      })
+
+      const result = await account.approveProposal(3)
+
+      expect(result.transaction.fee).toBe(SIGNATURE_FEE)
     })
 
     it('refuses a bundle that carries one member twice', async () => {

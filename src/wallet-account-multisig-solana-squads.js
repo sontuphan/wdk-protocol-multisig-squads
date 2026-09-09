@@ -27,7 +27,7 @@ import WalletAccountReadOnlyMultisigSolanaSquads, {
   TRANSACTION_KIND
 } from './wallet-account-read-only-multisig-solana-squads.js'
 import { address, getAddressEncoder } from '@solana/addresses'
-import { getBase64Encoder } from '@solana/codecs'
+import { getBase64Decoder, getBase64Encoder } from '@solana/codecs'
 import { AccountRole } from '@solana/instructions'
 import { SYSTEM_PROGRAM_ADDRESS } from '@solana-program/system'
 import { ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS } from '@solana-program/address-lookup-table'
@@ -377,7 +377,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing. `vaultIndex` does not bear on a vote. A coordinator holding a bundle for this proposal has decided all three already, so none of them applies.
-   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when the execution ran in the same transaction, in which case `transaction` is that execution rather than a bare submission. Through a coordinator, `confirmations` counts the approvals the bundle carries rather than those the cluster has recorded.
+   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when the execution ran in the same transaction, in which case `transaction` is that execution rather than a bare submission. Through a coordinator, `confirmations` counts the approvals the bundle carries rather than those the cluster has recorded, and `fee` is what the bundle's own fee payer is charged, priority fee included, which is this member only when the coordinator made it so.
    * @throws {ValueError} The signer must not have approved the proposal already, and a coordinator's bundle must carry this signer's own approval of this proposal and no member's twice.
    */
   async approveProposal (proposalId, { memo, autoExecute } = {}) {
@@ -518,11 +518,19 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
 
   /** @private */
   async _sendSignedTransaction (signed) {
+    const { value: quoted } = await this._rpc
+      .getFeeForMessage(getBase64Decoder().decode(signed.messageBytes), {
+        commitment: this._commitment
+      })
+      .send()
     const hash = await this._rpc
       .sendTransaction(getBase64EncodedWireTransaction(signed), { encoding: 'base64' })
       .send()
 
-    return { hash, fee: SIGNATURE_BASE_FEE * BigInt(Object.keys(signed.signatures).length) }
+    return {
+      hash,
+      fee: quoted ?? SIGNATURE_BASE_FEE * BigInt(Object.keys(signed.signatures).length)
+    }
   }
 
   /**
