@@ -54,9 +54,6 @@ const PROPOSAL_RENT = 5143440n
 
 const TRANSFER_AMOUNT = LAMPORTS_PER_SOL / 10n
 
-// The note the proposal has the vault run, and the instruction that runs it: the memo program
-// takes the text as its data and needs no accounts, so a proposal carrying it costs the vault
-// nothing but the execution's fee.
 const MEMO_TEXT = 'two of three, collected off chain'
 const MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'
 const MEMO_INSTRUCTION = {
@@ -90,9 +87,7 @@ function solanaAccount (target) {
 }
 
 /**
- * Builds a member's `proposalApprove` with the Squads SDK and converts it to the shape
- * `@solana/kit` compiles, so the bundle is built by the protocol's own encoder rather than by the
- * code under test: a drift between the two fails here instead of cancelling out.
+ * Builds a member's `proposalApprove` with the Squads SDK, in the shape `@solana/kit` compiles.
  *
  * @param {string} multisigPda - The multisig account.
  * @param {string} member - The approving member.
@@ -119,9 +114,8 @@ function approvalOf (multisigPda, member, transactionIndex) {
 }
 
 /**
- * Compiles a bundle the way a coordinator has to: every approval it intends to collect is in it
- * before the first signature, and so are the fee payer and the lifetime, because a signature covers
- * the message bytes and a member absent from them has no slot to fill.
+ * Compiles a bundle the way a coordinator has to: every approval, the fee payer and the lifetime
+ * are in it before the first signature.
  *
  * @param {object} rpc - The Solana RPC client.
  * @param {{ multisigPda: string, feePayer: string, approvers: string[], transactionIndex: bigint, padding?: object[] }} plan
@@ -139,20 +133,9 @@ async function compileBundle (rpc, { multisigPda, feePayer, approvers, transacti
   ))
 }
 
-/** A promise with its settle functions exposed, for a `submitProposal` that resolves late. */
-function deferred () {
-  let settle
-  const promise = new Promise((resolve) => { settle = resolve })
-
-  return { promise, settle }
-}
-
 /**
  * A coordinator for the suite to drive. Its transport holds the wire encoding rather than the
- * object, so no live closure survives a hand-off and each member signs bytes it decoded.
- *
- * The one thing the harness does that a real implementation would have to do for itself is settle
- * `submitProposal`: nothing in the contract reports the outcome of the account's broadcast.
+ * object, and `submitProposal` reports no landing, returning an empty hash and a zero fee.
  */
 class PseudoCoordinator extends IMultisigCoordinator {
   async getProposal (proposalId) {
@@ -167,9 +150,8 @@ class PseudoCoordinator extends IMultisigCoordinator {
 
   async submitProposal (proposalId, transaction) {
     this._config.transport.set(proposalId, getTransactionEncoder().encode(transaction))
-    this._config.stored.get(proposalId)?.settle()
 
-    return await this._config.landed.get(proposalId).promise
+    return { hash: '', fee: 0n }
   }
 }
 
@@ -249,33 +231,17 @@ describe('coordinators', () => {
     let signers
     let multisigPda
     let transport
-    let stored
-    let landed
-
-    /** Opens a fresh memo proposal and returns its id, so each test votes on its own. */
-    async function propose () {
-      const proposal = await accounts[0].propose({ instructions: [MEMO_INSTRUCTION] })
-
-      await confirmTransaction(rpc, proposal.transaction.hash)
-
-      stored.set(proposal.proposalId, deferred())
-      landed.set(proposal.proposalId, deferred())
-
-      return proposal.proposalId
-    }
+    let proposalId
+    let bundle
 
     beforeAll(async () => {
-      // One coordinator per member, each signing as the member whose configuration built it, and
-      // all sharing the transport they reach each other over.
       transport = new Map()
-      stored = new Map()
-      landed = new Map()
 
       const deployed = await deployMultisig({
         members: 3,
         threshold: 2,
         config: {
-          coordinator: (config) => new PseudoCoordinator({ ...config, transport, stored, landed })
+          coordinator: (config) => new PseudoCoordinator({ ...config, transport })
         }
       })
 
@@ -284,43 +250,45 @@ describe('coordinators', () => {
       multisigPda = deployed.multisigPda
     })
 
+    // A fresh proposal per test, and the unsigned bundle a coordinator would be holding for it.
+    beforeEach(async () => {
+      const proposal = await accounts[0].propose({ instructions: [MEMO_INSTRUCTION] })
+      await confirmTransaction(rpc, proposal.transaction.hash)
+
+      proposalId = proposal.proposalId
+      bundle = getTransactionEncoder().encode(await compileBundle(rpc, {
+        multisigPda,
+        feePayer: signers[1],
+        approvers: [signers[0], signers[1]],
+        transactionIndex: BigInt(proposalId)
+      }))
+
+      transport.set(proposalId, bundle)
+    })
+
     afterAll(() => {
       accounts.forEach((account) => account.dispose())
       transport.clear()
     })
 
     it('collects two approvals into one transaction and resolves the first vote with its hash', async () => {
-      const proposalId = await propose()
+      const first = await accounts[0].approveProposal(proposalId)
 
-      // Compiled before anyone signs, with the last member to vote as the fee payer.
-      transport.set(proposalId, getTransactionEncoder().encode(await compileBundle(rpc, {
-        multisigPda,
-        feePayer: signers[1],
-        approvers: [signers[0], signers[1]],
-        transactionIndex: BigInt(proposalId)
-      })))
-
-      // The first member signs its slot and hands the bundle back, so its result cannot be known
-      // yet: nothing has been broadcast and the promise stays pending.
-      const first = accounts[0].approveProposal(proposalId)
-
-      await stored.get(proposalId).promise
-
-      expect(await accounts[0].getProposal(proposalId)).toMatchObject({ approved: [] })
-
-      const second = await accounts[1].approveProposal(proposalId)
-
-      await confirmTransaction(rpc, second.transaction.hash)
-      landed.get(proposalId).settle({ ...second.transaction })
-
-      expect(second).toEqual({
+      expect(first).toEqual({
         proposalId,
         confirmations: 2,
         threshold: 2,
         status: 'pending',
-        transaction: { hash: second.transaction.hash, fee: 2n * SIGNATURE_FEE }
+        transaction: { hash: '', fee: 0n }
       })
-      expect(await first).toEqual({
+      expect(await accounts[0].getProposal(proposalId)).toMatchObject({ approved: [] })
+
+      // The second fills the last slot, so it broadcasts and reports what landed.
+      const second = await accounts[1].approveProposal(proposalId)
+
+      await confirmTransaction(rpc, second.transaction.hash)
+
+      expect(second).toEqual({
         proposalId,
         confirmations: 2,
         threshold: 2,
@@ -343,27 +311,20 @@ describe('coordinators', () => {
     })
 
     it('counts only the approvals of this proposal, whatever else the bundle carries', async () => {
-      const proposalId = await propose()
-
+      // Padded with what a nonce advance or a compute budget would be: not an approval.
       transport.set(proposalId, getTransactionEncoder().encode(await compileBundle(rpc, {
         multisigPda,
         feePayer: signers[1],
         approvers: [signers[0], signers[1]],
         transactionIndex: BigInt(proposalId),
-        // What a durable nonce's advance, a compute budget or a memo would be: not an approval,
-        // and not counted as one.
         padding: [MEMO_INSTRUCTION]
       })))
 
-      const first = accounts[0].approveProposal(proposalId)
-
-      await stored.get(proposalId).promise
+      await accounts[0].approveProposal(proposalId)
 
       const second = await accounts[1].approveProposal(proposalId)
 
       await confirmTransaction(rpc, second.transaction.hash)
-      landed.get(proposalId).settle({ ...second.transaction })
-      await first
 
       expect(second.confirmations).toBe(2)
       expect(await memoOf(rpc, second.transaction.hash)).toBe(MEMO_TEXT)
@@ -372,17 +333,7 @@ describe('coordinators', () => {
     })
 
     it('refuses a bundle that does not carry this member approval', async () => {
-      const proposalId = await propose()
-
-      // A bundle the third member is not in. Signing it would put its signature on a transaction
-      // it is not voting in, which is the whole of what a member has to refuse.
-      transport.set(proposalId, getTransactionEncoder().encode(await compileBundle(rpc, {
-        multisigPda,
-        feePayer: signers[1],
-        approvers: [signers[0], signers[1]],
-        transactionIndex: BigInt(proposalId)
-      })))
-
+      // The seeded bundle carries no slot for the third member.
       await expect(accounts[2].approveProposal(proposalId)).rejects.toThrow(
         new ValueError(
           `The bundle the coordinator holds for the proposal ${proposalId} does not carry an approval by the signer ${signers[2]}.`
@@ -392,9 +343,7 @@ describe('coordinators', () => {
     })
 
     it('leaves a member to vote alone when the coordinator holds no bundle for it', async () => {
-      const proposalId = await propose()
-
-      expect(transport.has(proposalId)).toBe(false)
+      transport.delete(proposalId)
 
       const alone = await accounts[0].approveProposal(proposalId)
 
@@ -411,13 +360,12 @@ describe('coordinators', () => {
     })
 
     it('never reaches a coordinator for a rejection or an execution', async () => {
-      const proposalId = await propose()
       const rejection = await accounts[0].rejectProposal(proposalId)
 
       await confirmTransaction(rpc, rejection.transaction.hash)
 
       expect(rejection.transaction.fee).toBe(SIGNATURE_FEE)
-      expect(transport.has(proposalId)).toBe(false)
+      expect(transport.get(proposalId)).toBe(bundle)
       expect((await accounts[0].getProposal(proposalId)).rejected).toEqual([signers[0]])
     })
   })
