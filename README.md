@@ -117,17 +117,21 @@ approved and left stuck.
 
 A proposal that needs N approvals costs N+2 transactions on Squads: one to create it, one per
 approval, one to execute. `IMultisigCoordinator` is the seam for collapsing the middle N into one,
-and this package does not implement it: extend the class, plug it in through the `coordinator`
-option, and collect approvals however you like. Omit the option and there is no coordinator at all:
+and this package does not implement it: implement the interface, plug it in through the
+`coordinator` option, and collect approvals however you like. Omit the option and there is no coordinator at all:
 every vote is the member's own transaction, broadcast at once. Creating a proposal, rejecting it and
 executing it never reach a coordinator either way.
 
 ```javascript
 import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
 
-// Override `getProposal`, `confirmProposal` and `submitProposal`. The interface documents what
-// each is handed and what it must return; anything left alone raises `NotImplementedError`.
-class MyCoordinator extends IMultisigCoordinator { /* ... */ }
+// Implement `getProposal`, `confirmProposal` and `submitProposal`. The interface documents what
+// each is handed and what it must return.
+/** @implements {IMultisigCoordinator} */
+class MyCoordinator {
+  constructor (config) { this._config = config }
+  /* ... */
+}
 
 const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
   provider: 'https://api.devnet.solana.com',
@@ -140,8 +144,8 @@ const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
 account the manager derives, and each signs with a different key. The factory is handed a
 `CoordinatorSigner`, `{ getAddress, partiallySignTransaction }` over that member's key rather than
 the account holding it: name the member, and fill its slot. That is the whole of what a member
-contributes. Widen that object with anything else your implementation needs, and parameterise the
-class over it, `@extends {IMultisigCoordinator<MyConfig>}`.
+contributes. Widen that object with anything else your implementation needs and keep it however you
+like; the interface says nothing about how an implementation stores it.
 
 What the account does with what you return, which is the part you can rely on:
 

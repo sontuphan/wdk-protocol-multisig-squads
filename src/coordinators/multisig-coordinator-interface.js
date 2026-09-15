@@ -46,32 +46,18 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
  * coordinator never reaches the cluster itself. Creating a proposal, rejecting it and executing it
  * never reach a coordinator at all.
  *
- * Implementations extend this class, which holds the configuration and leaves every method to them.
+ * Implementations declare `@implements` and keep the `CoordinatorSigner` the factory hands them in
+ * whatever shape they need.
  *
- * @template {CoordinatorSigner} [TCoordinatorConfig=CoordinatorSigner]
+ * @interface
  */
 export class IMultisigCoordinator {
-  /**
-   * Creates a coordinator over its configuration.
-   *
-   * @param {TCoordinatorConfig} config - The member's signer, widened by whatever the implementation needs.
-   */
-  constructor (config) {
-    /**
-     * The coordinator's configuration.
-     *
-     * @protected
-     * @type {TCoordinatorConfig}
-     */
-    this._config = config
-  }
-
   /**
    * Takes the bundle back with this member's signature in it, to hold while any slot is still empty.
    *
    * @param {string} proposalId - The proposal (transaction index) id.
    * @param {Transaction} proposal - The bundle, carrying every signature collected so far.
-   * @returns {Promise<TransactionResult>} The hash and fee of the transaction that eventually carries these approvals, so it resolves late.
+   * @returns {Promise<TransactionResult>} What holding the bundle put on chain for this member, which is nothing while slots are still empty: `{ hash: '', fee: 0n }`, unless the implementation broadcast something of its own to report.
    */
   async submitProposal (proposalId, proposal) {
     throw new NotImplementedError('submitProposal(proposalId, proposal)')

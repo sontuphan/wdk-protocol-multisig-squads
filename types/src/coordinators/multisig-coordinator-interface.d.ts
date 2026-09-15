@@ -25,30 +25,16 @@
  * coordinator never reaches the cluster itself. Creating a proposal, rejecting it and executing it
  * never reach a coordinator at all.
  *
- * Implementations extend this class, which holds the configuration and leaves every method to them.
- *
- * @template {CoordinatorSigner} [TCoordinatorConfig=CoordinatorSigner]
+ * Implementations declare `@implements` and keep the `CoordinatorSigner` the factory hands them in
+ * whatever shape they need.
  */
-export class IMultisigCoordinator<TCoordinatorConfig extends CoordinatorSigner = CoordinatorSigner> {
-    /**
-     * Creates a coordinator over its configuration.
-     *
-     * @param {TCoordinatorConfig} config - The member's signer, widened by whatever the implementation needs.
-     */
-    constructor(config: TCoordinatorConfig);
-    /**
-     * The coordinator's configuration.
-     *
-     * @protected
-     * @type {TCoordinatorConfig}
-     */
-    protected _config: TCoordinatorConfig;
+export interface IMultisigCoordinator {
     /**
      * Takes the bundle back with this member's signature in it, to hold while any slot is still empty.
      *
      * @param {string} proposalId - The proposal (transaction index) id.
      * @param {Transaction} proposal - The bundle, carrying every signature collected so far.
-     * @returns {Promise<TransactionResult>} The hash and fee of the transaction that eventually carries these approvals, so it resolves late.
+     * @returns {Promise<TransactionResult>} What holding the bundle put on chain for this member, which is nothing while slots are still empty: `{ hash: '', fee: 0n }`, unless the implementation broadcast something of its own to report.
      */
     submitProposal(proposalId: string, proposal: Transaction): Promise<TransactionResult>;
     /**

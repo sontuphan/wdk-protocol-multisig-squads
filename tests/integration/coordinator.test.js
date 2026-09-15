@@ -136,8 +136,14 @@ async function compileBundle (rpc, { multisigPda, feePayer, approvers, transacti
 /**
  * A coordinator for the suite to drive. Its transport holds the wire encoding rather than the
  * object, and `submitProposal` reports no landing, returning an empty hash and a zero fee.
+ *
+ * @implements {IMultisigCoordinator}
  */
-class PseudoCoordinator extends IMultisigCoordinator {
+class PseudoCoordinator {
+  constructor (config) {
+    this._config = config
+  }
+
   async getProposal (proposalId) {
     const wire = this._config.transport.get(proposalId)
 
