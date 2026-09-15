@@ -274,6 +274,7 @@ const SEED = {
   ephemeralSigner: 'ephemeral_signer'
 }
 
+/** @type {{ multisig: 8, proposal: 4, transaction: 2, now: 1, all: 15 }} */
 export const PROPOSAL_DATA_MASK = { multisig: 8, proposal: 4, transaction: 2, now: 1, all: 15 }
 
 const DEFAULT = { vaultIndex: 0, memberCount: 1, authority: SYSTEM_PROGRAM_ADDRESS }
@@ -288,8 +289,6 @@ const MAX = {
 }
 
 export const SIGNATURE_BASE_FEE = 5000n
-
-const SLOT_TIME = 400
 
 /** @type {{ [K in Commitment]: Finality }} */
 const FINALITY = { processed: 'pending', confirmed: 'confirmed', finalized: 'final' }
@@ -307,7 +306,7 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
    * @type {number}
    */
   get defaultWaitInterval () {
-    return SLOT_TIME
+    return 400
   }
 
   /**

@@ -178,13 +178,14 @@ export namespace SECRET_SIZE {
     let privateKey: number;
     let keyPair: number;
 }
-export namespace PROPOSAL_DATA_MASK {
-    let multisig: number;
-    let proposal: number;
-    let transaction: number;
-    let now: number;
-    let all: number;
-}
+/** @type {{ multisig: 8, proposal: 4, transaction: 2, now: 1, all: 15 }} */
+export const PROPOSAL_DATA_MASK: {
+    multisig: 8;
+    proposal: 4;
+    transaction: 2;
+    now: 1;
+    all: 15;
+};
 /**
  * Read-only Solana Squads multisig wallet account implementation.
  *
