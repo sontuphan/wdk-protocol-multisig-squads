@@ -217,6 +217,7 @@ describe('coordinators', () => {
       expect(proposal).toEqual({
         proposalId: '1',
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 2,
         status: 'pending',
         transaction: { hash: proposal.transaction.hash, fee: SIGNATURE_FEE + PROPOSAL_RENT }
@@ -286,7 +287,8 @@ describe('coordinators', () => {
 
       expect(first).toEqual({
         proposalId,
-        confirmations: 1,
+        confirmations: 0,
+        pendingConfirmations: 1,
         threshold: 2,
         status: 'pending',
         transaction: { hash: '', fee: 0n }
@@ -301,6 +303,7 @@ describe('coordinators', () => {
       expect(second).toEqual({
         proposalId,
         confirmations: 2,
+        pendingConfirmations: 0,
         threshold: 2,
         status: 'pending',
         transaction: { hash: second.transaction.hash, fee: 2n * SIGNATURE_FEE }
@@ -362,6 +365,7 @@ describe('coordinators', () => {
       expect(alone).toEqual({
         proposalId,
         confirmations: 1,
+        pendingConfirmations: 0,
         threshold: 2,
         status: 'pending',
         transaction: { hash: alone.transaction.hash, fee: SIGNATURE_FEE }

@@ -132,8 +132,9 @@ executing it never reach a coordinator either way.
 
 The two approval rows are the whole of the difference: A's vote does not reach the cluster when it
 is cast, it waits in the coordinator until B's completes the bundle, and B's account broadcasts both.
-So a member that votes first gets no transaction of its own back, and one network fee covers both
-votes, charged to whoever the coordinator named as fee payer when it compiled.
+So A gets no transaction of its own back, and its vote counts in the result's `pendingConfirmations`
+rather than `confirmations`, which the chain governs. One network fee covers both votes, charged to
+whoever the coordinator named as fee payer when it compiled.
 
 ```javascript
 import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'

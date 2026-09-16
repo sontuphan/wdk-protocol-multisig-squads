@@ -56,11 +56,14 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInteractionResult} MultisigInteractionResult */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
- * `MultisigProposal` widened with `transaction` from `MultisigInteractionResult`. On Solana every
- * call is its own on-chain transaction, so the field is always set: it carries the execution when
- * `status` is `'executed'`, and the call's own submission when it is `'pending'`.
+ * `MultisigProposal` widened with `transaction` from `MultisigInteractionResult`, and with the
+ * approvals a coordinator holds. On Solana every call is its own on-chain transaction, so
+ * `transaction` is always set: it carries the execution when `status` is `'executed'`, and the
+ * call's own submission when it is `'pending'`. `confirmations` counts what the chain holds or is
+ * being sent, and `pendingConfirmations` what a coordinator has gathered but not sent, which is 0
+ * for every call that broadcasts.
  *
- * @typedef {MultisigProposal & MultisigInteractionResult} SolanaMultisigProposalResult
+ * @typedef {MultisigProposal & MultisigInteractionResult & { pendingConfirmations: number }} SolanaMultisigProposalResult
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
 /**
@@ -381,7 +384,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing. `vaultIndex` does not bear on a vote. None of the three applies to a coordinator's bundle, which has decided them already.
-   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when the execution ran in the same transaction, in which case `transaction` is that execution rather than a bare submission. Through a coordinator, `fee` is what the bundle's own fee payer is charged and `confirmations` counts the approvals in that bundle whose member has signed it, beside those already on chain. Gathered is not landed, so `confirmations` can reach `threshold` before anything is on chain and `status` is what says the proposal executed. A vote that only circulated reports `{ hash: '', fee: 0n }`.
+   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when the execution ran in the same transaction, in which case `transaction` is that execution rather than a bare submission. Through a coordinator, `fee` is what the bundle's own fee payer is charged. A vote that only circulated adds nothing to `confirmations`, which the chain still governs; it counts in `pendingConfirmations`, with the other approvals the bundle has collected a signature for, and reports `{ hash: '', fee: 0n }`.
    * @throws {ValueError} The signer must not have approved the proposal already, and a coordinator's bundle must carry this signer's approval and no member's twice.
    */
   async approveProposal (proposalId, { memo, autoExecute } = {}) {
@@ -429,14 +432,14 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       const { hash, fee } = complete
         ? await this._sendSignedTransaction(signed)
         : NO_TRANSACTION
-      const gathered = new Set([
-        ...proposal.approved,
-        ...approvers.filter((member) => signed.signatures[member])
-      ]).size
+      const gathered = approvers.filter((member) => signed.signatures[member])
 
       return {
         proposalId: index.toString(),
-        confirmations: gathered,
+        confirmations: complete
+          ? new Set([...proposal.approved, ...approvers]).size
+          : proposal.approved.length,
+        pendingConfirmations: complete ? 0 : gathered.length,
         threshold: multisig.threshold,
         status: complete && executes ? 'executed' : 'pending',
         transaction: { hash, fee }
@@ -468,6 +471,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     return {
       proposalId: index.toString(),
       confirmations,
+      pendingConfirmations: 0,
       threshold: multisig.threshold,
       status: execution ? 'executed' : 'pending',
       transaction: { hash, fee }
@@ -602,6 +606,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     return {
       proposalId: index.toString(),
       confirmations: proposal.approved.length - (proposal.approved.includes(signerAddress) ? 1 : 0),
+      pendingConfirmations: 0,
       threshold: multisig.threshold,
       status: 'pending',
       transaction: { hash, fee }
@@ -962,6 +967,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     return {
       proposalId: index.toString(),
       confirmations: executed ? 1 : 0,
+      pendingConfirmations: 0,
       threshold,
       status: executed ? 'executed' : 'pending',
       transaction: { hash, fee: fee + rent }

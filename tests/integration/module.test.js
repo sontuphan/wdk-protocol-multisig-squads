@@ -269,6 +269,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       expect(proposal).toEqual({
         proposalId: '1',
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 2,
         status: 'pending',
         // The signature fee plus the rent the transaction and proposal accounts lock up, which
@@ -505,6 +506,7 @@ describe('@tetherto/wdk-protocol-multisig-squads', () => {
       expect(proposal).toEqual({
         proposalId: '1',
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 2,
         status: 'pending',
         // The signature fee plus the rent the transaction and proposal accounts lock up. Larger
