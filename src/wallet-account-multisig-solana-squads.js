@@ -27,7 +27,7 @@ import WalletAccountReadOnlyMultisigSolanaSquads, {
   TRANSACTION_KIND
 } from './wallet-account-read-only-multisig-solana-squads.js'
 import { address, getAddressEncoder } from '@solana/addresses'
-import { getBase64Decoder, getBase64Encoder } from '@solana/codecs'
+import { getBase58Decoder, getBase64Decoder, getBase64Encoder } from '@solana/codecs'
 import { AccountRole } from '@solana/instructions'
 import { SYSTEM_PROGRAM_ADDRESS } from '@solana-program/system'
 import { ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS } from '@solana-program/address-lookup-table'
@@ -101,6 +101,7 @@ const SEED = { prefix: 'multisig', multisig: 'multisig' }
 const DEFAULT = { threshold: 1, timeLock: 0, vaultIndex: 0 }
 
 const NO_EPHEMERAL_SIGNERS = 0
+const NO_TRANSACTION = { hash: '', fee: 0n }
 const ONE_APPROVAL = 1
 const NO_MEMO = null
 
@@ -132,18 +133,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     this._signerAccount = signerAccount
 
     /**
-     * The coordinator the approvals are signed through, built from the configuration's factory.
+     * The coordinator the approvals are circulated through, built from the configuration's factory.
      * Undefined when the configuration names none.
      *
      * @protected
      * @type {IMultisigCoordinator | undefined}
      */
-    this._coordinator = config.coordinator?.({
-      getAddress: () => signerAccount.getAddress(),
-      partiallySignTransaction: async (tx) => partiallySignTransaction(
-        [await createKeyPairFromPrivateKeyBytes(signerAccount.keyPair.privateKey)], tx
-      )
-    })
+    this._coordinator = config.coordinator?.({ getAddress: () => signerAccount.getAddress() })
   }
 
   /**
@@ -377,7 +373,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing. `vaultIndex` does not bear on a vote. A coordinator's bundle has decided all three already, so none of them applies to it.
-   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when the execution ran in the same transaction, in which case `transaction` is that execution rather than a bare submission. Through a coordinator the vote rides in a shared bundle, so `confirmations` is what the proposal will hold once that bundle lands, and `transaction` is `IMultisigCoordinator.submitProposal`'s until the member who fills the last slot broadcasts it and it becomes that broadcast's.
+   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when the execution ran in the same transaction, in which case `transaction` is that execution rather than a bare submission. Through a coordinator the vote rides in a shared bundle, so `confirmations` is what the proposal will hold once that bundle lands, and `fee` is what the bundle's own fee payer is charged. A vote that only hands its signature back, leaving the bundle short of the threshold, reports `{ hash: '', fee: 0n }`: no transaction carries it yet, and it pays nothing.
    * @throws {ValueError} The signer must not have approved the proposal already, and a coordinator's bundle must carry this signer's approval and no member's twice.
    */
   async approveProposal (proposalId, { memo, autoExecute } = {}) {
@@ -413,11 +409,18 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         )
       }
 
-      const signed = await this._coordinator.confirmProposal(bundle)
+      const signed = await partiallySignTransaction(
+        [await createKeyPairFromPrivateKeyBytes(this._signerAccount.keyPair.privateKey)], bundle
+      )
       const complete = isFullySignedTransaction(signed)
+
+      await this._coordinator.confirmProposal(
+        index.toString(), getBase58Decoder().decode(signed.signatures[signerAddress])
+      )
+
       const { hash, fee } = complete
         ? await this._sendSignedTransaction(signed)
-        : await this._coordinator.submitProposal(index.toString(), signed)
+        : NO_TRANSACTION
 
       return {
         proposalId: index.toString(),

@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals'
 
-import { getBase58Decoder, getBase58Encoder, getBase64Decoder } from '@solana/codecs'
+import { getBase58Decoder, getBase58Encoder, getBase64Decoder, getBase64Encoder } from '@solana/codecs'
 
 import { pipe } from '@solana/functional'
 import { AccountRole } from '@solana/instructions'
@@ -27,7 +27,7 @@ import {
   setTransactionMessageFeePayer,
   setTransactionMessageLifetimeUsingBlockhash
 } from '@solana/transaction-messages'
-import { compileTransaction, getBase64EncodedWireTransaction, isFullySignedTransaction } from '@solana/transactions'
+import { compileTransaction, getBase64EncodedWireTransaction, getTransactionDecoder, isFullySignedTransaction } from '@solana/transactions'
 
 import { AssertionError, MaximumFeeExceededError, NoSuchElementError, UnsupportedOperationError, ValueError } from '@tetherto/wdk-wallet'
 
@@ -488,6 +488,23 @@ function bundleOf (instructions, feePayer = TEST_SIGNER) {
     (m) => setTransactionMessageLifetimeUsingBlockhash(BUNDLE_BLOCKHASH, m),
     (m) => appendTransactionMessageInstructions(instructions, m)
   ))
+}
+
+/**
+ * Whether a base58 signature really is the member's over those bytes, which is what a coordinator
+ * has to be able to check before it merges one into the bundle it holds.
+ *
+ * @param {string} address - The member the signature should be by.
+ * @param {string} signature - The signature, base58 encoded.
+ * @param {Uint8Array} messageBytes - The bytes it should cover.
+ * @returns {Promise<boolean>} Whether it verifies.
+ */
+async function verifySignature (address, signature, messageBytes) {
+  const key = await crypto.subtle.importKey(
+    'raw', getBase58Encoder().encode(address), 'Ed25519', true, ['verify']
+  )
+
+  return await crypto.subtle.verify('Ed25519', key, getBase58Encoder().encode(signature), messageBytes)
 }
 
 /**
@@ -2999,22 +3016,13 @@ describe('WalletAccountMultisigSolanaSquads', () => {
      * @returns {Promise<{ account: Object, coordinator: Object, signerAccount: Object }>}
      */
     async function accountWithCoordinator () {
-      const sent = []
-      const circulated = []
+      const confirmed = []
       let coordinatorConfig = null
 
       const coordinator = {
-        submitProposal: jest.fn(async (proposalId, tx) => {
-          circulated.push([proposalId, tx])
-
-          return { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
-        }),
         getProposal: jest.fn(async () => null),
-        // It really signs: the bundle is compiled, so there are bytes for the config to sign.
-        confirmProposal: jest.fn(async (tx) => {
-          sent.push(tx)
-
-          return await coordinatorConfig.partiallySignTransaction(tx)
+        confirmProposal: jest.fn(async (proposalId, signature) => {
+          confirmed.push([proposalId, signature])
         })
       }
 
@@ -3032,8 +3040,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       return {
         account,
         coordinator,
-        sent,
-        circulated,
+        confirmed,
         get coordinatorConfig () { return coordinatorConfig }
       }
     }
@@ -3044,21 +3051,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(account._coordinator).toBe(coordinator)
       expect(await coordinatorConfig.getAddress()).toBe(TEST_SIGNER)
 
-      expect(Object.keys(coordinatorConfig)).toEqual(['getAddress', 'partiallySignTransaction'])
-    })
-
-    it('adds the member signature a coordinator asks for, and nothing else', async () => {
-      const { coordinatorConfig } = await accountWithCoordinator()
-      const compiled = {
-        messageBytes: new Uint8Array([1, 2, 3]),
-        signatures: { [TEST_SIGNER]: null }
-      }
-
-      const signed = await coordinatorConfig.partiallySignTransaction(compiled)
-
-      expect(signed.messageBytes).toBe(compiled.messageBytes)
-      expect(signed.signatures[TEST_SIGNER]).toBeInstanceOf(Uint8Array)
-      expect(signed.signatures[TEST_SIGNER]).toHaveLength(64)
+      expect(Object.keys(coordinatorConfig)).toEqual(['getAddress'])
     })
 
     it('has no coordinator when the configuration names none', async () => {
@@ -3095,7 +3088,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const result = await account.propose({ to: OTHER_MEMBER, value: 1n })
 
       expect(coordinator.confirmProposal).not.toHaveBeenCalled()
-      expect(coordinator.submitProposal).not.toHaveBeenCalled()
       expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(2)
       expect(result).toEqual({
         proposalId: '5',
@@ -3107,12 +3099,11 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
     })
 
-    it('circulates a bundle its signature does not complete', async () => {
-      const { account, coordinator, sent, circulated } = await accountWithCoordinator()
+    it('hands its signature back when it does not complete the bundle', async () => {
+      const { account, coordinator, confirmed } = await accountWithCoordinator()
+      const bundle = bundleOf([approvalOf(TEST_SIGNER), approvalOf(OTHER_MEMBER)])
 
-      coordinator.getProposal.mockResolvedValue(
-        bundleOf([approvalOf(TEST_SIGNER), approvalOf(OTHER_MEMBER)])
-      )
+      coordinator.getProposal.mockResolvedValue(bundle)
 
       const rpc = stubSolanaRpc({
         getMultipleAccounts: () => serveValue([
@@ -3125,27 +3116,25 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       })
 
       const result = await account.approveProposal(3)
-      const [[proposalId, held]] = circulated
+      const [[proposalId, signature]] = confirmed
 
       expect(coordinator.getProposal).toHaveBeenCalledWith('3')
-      expect(coordinator.confirmProposal).toHaveBeenCalledWith(sent[0])
       expect(proposalId).toBe('3')
-      expect(isFullySignedTransaction(held)).toBe(false)
-      expect(held.signatures[TEST_SIGNER]).toHaveLength(64)
-      expect(held.signatures[OTHER_MEMBER]).toBeNull()
-      expect(held.messageBytes).toEqual(sent[0].messageBytes)
+      // The bundle itself never goes back, only this member's signature over its bytes.
+      expect(getBase58Encoder().encode(signature)).toHaveLength(64)
+      expect(await verifySignature(TEST_SIGNER, signature, bundle.messageBytes)).toBe(true)
       expect(rpcRequests(rpc, 'sendTransaction')).toEqual([])
       expect(result).toEqual({
         proposalId: '3',
         confirmations: 2,
         threshold: 2,
         status: 'pending',
-        transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
+        transaction: { hash: '', fee: 0n }
       })
     })
 
     it('sends the bundle its signature completes, as the bytes it already is', async () => {
-      const { account, coordinator, coordinatorConfig, sent } = await accountWithCoordinator()
+      const { account, coordinator } = await accountWithCoordinator()
 
       // The threshold is two: what decides the route is the bundle being signed, not the count.
       const bundle = bundleOf([approvalOf(TEST_SIGNER)])
@@ -3166,19 +3155,19 @@ describe('WalletAccountMultisigSolanaSquads', () => {
 
       const result = await account.approveProposal(3)
       const [[wire, options]] = rpcRequests(rpc, 'sendTransaction')
+      const broadcast = getTransactionDecoder().decode(getBase64Encoder().encode(wire))
 
-      // A recompile would change the bytes, so the comparison below is what rules it out.
-      expect(coordinator.submitProposal).not.toHaveBeenCalled()
+      // The signature goes back either way; what makes this the completing vote is the send.
+      expect(coordinator.confirmProposal).toHaveBeenCalledWith('3', expect.any(String))
       expect(rpcRequests(rpc, 'sendTransaction')).toHaveLength(1)
       // `preflightCommitment` is the client's default rather than anything the account sets,
       // which is how `@tetherto/wdk-wallet-solana` sends too.
       expect(options).toEqual({ encoding: 'base64', preflightCommitment: 'confirmed' })
-      // The bytes are the bundle's own, with this member's slot filled and nothing else touched:
-      // signing is deterministic, so re-signing what the coordinator was handed reproduces them.
-      expect(wire).toBe(getBase64EncodedWireTransaction(
-        await coordinatorConfig.partiallySignTransaction(sent[0])
-      ))
-      expect(sent[0].messageBytes).toEqual(bundle.messageBytes)
+      // The bytes are the bundle's own, with this member's slot filled and nothing else touched.
+      // A recompile would change them, so this comparison is what rules it out.
+      expect(broadcast.messageBytes).toEqual(bundle.messageBytes)
+      expect(broadcast.signatures[TEST_SIGNER]).toHaveLength(64)
+      expect(isFullySignedTransaction(broadcast)).toBe(true)
       expect(result).toEqual({
         proposalId: '3',
         confirmations: 1,
@@ -3221,7 +3210,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         status: 'executed',
         transaction: { hash: DUMMY_EXECUTE_HASH, fee: BUNDLE_FEE }
       })
-      expect(coordinator.submitProposal).not.toHaveBeenCalled()
+      expect(coordinator.confirmProposal).toHaveBeenCalledWith('3', expect.any(String))
     })
 
     it('resolves a bundle compressed with an address lookup table', async () => {
@@ -3378,7 +3367,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         )
       )
       expect(coordinator.confirmProposal).not.toHaveBeenCalled()
-      expect(coordinator.submitProposal).not.toHaveBeenCalled()
     })
 
     it('refuses a bundle that does not carry its own approval', async () => {
@@ -3404,7 +3392,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         )
       )
       expect(coordinator.confirmProposal).not.toHaveBeenCalled()
-      expect(coordinator.submitProposal).not.toHaveBeenCalled()
     })
 
     it('leaves a rejection to the signer account', async () => {
@@ -3426,7 +3413,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       const result = await account.rejectProposal(3)
 
       expect(coordinator.confirmProposal).not.toHaveBeenCalled()
-      expect(coordinator.submitProposal).not.toHaveBeenCalled()
       expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(1)
       expect(result).toEqual({
         proposalId: '3',

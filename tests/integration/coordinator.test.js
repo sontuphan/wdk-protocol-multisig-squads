@@ -16,6 +16,7 @@
 
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals'
 
+import { getBase58Encoder } from '@solana/codecs'
 import { AccountRole } from '@solana/instructions'
 import { pipe } from '@solana/functional'
 import { createSolanaRpc } from '@solana/rpc'
@@ -135,7 +136,7 @@ async function compileBundle (rpc, { multisigPda, feePayer, approvers, transacti
 
 /**
  * A coordinator for the suite to drive. Its transport holds the wire encoding rather than the
- * object, and `submitProposal` reports no landing, returning an empty hash and a zero fee.
+ * object, and `confirmProposal` merges the member's signature into the copy it holds.
  *
  * @implements {IMultisigCoordinator}
  */
@@ -150,14 +151,15 @@ class PseudoCoordinator {
     return wire ? getTransactionDecoder().decode(wire) : null
   }
 
-  async confirmProposal (transaction) {
-    return await this._config.partiallySignTransaction(transaction)
-  }
+  async confirmProposal (proposalId, signature) {
+    const held = getTransactionDecoder().decode(this._config.transport.get(proposalId))
+    const address = await this._config.getAddress()
+    const merged = {
+      ...held,
+      signatures: { ...held.signatures, [address]: getBase58Encoder().encode(signature) }
+    }
 
-  async submitProposal (proposalId, transaction) {
-    this._config.transport.set(proposalId, getTransactionEncoder().encode(transaction))
-
-    return { hash: '', fee: 0n }
+    this._config.transport.set(proposalId, getTransactionEncoder().encode(merged))
   }
 }
 

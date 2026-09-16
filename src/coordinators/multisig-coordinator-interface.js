@@ -16,16 +16,14 @@
 
 import { NotImplementedError } from '@tetherto/wdk-wallet'
 
-/** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
 /** @typedef {import('@solana/transactions').Transaction} Transaction */
 
 /**
- * What a coordinator is given of the member it signs for: its address, and a way to add its
- * signature to a compiled transaction.
+ * What a coordinator is given of the member it serves: its address, and nothing else. Signing stays
+ * with the account.
  *
  * @typedef {Object} CoordinatorSigner
  * @property {() => Promise<string>} getAddress - Returns the member's address.
- * @property {(tx: Transaction) => Promise<Transaction>} partiallySignTransaction - Puts this member's signature in its slot of a compiled transaction, leaving every other slot alone.
  */
 
 /**
@@ -41,10 +39,10 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
  *
  * A coordinator decides which members will approve, builds their approvals and the execution if one
  * rides along, fixes the fee payer and the lifetime, and compiles. `getProposal` hands that bundle
- * to a member, `confirmProposal` puts the member's signature in its slot, and `submitProposal`
- * holds it while slots are still empty. The member that fills the last one broadcasts, so a
- * coordinator never reaches the cluster itself. Creating a proposal, rejecting it and executing it
- * never reach a coordinator at all.
+ * to a member and `confirmProposal` takes back the signature the member's account puts on it, for
+ * the coordinator to merge into the copy it holds. The member whose signature completes the bundle
+ * broadcasts it, so a coordinator neither signs nor reaches the cluster. Creating a proposal,
+ * rejecting it and executing it never reach a coordinator at all.
  *
  * Implementations declare `@implements` and keep the `CoordinatorSigner` the factory hands them in
  * whatever shape they need.
@@ -53,19 +51,9 @@ import { NotImplementedError } from '@tetherto/wdk-wallet'
  */
 export class IMultisigCoordinator {
   /**
-   * Takes the bundle back with this member's signature in it, to hold while any slot is still empty.
-   *
-   * @param {string} proposalId - The proposal (transaction index) id.
-   * @param {Transaction} proposal - The bundle, carrying every signature collected so far.
-   * @returns {Promise<TransactionResult>} What holding the bundle put on chain for this member, which is nothing while slots are still empty: `{ hash: '', fee: 0n }`, unless the implementation broadcast something of its own to report.
-   */
-  async submitProposal (proposalId, proposal) {
-    throw new NotImplementedError('submitProposal(proposalId, proposal)')
-  }
-
-  /**
    * Returns the compiled bundle this member should sign, or null to leave it voting alone in its own
-   * transaction. The bundle must carry this member's own approval of that proposal.
+   * transaction. The bundle must carry this member's own approval of that proposal. Refuse by
+   * answering null or by throwing.
    *
    * @param {string} proposalId - The proposal (transaction index) id.
    * @returns {Promise<Transaction | null>} The bundle, or null.
@@ -75,13 +63,14 @@ export class IMultisigCoordinator {
   }
 
   /**
-   * Puts this member's signature in its slot in the bundle, which
-   * `CoordinatorSigner.partiallySignTransaction` does. Throw to refuse.
+   * Takes this member's signature over the bundle `getProposal` handed out, for the coordinator to
+   * put in its slot of the copy it holds.
    *
-   * @param {Transaction} proposal - The bundle to sign, carrying every signature collected so far.
-   * @returns {Promise<Transaction>} The bundle with this member's signature in it.
+   * @param {string} proposalId - The proposal (transaction index) id.
+   * @param {string} signature - The member's signature over the bundle, base58 encoded.
+   * @returns {Promise<void>}
    */
-  async confirmProposal (proposal) {
-    throw new NotImplementedError('confirmProposal(proposal)')
+  async confirmProposal (proposalId, signature) {
+    throw new NotImplementedError('confirmProposal(proposalId, signature)')
   }
 }

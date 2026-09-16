@@ -125,8 +125,8 @@ executing it never reach a coordinator either way.
 ```javascript
 import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
 
-// Implement `getProposal`, `confirmProposal` and `submitProposal`. The interface documents what
-// each is handed and what it must return.
+// Implement `getProposal` and `confirmProposal`. The interface documents what each is handed and
+// what it must return.
 /** @implements {IMultisigCoordinator} */
 class MyCoordinator {
   constructor (config) { this._config = config }
@@ -142,17 +142,17 @@ const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
 
 `coordinator` takes a factory rather than an instance because one configuration is shared by every
 account the manager derives, and each signs with a different key. The factory is handed a
-`CoordinatorSigner`, `{ getAddress, partiallySignTransaction }` over that member's key rather than
-the account holding it: name the member, and fill its slot. That is the whole of what a member
-contributes. Widen that object with anything else your implementation needs and keep it however you
-like; the interface says nothing about how an implementation stores it.
+`CoordinatorSigner`, `{ getAddress }`, which names the member and nothing more. A coordinator never
+holds a way to sign: the account adds the member's signature itself, after checking the bundle.
+Widen that object with anything else your implementation needs and keep it however you like; the
+interface says nothing about how an implementation stores it.
 
 What the account does with what you return, which is the part you can rely on:
 
 - `getProposal` answering null leaves the member voting alone, exactly as with no coordinator
-  configured, so declining is never worse than being absent.
-- Given a transaction, the account calls `confirmProposal`, then sends it if every slot is now
-  filled and hands it to `submitProposal` if any is still empty.
+  configured, so declining is never worse than being absent. Throwing refuses outright.
+- Given a transaction, the account checks it, signs it as the member, and hands the signature alone
+  to `confirmProposal`. It broadcasts as well when that signature fills the last empty slot.
 - It reads the transaction for `confirmations`, counting the approvals of this proposal it carries
   plus any the cluster already holds, and for `status`, which follows an execution riding along.
 - It refuses two shapes: one carrying no approval by this member, and one carrying any member's
@@ -168,9 +168,9 @@ What the account does with what you return, which is the part you can rely on:
 
 > [!WARNING]
 > A signature covers the whole transaction, never one instruction, so a member that signs
-> authorises everything in it: every instruction, the fee payer and the lifetime.
-> `partiallySignTransaction` cannot narrow that, because Solana has no per-instruction signing. A
-> coordinator is therefore as trusted as the code that supplies the seed.
+> authorises everything in it: every instruction, the fee payer and the lifetime. Solana has no
+> per-instruction signing, so the account's checks on the bundle are the only limit on what a
+> coordinator can get signed.
 
 ## Fees, rent, and who pays
 
