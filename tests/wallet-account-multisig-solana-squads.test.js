@@ -57,6 +57,7 @@ const DERIVED_MULTISIG_PDA = '7jmBsJmAV5aAwEQkw3AybYgTMHVUzbWgWMGvyMjhSEDQ'
 // PDAs of TEST_MULTISIG_PDA, from the SDK's `getProposalPda` / `getSpendingLimitPda` rather
 // than from the code under test, so a broken derivation fails instead of cancelling out.
 const TEST_PROPOSAL_PDA_3 = 'E5EgUq6vmcx2ZorjGvtmdatZwNXLcA7V55ZuFUPursRx'
+const TEST_PROPOSAL_PDA_4 = 'DNhyRfBQP5MAJEJ6Cr97DVbJgmoHcVWFpYKxZawXquP9'
 const TEST_VAULT_PDA = '6soQChwEoXXbAo17wNPdfLFaxzrAjiAxPif9nbJkDXCm'
 
 // The member key `getAccount(0)` derives from TEST_SEED_PHRASE.
@@ -453,6 +454,20 @@ function approvalOf (member, proposalPda = TEST_PROPOSAL_PDA_3) {
       { address: proposalPda, role: AccountRole.WRITABLE }
     ],
     data: new Uint8Array(APPROVE_DISCRIMINATOR)
+  }
+}
+
+/**
+ * A System `AdvanceNonceAccount`, the one System instruction a bundle may carry: a coordinator
+ * collecting from people needs a durable nonce, because a blockhash expires too soon.
+ *
+ * @returns {Object} The instruction.
+ */
+function advanceNonceAccount () {
+  return {
+    programAddress: SYSTEM_PROGRAM,
+    accounts: [{ address: TEST_SIGNER, role: AccountRole.WRITABLE }],
+    data: new Uint8Array([4, 0, 0, 0])
   }
 }
 
@@ -3180,11 +3195,9 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     it('reads the approvals and the execution out of the bundle it is handed', async () => {
       const { account, coordinator } = await accountWithCoordinator()
 
-      // What a durable nonce's advance or a compute budget would be, an approval of a different
-      // proposal, this member's own approval, and an execution riding along.
+      // A durable nonce's advance, this member's own approval, and an execution riding along.
       coordinator.getProposal.mockResolvedValue(bundleOf([
-        { programAddress: SYSTEM_PROGRAM, accounts: [], data: new Uint8Array([4]) },
-        approvalOf(TEST_SIGNER, TEST_MULTISIG_PDA),
+        advanceNonceAccount(),
         approvalOf(TEST_SIGNER),
         executionOf()
       ]))
@@ -3211,6 +3224,68 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         transaction: { hash: DUMMY_EXECUTE_HASH, fee: BUNDLE_FEE }
       })
       expect(coordinator.confirmProposal).toHaveBeenCalledWith('3', expect.any(String))
+    })
+
+    it('refuses a bundle carrying a vote on another proposal', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // The member's own approval is in it, so every other check passes. Signing would put its
+      // signature on the second approval too, since a signature covers the whole message.
+      coordinator.getProposal.mockResolvedValue(bundleOf([
+        approvalOf(TEST_SIGNER),
+        approvalOf(TEST_SIGNER, TEST_PROPOSAL_PDA_4)
+      ]))
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      await expect(account.approveProposal(3)).rejects.toThrow(
+        new ValueError(
+          `The bundle the coordinator holds for the proposal ${TEST_PROPOSAL_PDA_3} carries a Squads instruction that neither approves nor executes it on the multisig ${TEST_MULTISIG_PDA}, and a member signs every instruction in it.`
+        )
+      )
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+    })
+
+    it('refuses a bundle carrying an instruction for a program it does not allow', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // A plain transfer out of the member's own account, which its signature would authorise.
+      coordinator.getProposal.mockResolvedValue(bundleOf([
+        approvalOf(TEST_SIGNER),
+        {
+          programAddress: SYSTEM_PROGRAM,
+          accounts: [
+            { address: TEST_SIGNER, role: AccountRole.WRITABLE_SIGNER },
+            { address: OTHER_MEMBER, role: AccountRole.WRITABLE }
+          ],
+          data: new Uint8Array([2, 0, 0, 0, 0, 202, 154, 59, 0, 0, 0, 0])
+        }
+      ]))
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      await expect(account.approveProposal(3)).rejects.toThrow(
+        new ValueError(
+          `The bundle the coordinator holds for the proposal ${TEST_PROPOSAL_PDA_3} carries an instruction for the program ${SYSTEM_PROGRAM}, and a member signs every instruction in it. Only Squads votes on that proposal ride along, beside a compute budget, a memo and a nonce advance.`
+        )
+      )
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
     })
 
     it('resolves a bundle compressed with an address lookup table', async () => {

@@ -155,8 +155,12 @@ What the account does with what you return, which is the part you can rely on:
   to `confirmProposal`. It broadcasts as well when that signature fills the last empty slot.
 - It reads the transaction for `confirmations`, counting the approvals of this proposal it carries
   plus any the cluster already holds, and for `status`, which follows an execution riding along.
-- It refuses two shapes: one carrying no approval by this member, and one carrying any member's
-  twice, since Squads rejects the duplicate and takes the whole batch with it.
+- It refuses a bundle carrying no approval by this member, and one carrying any member's twice,
+  since Squads rejects the duplicate and takes the whole batch with it.
+- It refuses anything else in the bundle. Every Squads instruction must vote on or execute this
+  proposal of this multisig, and the only other programs allowed to ride along are the compute
+  budget, the memo and a System nonce advance. A member signs the whole message, so this is what
+  keeps its signature off instructions it never agreed to.
 - It never appends to the transaction and never recompiles it, so signatures already collected
   stay valid. Address lookup tables are fine; the account reads them to resolve borrowed indices.
 
@@ -169,8 +173,9 @@ What the account does with what you return, which is the part you can rely on:
 > [!WARNING]
 > A signature covers the whole transaction, never one instruction, so a member that signs
 > authorises everything in it: every instruction, the fee payer and the lifetime. Solana has no
-> per-instruction signing, so the account's checks on the bundle are the only limit on what a
-> coordinator can get signed.
+> per-instruction signing, so the account's checks on the bundle, listed above, are the only limit
+> on what a coordinator can get signed. They bound the damage to this proposal; they do not make an
+> unknown coordinator safe to point at.
 
 ## Fees, rent, and who pays
 

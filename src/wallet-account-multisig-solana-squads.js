@@ -29,8 +29,10 @@ import WalletAccountReadOnlyMultisigSolanaSquads, {
 import { address, getAddressEncoder } from '@solana/addresses'
 import { getBase58Decoder, getBase64Decoder, getBase64Encoder } from '@solana/codecs'
 import { AccountRole } from '@solana/instructions'
-import { SYSTEM_PROGRAM_ADDRESS } from '@solana-program/system'
+import { SYSTEM_PROGRAM_ADDRESS, getAdvanceNonceAccountDiscriminatorBytes } from '@solana-program/system'
 import { ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS } from '@solana-program/address-lookup-table'
+import { COMPUTE_BUDGET_PROGRAM_ADDRESS } from '@solana-program/compute-budget'
+import { MEMO_PROGRAM_ADDRESS } from '@solana-program/memo'
 import { createKeyPairFromPrivateKeyBytes } from '@solana/keys'
 import { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes } from '@solana/signers'
 import { getCompiledTransactionMessageDecoder } from '@solana/transaction-messages'
@@ -104,6 +106,12 @@ const NO_EPHEMERAL_SIGNERS = 0
 const NO_TRANSACTION = { hash: '', fee: 0n }
 const ONE_APPROVAL = 1
 const NO_MEMO = null
+
+const BUNDLE_INSTRUCTION = [
+  { discriminator: INSTRUCTION_DISCRIMINATOR.proposalApprove, proposal: 2, approver: 1 },
+  { discriminator: INSTRUCTION_DISCRIMINATOR.vaultTransactionExecute, proposal: 1 },
+  { discriminator: INSTRUCTION_DISCRIMINATOR.configTransactionExecute, proposal: 2 }
+]
 
 /**
  * Solana Squads multisig wallet account implementation.
@@ -494,29 +502,48 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     }
 
     const named = (instruction, slot) => accounts[instruction.accountIndices?.[slot]]
-    const isSquads = (instruction) =>
-      accounts[instruction.programAddressIndex] === this._programId
-    const leads = (instruction, discriminator) =>
-      instruction.data?.length >= discriminator.length &&
-      discriminator.every((byte, offset) => instruction.data[offset] === byte)
+    const approvers = []
+    let executes = false
 
-    const approvals = instructions.filter((instruction) =>
-      isSquads(instruction) &&
-      leads(instruction, INSTRUCTION_DISCRIMINATOR.proposalApprove) &&
-      named(instruction, 0) === multisigAddress &&
-      named(instruction, 2) === proposalAddress
-    )
+    for (const instruction of instructions) {
+      const program = accounts[instruction.programAddressIndex]
 
-    return {
-      approvers: approvals.map((instruction) => named(instruction, 1)),
-      executes: instructions.some((instruction) =>
-        isSquads(instruction) &&
-        named(instruction, 0) === multisigAddress && (
-          leads(instruction, INSTRUCTION_DISCRIMINATOR.vaultTransactionExecute) ||
-          leads(instruction, INSTRUCTION_DISCRIMINATOR.configTransactionExecute)
+      if (program !== this._programId) {
+        if (
+          program === COMPUTE_BUDGET_PROGRAM_ADDRESS ||
+          program === MEMO_PROGRAM_ADDRESS ||
+          (program === SYSTEM_PROGRAM_ADDRESS && this._leads(instruction, getAdvanceNonceAccountDiscriminatorBytes()))
+        ) {
+          continue
+        }
+
+        throw new ValueError(
+          `The bundle the coordinator holds for the proposal ${proposalAddress} carries an instruction for the program ${program}, and a member signs every instruction in it. Only Squads votes on that proposal ride along, beside a compute budget, a memo and a nonce advance.`
         )
-      )
+      }
+
+      const kind = BUNDLE_INSTRUCTION.find(({ discriminator }) => this._leads(instruction, discriminator))
+
+      if (!kind || named(instruction, 0) !== multisigAddress || named(instruction, kind.proposal) !== proposalAddress) {
+        throw new ValueError(
+          `The bundle the coordinator holds for the proposal ${proposalAddress} carries a Squads instruction that neither approves nor executes it on the multisig ${multisigAddress}, and a member signs every instruction in it.`
+        )
+      }
+
+      if (kind.approver === undefined) {
+        executes = true
+      } else {
+        approvers.push(named(instruction, kind.approver))
+      }
     }
+
+    return { approvers, executes }
+  }
+
+  /** @private */
+  _leads (instruction, discriminator) {
+    return instruction.data?.length >= discriminator.length &&
+      discriminator.every((byte, offset) => instruction.data[offset] === byte)
   }
 
   /** @private */
