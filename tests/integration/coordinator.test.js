@@ -284,7 +284,7 @@ describe('coordinators', () => {
 
       expect(first).toEqual({
         proposalId,
-        confirmations: 2,
+        confirmations: 1,
         threshold: 2,
         status: 'pending',
         transaction: { hash: '', fee: 0n }

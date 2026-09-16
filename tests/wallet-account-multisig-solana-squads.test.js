@@ -3139,13 +3139,48 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(getBase58Encoder().encode(signature)).toHaveLength(64)
       expect(await verifySignature(TEST_SIGNER, signature, bundle.messageBytes)).toBe(true)
       expect(rpcRequests(rpc, 'sendTransaction')).toEqual([])
+      // One of the bundle's two approvals is signed, and the other member's slot is still empty.
       expect(result).toEqual({
         proposalId: '3',
-        confirmations: 2,
+        confirmations: 1,
         threshold: 2,
         status: 'pending',
         transaction: { hash: '', fee: 0n }
       })
+    })
+
+    it('counts what the bundle has gathered, which can meet the threshold before it lands', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // Three approvals for a threshold of two, which a coordinator may collect for redundancy.
+      // One is already on chain and this member signs another, so the count reads as met while the
+      // third member's slot keeps the bundle from going anywhere. `status` is what says otherwise.
+      coordinator.getProposal.mockResolvedValue(bundleOf([
+        approvalOf(TEST_SIGNER),
+        approvalOf(OTHER_MEMBER),
+        approvalOf(THIRD_MEMBER)
+      ]))
+
+      const rpc = stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [
+              { address: TEST_SIGNER, mask: 7 },
+              { address: OTHER_MEMBER, mask: 7 },
+              { address: THIRD_MEMBER, mask: 7 }
+            ],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({ approved: [OTHER_MEMBER] })
+        ])
+      })
+
+      const result = await account.approveProposal(3)
+
+      expect(rpcRequests(rpc, 'sendTransaction')).toEqual([])
+      expect(result.confirmations).toBe(2)
+      expect(result.threshold).toBe(2)
+      expect(result.status).toBe('pending')
     })
 
     it('sends the bundle its signature completes, as the bytes it already is', async () => {

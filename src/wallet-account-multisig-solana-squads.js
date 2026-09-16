@@ -381,7 +381,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    *
    * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing. `vaultIndex` does not bear on a vote. A coordinator's bundle has decided all three already, so none of them applies to it.
-   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when the execution ran in the same transaction, in which case `transaction` is that execution rather than a bare submission. Through a coordinator the vote rides in a shared bundle, so `confirmations` is what the proposal will hold once that bundle lands, and `fee` is what the bundle's own fee payer is charged. A vote that only hands its signature back, leaving the bundle short of the threshold, reports `{ hash: '', fee: 0n }`: no transaction carries it yet, and it pays nothing.
+   * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when the execution ran in the same transaction, in which case `transaction` is that execution rather than a bare submission. Through a coordinator the vote rides in a shared bundle, so `fee` is what the bundle's own fee payer is charged, and `confirmations` counts the approvals in that bundle whose member has signed it, beside those already on chain. Those are gathered rather than landed, so `confirmations` can reach `threshold` before anything is on chain; `status` is what says the proposal executed. Such a vote also reports `{ hash: '', fee: 0n }`: no transaction carries it yet, and it pays nothing.
    * @throws {ValueError} The signer must not have approved the proposal already, and a coordinator's bundle must carry this signer's approval and no member's twice.
    */
   async approveProposal (proposalId, { memo, autoExecute } = {}) {
@@ -429,10 +429,14 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       const { hash, fee } = complete
         ? await this._sendSignedTransaction(signed)
         : NO_TRANSACTION
+      const gathered = new Set([
+        ...proposal.approved,
+        ...approvers.filter((member) => signed.signatures[member])
+      ]).size
 
       return {
         proposalId: index.toString(),
-        confirmations: new Set([...proposal.approved, ...approvers]).size,
+        confirmations: gathered,
         threshold: multisig.threshold,
         status: complete && executes ? 'executed' : 'pending',
         transaction: { hash, fee }
