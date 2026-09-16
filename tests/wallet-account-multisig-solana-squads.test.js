@@ -3060,13 +3060,11 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       }
     }
 
-    it('configures the coordinator with a signer for the member it derived', async () => {
+    it('names the member it derived to the coordinator, and nothing else', async () => {
       const { account, coordinator, coordinatorConfig } = await accountWithCoordinator()
 
       expect(account._coordinator).toBe(coordinator)
-      expect(await coordinatorConfig.getAddress()).toBe(TEST_SIGNER)
-
-      expect(Object.keys(coordinatorConfig)).toEqual(['getAddress'])
+      expect(coordinatorConfig).toEqual({ signerAddress: TEST_SIGNER })
     })
 
     it('has no coordinator when the configuration names none', async () => {

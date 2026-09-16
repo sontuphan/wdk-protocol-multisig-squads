@@ -74,8 +74,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     protected _signerAccount: WalletAccountSolana;
     /**
-     * The coordinator the approvals are signed through, built from the configuration's factory.
-     * Undefined when the configuration names none.
+     * The coordinator the approvals are circulated through, undefined when the configuration names
+     * none.
      *
      * @protected
      * @type {IMultisigCoordinator | undefined}
@@ -163,8 +163,8 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * Approves a pending transaction proposal.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
-     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing. `vaultIndex` does not bear on a vote. A coordinator's bundle has decided all three already, so none of them applies to it.
-     * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when the execution ran in the same transaction, in which case `transaction` is that execution rather than a bare submission. Through a coordinator the vote rides in a shared bundle, so `fee` is what the bundle's own fee payer is charged, and `confirmations` counts the approvals in that bundle whose member has signed it, beside those already on chain. Those are gathered rather than landed, so `confirmations` can reach `threshold` before anything is on chain; `status` is what says the proposal executed. Such a vote also reports `{ hash: '', fee: 0n }`: no transaction carries it yet, and it pays nothing.
+     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing. `vaultIndex` does not bear on a vote. None of the three applies to a coordinator's bundle, which has decided them already.
+     * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when the execution ran in the same transaction, in which case `transaction` is that execution rather than a bare submission. Through a coordinator, `fee` is what the bundle's own fee payer is charged and `confirmations` counts the approvals in that bundle whose member has signed it, beside those already on chain. Gathered is not landed, so `confirmations` can reach `threshold` before anything is on chain and `status` is what says the proposal executed. A vote that only circulated reports `{ hash: '', fee: 0n }`.
      * @throws {ValueError} The signer must not have approved the proposal already, and a coordinator's bundle must carry this signer's approval and no member's twice.
      */
     approveProposal(proposalId: number | bigint | string, { memo, autoExecute }?: SolanaMultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;

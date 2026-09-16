@@ -153,10 +153,12 @@ class PseudoCoordinator {
 
   async confirmProposal (proposalId, signature) {
     const held = getTransactionDecoder().decode(this._config.transport.get(proposalId))
-    const address = await this._config.getAddress()
     const merged = {
       ...held,
-      signatures: { ...held.signatures, [address]: getBase58Encoder().encode(signature) }
+      signatures: {
+        ...held.signatures,
+        [this._config.signerAddress]: getBase58Encoder().encode(signature)
+      }
     }
 
     this._config.transport.set(proposalId, getTransactionEncoder().encode(merged))

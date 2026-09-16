@@ -122,6 +122,19 @@ and this package does not implement it: implement the interface, plug it in thro
 every vote is the member's own transaction, broadcast at once. Creating a proposal, rejecting it and
 executing it never reach a coordinator either way.
 
+| Call | Without a coordinator | With a coordinator |
+|---|---|---|
+| `propose` | chain | chain |
+| A's `approveProposal` | chain | coordinator |
+| B's `approveProposal` | chain | coordinator, then chain, carrying A's approval too |
+| `executeProposal` | chain | chain |
+| **Transactions** | **4** | **3** |
+
+The two approval rows are the whole of the difference: A's vote does not reach the cluster when it
+is cast, it waits in the coordinator until B's completes the bundle, and B's account broadcasts both.
+So a member that votes first gets no transaction of its own back, and one network fee covers both
+votes, charged to whoever the coordinator named as fee payer when it compiled.
+
 ```javascript
 import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
 
@@ -141,11 +154,11 @@ const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
 ```
 
 `coordinator` takes a factory rather than an instance because one configuration is shared by every
-account the manager derives, and each signs with a different key. The factory is handed a
-`CoordinatorSigner`, `{ getAddress }`, which names the member and nothing more. A coordinator never
-holds a way to sign: the account adds the member's signature itself, after checking the bundle.
-Widen that object with anything else your implementation needs and keep it however you like; the
-interface says nothing about how an implementation stores it.
+account the manager derives, and each votes as a different member. The factory is handed
+`{ signerAddress }`, which names that member and nothing more, so a coordinator never holds a way to
+sign: the account adds the member's signature itself, after checking the bundle. Widen that object
+with anything else your implementation needs and keep it however you like; the interface says nothing
+about how an implementation stores it.
 
 What the account does with what you return, which is the part you can rely on:
 

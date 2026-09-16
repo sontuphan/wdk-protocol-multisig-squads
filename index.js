@@ -40,7 +40,6 @@
 /** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigProposalResult} SolanaMultisigProposalResult */
 /** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigTransactionOptions} SolanaMultisigTransactionOptions */
 /** @typedef {import('./src/wallet-account-multisig-solana-squads.js').SolanaMultisigAddOwnerOptions} SolanaMultisigAddOwnerOptions */
-/** @typedef {import('./src/coordinators/index.js').CoordinatorSigner} CoordinatorSigner */
 /** @typedef {import('./src/coordinators/index.js').MultisigCoordinatorFactory} MultisigCoordinatorFactory */
 
 /** @typedef {import('./src/wallet-account-read-only-multisig-solana-squads.js').SquadsMember} SquadsMember */
