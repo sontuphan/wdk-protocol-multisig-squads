@@ -16,7 +16,7 @@
 
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals'
 
-import { getBase58Encoder } from '@solana/codecs'
+import { getBase58Encoder, getU32Encoder, getU64Encoder } from '@solana/codecs'
 import { AccountRole } from '@solana/instructions'
 import { pipe } from '@solana/functional'
 import { createSolanaRpc } from '@solana/rpc'
@@ -62,6 +62,23 @@ const MEMO_INSTRUCTION = {
   accounts: [],
   data: new TextEncoder().encode(MEMO_TEXT)
 }
+
+// Far above what an approval bundle costs, which is two signatures, and far below what the priority
+// fee below buys.
+const APPROVE_MAX_FEE = 1_000_000n
+const COMPUTE_BUDGET_PROGRAM = 'ComputeBudget111111111111111111111111111111'
+const PRIORITY_INSTRUCTIONS = [
+  {
+    programAddress: COMPUTE_BUDGET_PROGRAM,
+    accounts: [],
+    data: new Uint8Array([2, ...getU32Encoder().encode(1_400_000)])
+  },
+  {
+    programAddress: COMPUTE_BUDGET_PROGRAM,
+    accounts: [],
+    data: new Uint8Array([3, ...getU64Encoder().encode(10_000_000n)])
+  }
+]
 
 /**
  * Reads the memo a landed transaction wrote, from the log the memo program prints.
@@ -252,7 +269,8 @@ describe('coordinators', () => {
         members: 3,
         threshold: 2,
         config: {
-          coordinator: (config) => new PseudoCoordinator({ ...config, transport })
+          coordinator: (config) => new PseudoCoordinator({ ...config, transport }),
+          approveMaxFee: APPROVE_MAX_FEE
         }
       })
 
@@ -343,6 +361,23 @@ describe('coordinators', () => {
       expect(await memoOf(rpc, second.transaction.hash)).toBe(MEMO_TEXT)
       expect(sorted((await accounts[0].getProposal(proposalId)).approved))
         .toEqual(sorted([signers[0], signers[1]]))
+    })
+
+    it('refuses a bundle whose priority fee exceeds the ceiling, before signing', async () => {
+      // The whitelist lets a compute budget instruction ride along, and it is what sets the priority
+      // fee. 1.4M units at 10 lamports each is 14,000,000 lamports, against a ceiling of 1,000,000.
+      transport.set(proposalId, getTransactionEncoder().encode(await compileBundle(rpc, {
+        multisigPda,
+        feePayer: signers[1],
+        approvers: [signers[0], signers[1]],
+        transactionIndex: BigInt(proposalId),
+        padding: PRIORITY_INSTRUCTIONS
+      })))
+
+      await expect(accounts[0].approveProposal(proposalId)).rejects.toThrow(
+        'Exceeded maximum fee cost for the approve operation.'
+      )
+      expect(sorted((await accounts[0].getProposal(proposalId)).approved)).toEqual([])
     })
 
     it('refuses a bundle that does not carry this member approval', async () => {

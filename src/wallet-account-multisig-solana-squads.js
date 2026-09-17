@@ -386,6 +386,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
    * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing. `vaultIndex` does not bear on a vote. None of the three applies to a coordinator's bundle, which has decided them already.
    * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when the execution ran in the same transaction, in which case `transaction` is that execution rather than a bare submission. Through a coordinator, `fee` is what the bundle's own fee payer is charged. A vote that only circulated adds nothing to `confirmations`, which the chain still governs; it counts in `pendingConfirmations`, with the other approvals the bundle has collected a signature for, and reports `{ hash: '', fee: 0n }`.
    * @throws {ValueError} The signer must not have approved the proposal already, and a coordinator's bundle must carry this signer's approval and no member's twice.
+   * @throws {MaximumFeeExceededError} A coordinator's bundle must quote within `approveMaxFee`.
    */
   async approveProposal (proposalId, { memo, autoExecute } = {}) {
     const index = this._toProposalIndex(proposalId)
@@ -420,6 +421,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
         )
       }
 
+      const { approveMaxFee } = this._config
+      const quoted = approveMaxFee === undefined ? null : await this._quoteMessage(bundle)
+
+      if (quoted !== null && quoted > BigInt(approveMaxFee)) {
+        throw new MaximumFeeExceededError('Exceeded maximum fee cost for the approve operation.')
+      }
+
       const signed = await partiallySignTransaction(
         [await createKeyPairFromPrivateKeyBytes(this._signerAccount.keyPair.privateKey)], bundle
       )
@@ -430,7 +438,7 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
       )
 
       const { hash, fee } = complete
-        ? await this._sendSignedTransaction(signed)
+        ? await this._sendSignedTransaction(signed, quoted ?? await this._quoteMessage(signed))
         : NO_TRANSACTION
       const gathered = approvers.filter((member) => signed.signatures[member])
 
@@ -555,20 +563,23 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
   }
 
   /** @private */
-  async _sendSignedTransaction (signed) {
-    const { value: quoted } = await this._rpc
-      .getFeeForMessage(getBase64Decoder().decode(signed.messageBytes), {
+  async _quoteMessage (transaction) {
+    const { value } = await this._rpc
+      .getFeeForMessage(getBase64Decoder().decode(transaction.messageBytes), {
         commitment: this._commitment
       })
       .send()
+
+    return value ?? SIGNATURE_BASE_FEE * BigInt(Object.keys(transaction.signatures).length)
+  }
+
+  /** @private */
+  async _sendSignedTransaction (signed, fee) {
     const hash = await this._rpc
       .sendTransaction(getBase64EncodedWireTransaction(signed), { encoding: 'base64' })
       .send()
 
-    return {
-      hash,
-      fee: quoted ?? SIGNATURE_BASE_FEE * BigInt(Object.keys(signed.signatures).length)
-    }
+    return { hash, fee }
   }
 
   /**

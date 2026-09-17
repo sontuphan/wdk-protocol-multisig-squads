@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals'
 
-import { getBase58Decoder, getBase58Encoder, getBase64Decoder, getBase64Encoder } from '@solana/codecs'
+import { getBase58Decoder, getBase58Encoder, getBase64Decoder, getBase64Encoder, getU64Encoder } from '@solana/codecs'
 
 import { pipe } from '@solana/functional'
 import { AccountRole } from '@solana/instructions'
@@ -85,6 +85,7 @@ const VOTE_ACCOUNTS = [
 
 const CONFIG_TRANSACTION_DISCRIMINATOR = [94, 8, 4, 35, 113, 139, 139, 112]
 const SYSTEM_PROGRAM = '11111111111111111111111111111111'
+const COMPUTE_BUDGET_PROGRAM = 'ComputeBudget111111111111111111111111111111'
 
 /**
  * Serves a `Multisig` account holding the given members, so membership checks can run
@@ -454,6 +455,20 @@ function approvalOf (member, proposalPda = TEST_PROPOSAL_PDA_3) {
       { address: proposalPda, role: AccountRole.WRITABLE }
     ],
     data: new Uint8Array(APPROVE_DISCRIMINATOR)
+  }
+}
+
+/**
+ * A `SetComputeUnitPrice`, which a bundle may carry and which is what buys a priority fee.
+ *
+ * @param {bigint} microLamports - The price per compute unit.
+ * @returns {Object} The instruction.
+ */
+function computeUnitPrice (microLamports) {
+  return {
+    programAddress: COMPUTE_BUDGET_PROGRAM,
+    accounts: [],
+    data: new Uint8Array([3, ...getU64Encoder().encode(microLamports)])
   }
 }
 
@@ -3054,7 +3069,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
      *
      * @returns {Promise<{ account: Object, coordinator: Object, signerAccount: Object }>}
      */
-    async function accountWithCoordinator () {
+    async function accountWithCoordinator (extraConfig = {}) {
       const confirmed = []
       let coordinatorConfig = null
 
@@ -3072,7 +3087,8 @@ describe('WalletAccountMultisigSolanaSquads', () => {
           coordinatorConfig = config
 
           return coordinator
-        }
+        },
+        ...extraConfig
       })
       const account = await wallet.getAccount(0)
 
@@ -3349,6 +3365,61 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         )
       )
       expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+    })
+
+    it('refuses a bundle quoting above the fee ceiling, before it signs', async () => {
+      const { account, coordinator } = await accountWithCoordinator({ approveMaxFee: BUNDLE_FEE - 1n })
+
+      // A compute budget rider is allowed through the whitelist, and it is what sets the priority
+      // fee the quote reflects, so the ceiling is the only thing standing between the member and it.
+      coordinator.getProposal.mockResolvedValue(bundleOf([
+        computeUnitPrice(1_000_000_000n),
+        approvalOf(TEST_SIGNER)
+      ]))
+
+      const rpc = stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ]),
+        getFeeForMessage: () => serveValue(BUNDLE_FEE)
+      })
+
+      await expect(account.approveProposal(3)).rejects.toThrow(
+        new MaximumFeeExceededError('Exceeded maximum fee cost for the approve operation.')
+      )
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+      expect(rpcRequests(rpc, 'sendTransaction')).toEqual([])
+    })
+
+    it('takes a bundle quoting within the fee ceiling', async () => {
+      const { account, coordinator } = await accountWithCoordinator({ approveMaxFee: BUNDLE_FEE })
+
+      coordinator.getProposal.mockResolvedValue(bundleOf([
+        computeUnitPrice(1n),
+        approvalOf(TEST_SIGNER)
+      ]))
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ]),
+        getFeeForMessage: () => serveValue(BUNDLE_FEE),
+        sendTransaction: () => DUMMY_VOTE_HASH
+      })
+
+      const result = await account.approveProposal(3)
+
+      // One quote serves both the ceiling and the reported fee.
+      expect(coordinator.confirmProposal).toHaveBeenCalledWith('3', expect.any(String))
+      expect(result.transaction).toEqual({ hash: DUMMY_VOTE_HASH, fee: BUNDLE_FEE })
     })
 
     it('resolves a bundle compressed with an address lookup table', async () => {

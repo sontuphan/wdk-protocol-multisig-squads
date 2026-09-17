@@ -66,6 +66,7 @@
  * @property {string} [rentPayer] - The account charged for the rent the multisig, transaction and proposal accounts lock up (default: the signer). It must sign the transaction by other means, which nothing in this package currently provides.
  * @property {number | bigint} [createMaxFee] - The maximum fee amount for the create/deploy operation.
  * @property {number | bigint} [transferMaxFee] - The maximum fee amount for transfers.
+ * @property {number | bigint} [approveMaxFee] - The maximum fee amount for approving through a coordinator, quoted before the member signs. A coordinator compiles the bundle, so it fixes the priority fee that vote carries.
  */
 /** @typedef {SolanaMultisigSquadsReadOnlyConfig & SolanaMultisigSquadsSigningConfig} SolanaMultisigSquadsConfig */
 /**
@@ -745,6 +746,10 @@ export type SolanaMultisigSquadsSigningConfig = {
      * - The maximum fee amount for transfers.
      */
     transferMaxFee?: number | bigint;
+    /**
+     * - The maximum fee amount for approving through a coordinator, quoted before the member signs. A coordinator compiles the bundle, so it fixes the priority fee that vote carries.
+     */
+    approveMaxFee?: number | bigint;
 };
 export type SolanaMultisigSquadsConfig = SolanaMultisigSquadsReadOnlyConfig & SolanaMultisigSquadsSigningConfig;
 /**

@@ -175,6 +175,9 @@ What the account does with what you return, which is the part you can rely on:
   proposal of this multisig, and the only other programs allowed to ride along are the compute
   budget, the memo and a System nonce advance. A member signs the whole message, so this is what
   keeps its signature off instructions it never agreed to.
+- It quotes the bundle before signing and refuses above `approveMaxFee`, when that option is set. A
+  compute budget instruction is allowed through, and it is what buys a priority fee, so the ceiling
+  is what bounds the lamports a bundle can cost the fee payer.
 - It never appends to the transaction and never recompiles it, so signatures already collected
   stay valid. Address lookup tables are fine; the account reads them to resolve borrowed indices.
 
