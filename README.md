@@ -191,8 +191,10 @@ What the account does with what you return, which is the part you can rely on:
 > A signature covers the whole transaction, never one instruction, so a member that signs
 > authorises everything in it: every instruction, the fee payer and the lifetime. Solana has no
 > per-instruction signing, so the account's checks on the bundle, listed above, are the only limit
-> on what a coordinator can get signed. They bound the damage to this proposal; they do not make an
-> unknown coordinator safe to point at.
+> on what a coordinator can get signed, and they do not reach everything: they bound the
+> instructions the bundle carries, but not the stored message an execution riding along would run,
+> and not the priority fee it sets unless `approveMaxFee` is there to bound it. They narrow the
+> damage to this proposal; they do not make an unknown coordinator safe to point at.
 
 ## Fees, rent, and who pays
 
