@@ -195,6 +195,11 @@ What the account does with what you return, which is the part you can rely on:
 > instructions the bundle carries, but not the stored message an execution riding along would run,
 > and not the priority fee it sets unless `approveMaxFee` is there to bound it. They narrow the
 > damage to this proposal; they do not make an unknown coordinator safe to point at.
+>
+> Two more they never reach. Which account pays: the fee payer is fixed when the bundle is compiled,
+> so a member signing one that names itself is agreeing to pay. And how long that signature stays
+> usable: a bundle carrying a durable nonce keeps it valid until the nonce advances, so one left in
+> a transport can land after the member has voted otherwise on chain.
 
 ## Fees, rent, and who pays
 
